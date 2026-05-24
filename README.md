@@ -1,4 +1,4 @@
-# 🛡️ SentinAL: Neuro-Symbolic AI Governance Gateway
+# 🛡️ SentinAL-AI-Infrastructure-and-Governance-Gateway
 
 > **Production-Grade AI Security Middleware, Guardrail Gateway & Compliance Observability System**
 
