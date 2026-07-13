@@ -9,11 +9,11 @@
 [![FAISS](https://img.shields.io/badge/VectorSearch-FAISS-red.svg?style=flat-square)](https://github.com/facebookresearch/faiss)
 [![Testing-Pytest](https://img.shields.io/badge/Testing-Pytest-yellow.svg?style=flat-square)](https://docs.pytest.org/)
 
-Gatekeeper is an research prototype **AI Governance Platform** and **AI Security Gateway** engineered as high-performance, asynchronous middleware. Sitting between end-users and Large Language Models (LLMs), Gatekeeper intercepts, sanitizes, and evaluates incoming prompts before they hit downstream inference endpoints. By fusing deterministic symbolic rules with sub-millisecond semantic vector search (FAISS), it enforces strict corporate guardrails, privacy compliance (GDPR/HIPAA), and real-time prompt-injection defense.
+Gatekeeper is a research prototype **AI Governance Platform** and **AI Security Gateway** engineered as high-performance, asynchronous middleware. Sitting between end-users and Large Language Models (LLMs), Gatekeeper intercepts, sanitizes, and evaluates incoming prompts before they hit downstream inference endpoints. By fusing deterministic symbolic rules with sub-millisecond semantic vector search (FAISS), it enforces strict corporate guardrails, privacy compliance (GDPR/HIPAA), and real-time prompt-injection defense.
 
 ---
 
-## 🧭 1. Section
+## 🧭 1. System Overview
 
 ```
       +------------------+      +-----------------------+      +-------------------+
@@ -39,6 +39,10 @@ Gatekeeper solves this by acting as a **fail-closed, policy-enforcing API gatewa
 *   **Zero-Trust Observability**: Generating structured, immutable audit trails of every policy decision to meet regulatory standards like GDPR, HIPAA, and the EU AI Act.
 
 Gatekeeper is **not** a chat UI or a wrapper; it is backend governance infrastructure built for performance, reliability, and auditability.
+
+Key engineering outcomes so far:
+*   **O(log N) vector search via FAISS** replaced linear threat-signature scans, dropping retrieval latency from ~45 ms to under 1.2 ms across thousands of attack signatures.
+*   **Immutable JSON audit logging** with stage-specific timing middleware provides deterministic traceability of every policy decision.
 
 ---
 
@@ -73,7 +77,7 @@ Gatekeeper was built from the ground up to showcase platform engineering maturit
 *   **O(log N) Vector Retrieval**: Abandoned linear list loops for threat-signature comparison, utilizing a FAISS-CPU index structure to query high-dimensional embeddings instantly.
 *   **Fail-Closed Security Posture**: If the gateway is unable to load symbolic filters, connect to downstream classifiers, or communicate with the semantic judge, it defaults to a `HIGH` risk level and blocks execution to protect core data.
 *   **Centralized Config & Dotenv Setup**: Relies on a unified, pydantic-based configuration system that allows overriding thresholds, models, and file paths using environment variables without code modification.
-*   **Production CORS and Process Time Headers**: Includes customized FastAPI HTTP middleware that logs request execution times inside HTTP response headers (`X-Process-Time`) to provide client-side latency visibility.
+*   **CORS and Process Time Headers**: Includes customized FastAPI HTTP middleware that logs request execution times inside HTTP response headers (`X-Process-Time`) to provide client-side latency visibility.
 
 ---
 
@@ -279,7 +283,7 @@ class AssessResponse(BaseModel):
     risk_level: str = Field(..., description="Calculated risk: LOW, MEDIUM, or HIGH")
     details: Dict[str, Any] = Field(..., description="Metadata and execution timings")
     clean_prompt: str = Field(..., description="Prompt text after PII redaction")
-    redacted_items: List[str] = Field(default_init=list, description="List of redacted sensitive elements")
+    redacted_items: List[str] = Field(default_factory=list, description="List of redacted sensitive elements")
     process_time_ms: float = Field(..., description="Execution time within the API gateway layer")
 ```
 
@@ -397,8 +401,8 @@ To boot up the entire Gatekeeper gateway stack with a single command:
 
 1.  **Clone the repository**:
     ```bash
-    git clone https://github.com/pavann19/gatekeeper.git
-    cd gatekeeper
+    git clone https://github.com/pavann19/Gatekeeper-AI-Infrastructure-and-Governance-Gateway.git
+    cd Gatekeeper-AI-Infrastructure-and-Governance-Gateway
     ```
 2.  **Create your Environment File**:
     ```bash
@@ -574,9 +578,6 @@ jobs:
   test:
     runs-on: ubuntu-latest
 
-    services:
-      # Optional local service mocks can go here
-      
     steps:
     - uses: actions/checkout@v3
 
@@ -600,7 +601,7 @@ jobs:
 
 ## 🔒 22. Security & Compliance
 
-Gatekeeper aligns with security standards to protect enterprise deployments:
+Gatekeeper aligns with the following security standards:
 
 *   **OWASP Top 10 for LLMs**: Directly addresses **LLM01: Prompt Injection** and **LLM02: Insecure Output Handling** through input sanitization, vector checks, and execution boundaries.
 *   **PII & Data Privacy**: Implements multi-modal redaction of identifiers, helping deployments align with **GDPR** Article 32 (Security of Processing) and **HIPAA** Safe Harbor rules.
@@ -617,17 +618,7 @@ Gatekeeper aligns with security standards to protect enterprise deployments:
 
 ---
 
-## 🏆 24. Resume-Worthy Engineering Achievements
-
-*   **Architected a Neuro-Symbolic AI Governance API Gateway** using FastAPI, intercepting LLM prompts to enforce real-time privacy (GDPR/HIPAA) and corporate security policies.
-*   **Engineered an O(log N) Scalable Vector Search** using FAISS, dropping semantic threat-retrieval latency from ~45ms to under 1.2ms, effectively handling thousands of dynamic attack signatures.
-*   **Developed an Asynchronous Load Testing Framework** demonstrating a sustained throughput of 98+ Requests Per Second (RPS) with a P95 latency of ~32ms under concurrent stress.
-*   **Implemented Immutable JSON Audit Logging** and stage-specific timing middleware to provide production-grade observability and deterministic tracking of model interactions.
-*   **Dockerized the Microservice Ecosystem** with `docker-compose`, decoupling the Streamlit UI, FastAPI Gateway, and local Ollama execution engine for reproducible, orchestrator-ready deployment.
-
----
-
-## 📄 25. License & Contribution Guide
+## 📄 24. License & Contribution Guide
 
 This project is licensed under the MIT License - see the LICENSE file for details.
 
