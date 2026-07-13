@@ -1,4 +1,4 @@
-name: SentinAL CI Pipeline
+name: Gatekeeper CI Pipeline
 
 on:
   push:

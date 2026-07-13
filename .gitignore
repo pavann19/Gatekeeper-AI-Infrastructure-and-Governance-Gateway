@@ -27,8 +27,8 @@ logging/
 
 # Notes, Clutter & Archive (Crucial: never commit the archive folder to GitHub)
 Notes.txt
-SentinAL_Technical_Report.md
-SentinAL_Technical_Report.pdf
+Gatekeeper_Technical_Report.md
+Gatekeeper_Technical_Report.pdf
 archive/
 
 # IDE

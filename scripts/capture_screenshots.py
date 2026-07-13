@@ -82,7 +82,7 @@ def take_screenshots():
         <html>
         <body style="background-color: #1e1e1e; color: #4af626; font-family: 'Courier New', Courier, monospace; padding: 30px; margin: 0; font-size: 16px;">
         <div>$ python -m benchmarks.run_load_test</div>
-        <div>Initializing SentinAL Ramp-Up Load Test...</div>
+        <div>Initializing Gatekeeper Ramp-Up Load Test...</div>
         <div><br/>--- Stress Test: Target 100 RPS for 5s ---</div>
         <div>Actual RPS: 98.40</div>
         <div>Success Rate: 100.00%</div>
@@ -104,7 +104,7 @@ def take_screenshots():
         <body style="background-color: #282c34; color: #abb2bf; font-family: 'Fira Code', 'Courier New', monospace; padding: 30px; margin: 0; font-size: 14px;">
         <div style="color: #61afef;">"timestamp"</div>: <div style="color: #98c379; display: inline;">"2026-05-24T12:05:32.148Z"</div>,<br/>
         <div style="color: #61afef;">"level"</div>: <div style="color: #98c379; display: inline;">"INFO"</div>,<br/>
-        <div style="color: #61afef;">"name"</div>: <div style="color: #98c379; display: inline;">"sentinal.audit"</div>,<br/>
+        <div style="color: #61afef;">"name"</div>: <div style="color: #98c379; display: inline;">"gatekeeper.audit"</div>,<br/>
         <div style="color: #61afef;">"message"</div>: <div style="color: #98c379; display: inline;">"Governance Decision"</div>,<br/>
         <div style="color: #61afef;">"role"</div>: <div style="color: #98c379; display: inline;">"GENERAL"</div>,<br/>
         <div style="color: #61afef;">"decision"</div>: <div style="color: #e06c75; display: inline; font-weight: bold;">"BLOCK"</div>,<br/>

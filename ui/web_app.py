@@ -10,7 +10,7 @@ OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "mistral")
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
-    page_title="SentinAL - AI Governance",
+    page_title="Gatekeeper - AI Governance",
     page_icon="🛡️",
     layout="centered"
 )
@@ -53,7 +53,7 @@ with st.sidebar:
                 st.error(f"API Connection Error: {e}")
 
 # --- MAIN INTERFACE ---
-st.title("🛡️ SentinAL")
+st.title("🛡️ Gatekeeper")
 st.markdown("**Enterprise AI Governance Gateway** | *Compliant with IBM 2025 Security Framework*")
 
 # Initialize Chat History
@@ -75,7 +75,7 @@ if user_query:
         st.markdown(user_query)
 
     # 1. & 2. & 3. PRIVACY + SECURITY + POLICY VIA API GATEWAY
-    with st.spinner("🛡️ SentinAL Gateway: Analyzing Intent & Security Risks..."):
+    with st.spinner("🛡️ Gatekeeper Gateway: Analyzing Intent & Security Risks..."):
         try:
             api_response = requests.post(
                 f"{API_URL}/assess",
@@ -91,7 +91,7 @@ if user_query:
             redacted_items = result.get("redacted_items", [])
             
         except requests.exceptions.RequestException as e:
-            st.error(f"🔌 **API Connection Error:** SentinAL Gateway is offline. Ensure the FastAPI server is running. Error: {e}")
+            st.error(f"🔌 **API Connection Error:** Gatekeeper Gateway is offline. Ensure the FastAPI server is running. Error: {e}")
             st.stop()
             
     # Show Privacy actions if any

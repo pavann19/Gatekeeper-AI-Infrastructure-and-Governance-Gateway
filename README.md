@@ -1,6 +1,6 @@
-# 🛡️ SentinAL: Neuro-Symbolic AI Governance Gateway
+# 🛡️ Gatekeeper: Neuro-Symbolic AI Governance Gateway
 
-> **Production-Grade AI Security Middleware, Guardrail Gateway & Compliance Observability System**
+> **Research Prototype AI Security Middleware, Guardrail Gateway & Compliance Observability System**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](https://opensource.org/licenses/MIT)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg?style=flat-square)](https://www.python.org/)
@@ -9,7 +9,7 @@
 [![FAISS](https://img.shields.io/badge/VectorSearch-FAISS-red.svg?style=flat-square)](https://github.com/facebookresearch/faiss)
 [![Testing-Pytest](https://img.shields.io/badge/Testing-Pytest-yellow.svg?style=flat-square)](https://docs.pytest.org/)
 
-SentinAL is an enterprise-ready **AI Governance Platform** and **AI Security Gateway** engineered as high-performance, asynchronous middleware. Sitting between end-users and Large Language Models (LLMs), SentinAL intercepts, sanitizes, and evaluates incoming prompts before they hit downstream inference endpoints. By fusing deterministic symbolic rules with sub-millisecond semantic vector search (FAISS), it enforces strict corporate guardrails, privacy compliance (GDPR/HIPAA), and real-time prompt-injection defense.
+Gatekeeper is an research prototype **AI Governance Platform** and **AI Security Gateway** engineered as high-performance, asynchronous middleware. Sitting between end-users and Large Language Models (LLMs), Gatekeeper intercepts, sanitizes, and evaluates incoming prompts before they hit downstream inference endpoints. By fusing deterministic symbolic rules with sub-millisecond semantic vector search (FAISS), it enforces strict corporate guardrails, privacy compliance (GDPR/HIPAA), and real-time prompt-injection defense.
 
 ---
 
@@ -17,7 +17,7 @@ SentinAL is an enterprise-ready **AI Governance Platform** and **AI Security Gat
 
 ```
       +------------------+      +-----------------------+      +-------------------+
-      |   Client App     | ---> |  SentinAL API Gateway | ---> |     Local LLM     |
+      |   Client App     | ---> |  Gatekeeper API Gateway | ---> |     Local LLM     |
       | (Streamlit/REST) | <--- |   (FastAPI Microservice) | <--- |   (Ollama Engine) |
       +------------------+      +-----------+-----------+      +-------------------+
                                             |
@@ -32,22 +32,22 @@ SentinAL is an enterprise-ready **AI Governance Platform** and **AI Security Gat
 
 ## 👁️ 2. Project Identity & Vision
 
-SentinAL is engineered to address a critical security gap in modern AI adoption: **the non-deterministic nature of raw LLM prompts**. In enterprise environments, relying purely on LLM system prompts for safety is a known vulnerability, subject to bypass via jailbreaks, obfuscation, and prompt injection attacks. 
+Gatekeeper is engineered to address a critical security gap in modern AI adoption: **the non-deterministic nature of raw LLM prompts**. In enterprise environments, relying purely on LLM system prompts for safety is a known vulnerability, subject to bypass via jailbreaks, obfuscation, and prompt injection attacks. 
 
-SentinAL solves this by acting as a **fail-closed, policy-enforcing API gateway**. The platform is built on two core principles:
+Gatekeeper solves this by acting as a **fail-closed, policy-enforcing API gateway**. The platform is built on two core principles:
 *   **Neuro-Symbolic Governance**: Fusing fast, deterministic symbolic filters (Regex, SpaCy Named Entity Recognition) with deep, context-aware neural embeddings to identify complex semantic threats.
 *   **Zero-Trust Observability**: Generating structured, immutable audit trails of every policy decision to meet regulatory standards like GDPR, HIPAA, and the EU AI Act.
 
-SentinAL is **not** a chat UI or a wrapper; it is backend governance infrastructure built for performance, reliability, and auditability.
+Gatekeeper is **not** a chat UI or a wrapper; it is backend governance infrastructure built for performance, reliability, and auditability.
 
 ---
 
 ## 🏗️ 3. Architecture Overview
 
-SentinAL utilizes a clean, decoupled microservices model to separate client concerns from high-performance machine learning workloads:
+Gatekeeper utilizes a clean, decoupled microservices model to separate client concerns from high-performance machine learning workloads:
 
-1.  **SentinAL UI (`ui/web_app.py`)**: A Streamlit control panel that provides administrative configuration, real-time threat simulation, and auditing dashboards.
-2.  **SentinAL API Gateway (`api/main.py`)**: An asynchronous FastAPI service that exposes assessment and configuration endpoints, processes payloads, and manages the execution flow.
+1.  **Gatekeeper UI (`ui/web_app.py`)**: A Streamlit control panel that provides administrative configuration, real-time threat simulation, and auditing dashboards.
+2.  **Gatekeeper API Gateway (`api/main.py`)**: An asynchronous FastAPI service that exposes assessment and configuration endpoints, processes payloads, and manages the execution flow.
 3.  **Neuro-Symbolic Engine (`core/`)**: The core evaluation system containing distinct detection components, including normalizers, classifiers, threat vectorizers, and local semantic judges.
 4.  **Vector Store (`core/vector_store.py`)**: Powered by Facebook AI Similarity Search (FAISS) for sub-millisecond similarity calculations against known threat anchors and educational safe harbors.
 5.  **Local LLM Engine (Ollama)**: Handles judge-level arbitration (Mistral) and downstream safe prompt execution in a self-hosted network boundary.
@@ -67,7 +67,7 @@ SentinAL utilizes a clean, decoupled microservices model to separate client conc
 
 ## ⚙️ 5. Infrastructure & Backend Engineering Highlights
 
-SentinAL was built from the ground up to showcase platform engineering maturity:
+Gatekeeper was built from the ground up to showcase platform engineering maturity:
 
 *   **Asynchronous High-Throughput I/O**: Designed using FastAPI's async/await framework, avoiding blocking calls during external LLM execution and audit file emissions.
 *   **O(log N) Vector Retrieval**: Abandoned linear list loops for threat-signature comparison, utilizing a FAISS-CPU index structure to query high-dimensional embeddings instantly.
@@ -79,7 +79,7 @@ SentinAL was built from the ground up to showcase platform engineering maturity:
 
 ## 📊 6. System Architecture Diagram
 
-The flow of a user prompt through the SentinAL Gateway:
+The flow of a user prompt through the Gatekeeper Gateway:
 
 ```mermaid
 graph TD
@@ -137,9 +137,9 @@ graph TD
 
 The core governance pipeline is orchestrated via a staged execution model in [core/risk.py](file:///d:/AI_Governance_Project/core/risk.py):
 
-*   **Stage 0: Cache Lookup**: The normalized prompt is vectorized using sentence-transformers, and the vector is compared against previously cached assessments in the semantic cache. If a high-similarity match is found, SentinAL returns the cached verdict instantly, bypassing the downstream pipeline.
+*   **Stage 0: Cache Lookup**: The normalized prompt is vectorized using sentence-transformers, and the vector is compared against previously cached assessments in the semantic cache. If a high-similarity match is found, Gatekeeper returns the cached verdict instantly, bypassing the downstream pipeline.
 *   **Stage 1: Hard Ban (Symbolic Veto)**: Prompts are evaluated against centralized regex patterns for critical vulnerabilities (e.g., prompt injection, credential grabbers). If a pattern is matched, execution is blocked immediately without querying vector stores, saving compute resources.
-*   **Stage 2: Parallel Signal Collection**: If the symbolic veto passes, SentinAL collects multiple semantic signals in parallel:
+*   **Stage 2: Parallel Signal Collection**: If the symbolic veto passes, Gatekeeper collects multiple semantic signals in parallel:
     1.  *Meta-Intent Similarity*: Calculates the distance to defined adversarial intentions.
     2.  *Vector Threat Scan*: Uses FAISS to perform vector search against known threat anchors.
     3.  *Domain Alignment Check*: Evaluates whether the prompt is aligned with the corporate scope.
@@ -164,7 +164,7 @@ The core governance pipeline is orchestrated via a staged execution model in [co
 
 ## 📊 9. Performance Benchmarks
 
-SentinAL is optimized to handle intensive user traffic without introducing significant gateway overhead:
+Gatekeeper is optimized to handle intensive user traffic without introducing significant gateway overhead:
 
 ### Stress Test Summary (Target: 100 Concurrent Requests)
 
@@ -189,7 +189,7 @@ SentinAL is optimized to handle intensive user traffic without introducing signi
 
 Traditional database vector lookups often iterate linearly ($O(N)$), causing latency to scale with the number of signatures. 
 
-SentinAL addresses this by replacing brute-force list comparisons with an in-memory **FAISS Flat Inner Product Index** (`faiss.IndexFlatIP`). During startup, SentinAL pre-loads all policy signatures, vectorizes them, and builds index stores:
+Gatekeeper addresses this by replacing brute-force list comparisons with an in-memory **FAISS Flat Inner Product Index** (`faiss.IndexFlatIP`). During startup, Gatekeeper pre-loads all policy signatures, vectorizes them, and builds index stores:
 
 ```python
 # core/vector_store.py
@@ -227,7 +227,7 @@ By normalizing vectors under `IndexFlatIP`, the dot product matches cosine simil
 
 ## 📜 11. Observability & Audit Logging
 
-SentinAL achieves audit-grade traceability by routing logs through an asynchronous structured JSON logging pipeline. Every API evaluation, cache hit, and policy bypass is logged to `audit.jsonl`:
+Gatekeeper achieves audit-grade traceability by routing logs through an asynchronous structured JSON logging pipeline. Every API evaluation, cache hit, and policy bypass is logged to `audit.jsonl`:
 
 ![Structured JSON Audit Logs](docs/observability/json_audit_stream.png)
 
@@ -235,7 +235,7 @@ SentinAL achieves audit-grade traceability by routing logs through an asynchrono
 {
   "timestamp": "2026-05-24T12:05:32.148Z",
   "level": "INFO",
-  "name": "sentinal.audit",
+  "name": "gatekeeper.audit",
   "message": "Governance Decision",
   "role": "GENERAL",
   "decision": "BLOCK",
@@ -287,13 +287,13 @@ class AssessResponse(BaseModel):
 
 ## 🐳 13. Dockerized Deployment
 
-SentinAL provides a containerized multi-service configuration in `docker-compose.yml` to ensure consistent execution environments across staging and production.
+Gatekeeper provides a containerized multi-service configuration in `docker-compose.yml` to ensure consistent execution environments across staging and production.
 
 ```yaml
 version: '3.8'
 
 services:
-  sentinal-api:
+  gatekeeper-api:
     build:
       context: .
       dockerfile: Dockerfile.api
@@ -308,21 +308,21 @@ services:
       - ./policy_rules.json:/app/policy_rules.json
       - ./audit.jsonl:/app/audit.jsonl
     networks:
-      - sentinal_net
+      - gatekeeper_net
 
-  sentinal-ui:
+  gatekeeper-ui:
     build:
       context: .
       dockerfile: Dockerfile.ui
     ports:
       - "8501:8501"
     environment:
-      - API_URL=http://sentinal-api:8000/api/v1
+      - API_URL=http://gatekeeper-api:8000/api/v1
       - OLLAMA_API_URL=http://ollama:11434/api/generate
     depends_on:
-      - sentinal-api
+      - gatekeeper-api
     networks:
-      - sentinal_net
+      - gatekeeper_net
 
   ollama:
     image: ollama/ollama:latest
@@ -331,10 +331,10 @@ services:
     volumes:
       - ollama_data:/root/.ollama
     networks:
-      - sentinal_net
+      - gatekeeper_net
 
 networks:
-  sentinal_net:
+  gatekeeper_net:
     driver: bridge
 
 volumes:
@@ -393,12 +393,12 @@ Returns the status of the API gateway.
 
 ## 🚀 15. Quickstart Guide
 
-To boot up the entire SentinAL gateway stack with a single command:
+To boot up the entire Gatekeeper gateway stack with a single command:
 
 1.  **Clone the repository**:
     ```bash
-    git clone https://github.com/pavann19/sentinal-ai-governance.git
-    cd sentinal-ai-governance
+    git clone https://github.com/pavann19/gatekeeper.git
+    cd gatekeeper
     ```
 2.  **Create your Environment File**:
     ```bash
@@ -498,7 +498,7 @@ Here are the primary control layouts of the running application:
 
 ### Admin Dashboard (Streamlit Interface)
 *   Displays system telemetry, active policies, and threat classifications.
-![SentinAL Streamlit Admin Dashboard](docs/screenshots/streamlit_dashboard.png)
+![Gatekeeper Streamlit Admin Dashboard](docs/screenshots/streamlit_dashboard.png)
 
 ### API Endpoint Interactive Docs (Swagger UI)
 *   Displays automatic OpenAPI specifications for payload routing.
@@ -513,7 +513,7 @@ Here are the primary control layouts of the running application:
 ## 📂 20. Project Structure
 
 ```
-sentinal-ai-governance/
+gatekeeper/
 ├── .github/
 │   └── workflows/
 │       └── ci.yml                # CI/CD test automation
@@ -559,10 +559,10 @@ sentinal-ai-governance/
 
 ## 🤖 21. CI/CD & Testing
 
-SentinAL runs an automated workflow on every code push using **GitHub Actions** (`.github/workflows/ci.yml`). The workflow sets up environment variables, installs requirements, fetches spaCy models, and validates the suite using `pytest`.
+Gatekeeper runs an automated workflow on every code push using **GitHub Actions** (`.github/workflows/ci.yml`). The workflow sets up environment variables, installs requirements, fetches spaCy models, and validates the suite using `pytest`.
 
 ```yaml
-name: SentinAL CI Pipeline
+name: Gatekeeper CI Pipeline
 
 on:
   push:
@@ -583,7 +583,7 @@ jobs:
     - name: Set up Python 3.9
       uses: actions/setup-python@v4
       with:
-        python-state: '3.9'
+        python-version: '3.9'
 
     - name: Install Dependencies
       run: |
@@ -600,7 +600,7 @@ jobs:
 
 ## 🔒 22. Security & Compliance
 
-SentinAL aligns with security standards to protect enterprise deployments:
+Gatekeeper aligns with security standards to protect enterprise deployments:
 
 *   **OWASP Top 10 for LLMs**: Directly addresses **LLM01: Prompt Injection** and **LLM02: Insecure Output Handling** through input sanitization, vector checks, and execution boundaries.
 *   **PII & Data Privacy**: Implements multi-modal redaction of identifiers, helping deployments align with **GDPR** Article 32 (Security of Processing) and **HIPAA** Safe Harbor rules.

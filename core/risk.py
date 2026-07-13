@@ -163,8 +163,19 @@ def collect_semantic_signals(prompt: str, prompt_vec) -> dict:
     """
     Stage 2: Collects all semantic signals without making any blocking decisions.
     Returns a dict of raw signal values for downstream fusion.
+
+    BUG FIX (F1): Previously, `details` and the first `t0` were used before
+    being assigned, causing a NameError on every prompt that survived Stage 0
+    (cache hit) and Stage 1 (hard ban).  This made the G3 pipeline completely
+    non-functional in the committed snapshot and invalidated the published
+    evaluation results (ASR 0%, FPR ~10%).  Both variables are now initialised
+    at the start of the function before first use.
     """
-    # Meta-intent similarity
+    # FIX: Initialise accumulator dict and first timing checkpoint here.
+    details: dict = {}
+    t0 = time.perf_counter()
+
+    # 1) Meta-intent similarity
     meta_intent_score = check_meta_intent(prompt_vec)
     t1 = time.perf_counter()
     details["meta_intent_ms"] = round((t1 - t0) * 1000, 2)
@@ -175,17 +186,17 @@ def collect_semantic_signals(prompt: str, prompt_vec) -> dict:
     threat_score = threat_store.get_max_similarity(prompt_vec)
     t1 = time.perf_counter()
     details["faiss_threat_search_ms"] = round((t1 - t0) * 1000, 2)
-    
+
     details["threat_score"] = float(threat_score)
     details["dynamic_threat_score"] = float(check_dynamic_threats(prompt_vec))
     details["is_educational"] = check_dynamic_safe_harbors(prompt_vec)
 
     t0 = time.perf_counter()
     # 3) Check Domain Alignment
-    domain_score, domain_aligned = is_domain_aligned(prompt_vec)
+    domain_aligned, domain_score = is_domain_aligned(prompt)
     t1 = time.perf_counter()
     details["domain_alignment_ms"] = round((t1 - t0) * 1000, 2)
-    
+
     details["domain_aligned"] = domain_aligned
     details["domain_score"] = domain_score
     details["centroid_score"] = compute_centroid_similarity(prompt_vec)

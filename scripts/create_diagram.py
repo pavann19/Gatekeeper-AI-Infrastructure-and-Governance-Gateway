@@ -16,7 +16,7 @@ graph_attr = {
     "bgcolor": "white"
 }
 
-with Diagram("SentinAL Architecture", show=False, graph_attr=graph_attr, direction="TB"):
+with Diagram("Gatekeeper Architecture", show=False, graph_attr=graph_attr, direction="TB"):
     
     user = Custom("User Input", "./assets/user_icon.png") # Or use a generic node if no icon
 

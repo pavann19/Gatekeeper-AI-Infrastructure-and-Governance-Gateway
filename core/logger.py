@@ -7,7 +7,7 @@ from pythonjsonlogger import jsonlogger
 import os
 
 # --- CONFIGURE STRUCTURED LOGGING ---
-logger = logging.getLogger("sentinal")
+logger = logging.getLogger("gatekeeper")
 logger.setLevel(logging.INFO)
 
 if not logger.handlers:
@@ -22,12 +22,12 @@ if not logger.handlers:
     json_formatter = jsonlogger.JsonFormatter('%(timestamp)s %(level)s %(name)s %(message)s')
     audit_handler.setFormatter(json_formatter)
     
-    audit_logger = logging.getLogger("sentinal.audit")
+    audit_logger = logging.getLogger("gatekeeper.audit")
     audit_logger.setLevel(logging.INFO)
     audit_logger.propagate = False 
     audit_logger.addHandler(audit_handler)
 
-def get_logger(name="sentinal"):
+def get_logger(name="gatekeeper"):
     return logging.getLogger(name)
 
 def log_event(capability, prompt, risk, decision, metadata=None):
@@ -52,5 +52,5 @@ def log_event(capability, prompt, risk, decision, metadata=None):
     }
 
     # Structured JSON log for Audit
-    audit_logger = logging.getLogger("sentinal.audit")
+    audit_logger = logging.getLogger("gatekeeper.audit")
     audit_logger.info("Governance Decision", extra=log_entry)

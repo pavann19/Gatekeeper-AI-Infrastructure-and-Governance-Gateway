@@ -59,7 +59,7 @@ async def load_test(rps_target, duration_sec):
         print("All requests failed.")
         
 if __name__ == "__main__":
-    print("Initializing SentinAL Ramp-Up Load Test...")
+    print("Initializing Gatekeeper Ramp-Up Load Test...")
     # Ramp up RPS to find limits
     for rps in [10, 50, 100]:
         asyncio.run(load_test(rps, duration_sec=5))

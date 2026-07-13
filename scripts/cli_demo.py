@@ -50,7 +50,7 @@ def handle_multimodal_request(input_str, role):
     return handle_prompt(normalized_prompt, role)
 
 if __name__ == "__main__":
-    print("\n🛡️  SentinAL AI Governance Gateway | v2.0 NeMo-Aligned")
+    print("\n🛡️  Gatekeeper AI Governance Gateway | v2.0 NeMo-Aligned")
     print("--------------------------------------------------")
     print("COMMANDS:")
     print(" - Type text for standard prompt")

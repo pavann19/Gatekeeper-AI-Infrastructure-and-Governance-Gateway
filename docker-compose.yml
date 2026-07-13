@@ -1,7 +1,7 @@
 version: '3.8'
 
 services:
-  sentinal-api:
+  gatekeeper-api:
     build:
       context: .
       dockerfile: Dockerfile.api
@@ -16,21 +16,21 @@ services:
       - ./policy_rules.json:/app/policy_rules.json
       - ./audit.jsonl:/app/audit.jsonl
     networks:
-      - sentinal_net
+      - gatekeeper_net
 
-  sentinal-ui:
+  gatekeeper-ui:
     build:
       context: .
       dockerfile: Dockerfile.ui
     ports:
       - "8501:8501"
     environment:
-      - API_URL=http://sentinal-api:8000/api/v1
+      - API_URL=http://gatekeeper-api:8000/api/v1
       - OLLAMA_API_URL=http://ollama:11434/api/generate
     depends_on:
-      - sentinal-api
+      - gatekeeper-api
     networks:
-      - sentinal_net
+      - gatekeeper_net
 
   ollama:
     image: ollama/ollama:latest
@@ -39,10 +39,10 @@ services:
     volumes:
       - ollama_data:/root/.ollama
     networks:
-      - sentinal_net
+      - gatekeeper_net
 
 networks:
-  sentinal_net:
+  gatekeeper_net:
     driver: bridge
 
 volumes:

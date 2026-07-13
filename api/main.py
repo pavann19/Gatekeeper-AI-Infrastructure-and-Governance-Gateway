@@ -9,10 +9,10 @@ from core.cache import flush_cache
 from core.logger import get_logger, log_event
 from core.policy import policy_decision
 
-logger = get_logger("sentinal.api")
+logger = get_logger("gatekeeper.api")
 
 app = FastAPI(
-    title="SentinAL AI Governance API",
+    title="Gatekeeper AI Governance API",
     description="Neuro-Symbolic AI Security Gateway",
     version="2.0.0"
 )
