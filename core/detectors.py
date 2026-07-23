@@ -368,28 +368,88 @@ class LlamaGuardDetector(Detector):
 
     # -- prompt construction ------------------------------------------------
 
-    def _build_inputs(self, texts):
+    # Llama Guard 3 does not emit the verdict token first: generation begins
+    # `['\n\n', 'safe', ...]`. So the next-token distribution right after the
+    # assistant header predicts the newline, not safe/unsafe, and reading it
+    # gives a constant score for every input (empirically ~0.32, the model's
+    # fixed P(safe|newline-position)). Seeding the newline prefix the model
+    # always produces makes the verdict genuinely the next token, which is what
+    # the single-forward-pass score depends on. Verified against the weights:
+    # generation is ['\n\n', 'safe'/'unsafe', '<|eot_id|>'].
+    _VERDICT_PREFIX = "\n\n"
+
+    def _render_chat(self, text):
         """
-        Applies the Llama Guard chat template to each text.
+        Renders one user turn through the tokenizer's chat template, returning
+        the string, or None if the template is missing or produces an EMPTY
+        conversation body.
+
+        The empty-body check exists because Llama Guard 3 1B's template silently
+        renders nothing when `content` is a plain string — it requires the
+        content-parts form `[{"type": "text", "text": ...}]`. A plain string
+        yields an empty <BEGIN CONVERSATION></END CONVERSATION>, so every input
+        looks identical and the model returns a constant "safe". We try the
+        content-parts form first, fall back to the plain string, and reject a
+        render whose conversation body did not pick up the text — a wrong prompt
+        that scores constant is worse than a clean failure.
+        """
+        tokenizer = self._tokenizer
+        if tokenizer is None or getattr(tokenizer, "chat_template", None) is None:
+            return None
+
+        marker = "GATEKEEPER_CONTENT_MARKER"
+        for content in ([{"type": "text", "text": text}], text):
+            try:
+                rendered = tokenizer.apply_chat_template(
+                    [{"role": "user", "content": content}],
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
+            except Exception:
+                continue
+            # Confirm the text actually landed in the prompt. Probe with a
+            # marker so the check does not depend on the text's own characters
+            # surviving templating.
+            try:
+                probe = tokenizer.apply_chat_template(
+                    [{"role": "user", "content": (
+                        [{"type": "text", "text": marker}]
+                        if isinstance(content, list) else marker)}],
+                    tokenize=False, add_generation_prompt=True,
+                )
+            except Exception:
+                probe = ""
+            if marker in probe:
+                return rendered
+        return None
+
+    def _build_inputs(self, texts, for_scoring=True):
+        """
+        Applies the Llama Guard chat template to each text, with the assistant
+        generation prompt appended.
+
+        When `for_scoring`, the newline prefix that always precedes the verdict
+        is seeded so the verdict token is next (see _VERDICT_PREFIX). classify()
+        passes for_scoring=False because it generates the prefix itself.
 
         Falls back to a minimal hand-built prompt if the tokenizer ships no
         template, so a template change upstream degrades rather than crashes.
         """
         rendered = []
         for text in texts:
-            chat = [{"role": "user", "content": text}]
-            try:
-                rendered.append(
-                    self._tokenizer.apply_chat_template(chat, tokenize=False)
-                )
-            except Exception:
-                rendered.append(
+            prompt = self._render_chat(text)
+            if prompt is None:
+                prompt = (
                     "<|begin_of_text|>Task: Check if there is unsafe content in "
                     "the user message.\n\n<BEGIN CONVERSATION>\n\n"
                     f"User: {text}\n\n<END CONVERSATION>\n\n"
                     "Provide your safety assessment. First line must be 'safe' "
-                    "or 'unsafe'.\n"
+                    "or 'unsafe'.\n\n"
+                    "<|start_header_id|>assistant<|end_header_id|>"
                 )
+            if for_scoring:
+                prompt = prompt + self._VERDICT_PREFIX
+            rendered.append(prompt)
         return rendered
 
     # -- scoring ------------------------------------------------------------
@@ -442,7 +502,7 @@ class LlamaGuardDetector(Detector):
         import torch
 
         enc = self._tokenizer(
-            self._build_inputs([text]),
+            self._build_inputs([text], for_scoring=False),
             return_tensors="pt",
             truncation=True,
             max_length=self.max_length,
@@ -526,7 +586,7 @@ def _build_registry():
             model_id="meta-llama/Llama-Guard-3-1B",
             targets=(CLASS_HARMFUL, CLASS_JAILBREAK),
             dtype="bfloat16",
-            min_free_gb=3.0,
+            min_free_gb=2.3,
             description="Meta Llama Guard 3 1B, hazard taxonomy (GATED; ~2.5GB at bf16)",
         ),
         # Registered for completeness. Needs roughly 17GB at bfloat16 and will
