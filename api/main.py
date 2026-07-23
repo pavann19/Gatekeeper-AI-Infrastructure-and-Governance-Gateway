@@ -3,12 +3,14 @@ import time
 import asyncio
 from fastapi.middleware.cors import CORSMiddleware
 from api.schemas import AssessRequest, AssessResponse, AssessOutputRequest, AssessOutputResponse
+from core.auth import auth_required, resolve_principal
 from core.privacy import redact_pii
 from core.risk import assess_risk
 from core.updates import fetch_latest_threats
 from core.cache import flush_cache
 from core.logger import get_logger, log_event
 from core.policy import policy_decision
+from core.config import settings
 
 logger = get_logger("gatekeeper.api")
 
@@ -18,12 +20,25 @@ app = FastAPI(
     version="2.0.0"
 )
 
+# CORS. The previous configuration paired allow_origins=["*"] with
+# allow_credentials=True, which browsers reject outright per the CORS spec and
+# which would be unsafe if honoured — any origin could drive authenticated
+# requests. Credentials are only permitted against an explicit origin allowlist.
+_cors_origins = [o.strip() for o in settings.CORS_ORIGINS.split(",") if o.strip()]
+_allow_credentials = "*" not in _cors_origins
+if not _allow_credentials:
+    logger.warning(
+        "CORS is configured with a wildcard origin, so credentialed "
+        "cross-origin requests are disabled. Set CORS_ORIGINS to an explicit "
+        "comma-separated allowlist to permit them."
+    )
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_cors_origins,
+    allow_credentials=_allow_credentials,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 @app.middleware("http")
@@ -38,24 +53,43 @@ async def add_process_time_header(request: Request, call_next):
 @app.post("/api/v1/assess", response_model=AssessResponse)
 async def assess_prompt(req: AssessRequest, request: Request):
     request.state.start_time = time.perf_counter()
-    logger.info(f"Received request for role: {req.role}")
-    
+
+    # 0. AUTHENTICATION — the security boundary.
+    #    Capability comes from a verified credential, never from the request
+    #    body. An anonymous caller gets GENERAL (least privilege); it cannot
+    #    escalate by asserting anything about itself.
+    principal = resolve_principal(authorization=request.headers.get("Authorization"))
+    if auth_required() and not principal.authenticated:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required. Present a valid API key as "
+                   "'Authorization: Bearer <key>'.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    logger.info(
+        f"Assess request | capability={principal.capability} "
+        f"tenant={principal.tenant} key_id={principal.key_id} "
+        f"authenticated={principal.authenticated}"
+    )
+
     # 1. Privacy Layer
     clean_query, redacted_info = redact_pii(req.prompt)
     redacted_items = redacted_info.get("items", [])
-    
+
     # 2. Risk Assessment (Neuro-Symbolic) - offloaded to thread to avoid blocking event loop
     risk_level, details = await asyncio.to_thread(assess_risk, clean_query)
-    
-    # 3. Policy Arbitration
-    decision, reason = policy_decision(req.role, risk_level)
-    
-    # Update details with reason
+
+    # 3. Policy Arbitration — using the SERVER-RESOLVED capability.
+    decision, reason = policy_decision(principal.capability, risk_level)
+
+    # Update details with reason and the identity the decision was made under.
     details["policy_reason"] = reason
-    
+    details["principal"] = principal.to_audit()
+
     # 4. Audit Logging
-    log_event(req.role, clean_query, risk_level, decision, details)
-    
+    log_event(principal.capability, clean_query, risk_level, decision, details)
+
     # Calculate process time explicitly for the response body (if needed by client directly)
     # The header is already set by middleware, but this makes it visible in the JSON
     # We'll just pass 0.0 here since the middleware calculates the true end-to-end,
@@ -66,6 +100,8 @@ async def assess_prompt(req: AssessRequest, request: Request):
         decision=decision,
         risk_level=risk_level,
         topicality=details.get("topicality", "UNKNOWN"),
+        capability=principal.capability,
+        authenticated=principal.authenticated,
         details=details,
         clean_prompt=clean_query,
         redacted_items=redacted_items,

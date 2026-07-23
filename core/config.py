@@ -67,6 +67,31 @@ class Settings(BaseSettings):
     POLICY_FILE: str = "policies.json"
     POLICY_RULES_FILE: str = "policy_rules.json"
 
+    # --- Authentication ---
+    # Capability is resolved from a verified API key, never from the request
+    # body. See core/auth.py for the vulnerability this replaces.
+    #
+    #   "optional" — anonymous requests are served at GENERAL (least privilege).
+    #   "required" — anonymous requests are rejected with 401.
+    #
+    # Defaults to "optional" because GENERAL is already the safe tier: an
+    # unauthenticated caller can never escalate, only be served conservatively.
+    AUTH_MODE: str = "optional"
+    API_KEYS_FILE: str = "api_keys.json"
+
+    # Comma-separated CORS origin allowlist. Credentialed cross-origin requests
+    # are only enabled when this is NOT a wildcard.
+    CORS_ORIGINS: str = "*"
+
+    @field_validator("AUTH_MODE")
+    @classmethod
+    def _validate_auth_mode(cls, v: str) -> str:
+        allowed = {"optional", "required"}
+        normalized = v.strip().lower()
+        if normalized not in allowed:
+            raise ValueError(f"AUTH_MODE must be one of {sorted(allowed)}, got {v!r}")
+        return normalized
+
     # Dependency Models
     SPACY_MODEL: str = "en_core_web_sm"
 

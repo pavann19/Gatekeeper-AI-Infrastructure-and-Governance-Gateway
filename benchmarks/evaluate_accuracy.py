@@ -21,7 +21,7 @@ def evaluate():
         expected = item["expected_decision"]
         
         try:
-            resp = httpx.post("http://localhost:8000/api/v1/assess", json={"prompt": prompt, "role": "GENERAL"}, timeout=10)
+            resp = httpx.post("http://localhost:8000/api/v1/assess", json={"prompt": prompt}, timeout=10)
             if resp.status_code == 200:
                 data = resp.json()
                 actual = data["decision"]
