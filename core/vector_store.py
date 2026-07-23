@@ -51,6 +51,25 @@ class ScalableVectorStore:
         scores, _ = index.search(vec, 1)
         return float(scores[0][0])
 
+    def get_centroid(self):
+        """Computes the semantic centroid of the store's vectors."""
+        if not self.texts:
+            return None
+            
+        vectors = []
+        for t in self.texts:
+            vectors.append(get_embedding(t).cpu().numpy())
+            
+        if not vectors:
+            return None
+            
+        centroid = np.mean(vectors, axis=0)
+        # Normalize to L2 so we can compute inner product easily
+        import faiss  # noqa: PLC0415
+        vec_matrix = centroid.reshape(1, -1).astype('float32')
+        faiss.normalize_L2(vec_matrix)
+        return vec_matrix[0]
+
 
 # Global FAISS Stores (lazy-initialized on first use)
 threat_store = ScalableVectorStore()

@@ -1,15 +1,17 @@
 import re
 import spacy
 
+from core.config import SPACY_MODEL
+
 # --- CONFIGURATION ---
 # Load spaCy small model for efficiency (Research Grade: Lightweight)
 try:
-    NLP_MODEL = spacy.load("en_core_web_sm")
+    NLP_MODEL = spacy.load(SPACY_MODEL)
     # Disable heavy pipeline components we don't need (parser, lemmatizer)
     # to keep latency under 20ms.
     NLP_MODEL.disable_pipes(["parser", "tagger", "lemmatizer", "attribute_ruler"])
 except OSError:
-    print("⚠️ Warning: spaCy model 'en_core_web_sm' not found. Run: python -m spacy download en_core_web_sm")
+    print(f"⚠️ Warning: spaCy model '{SPACY_MODEL}' not found. Run: python -m spacy download {SPACY_MODEL}")
     NLP_MODEL = None
 
 # 1. DETERMINISTIC PATTERNS (The "Fast Path")

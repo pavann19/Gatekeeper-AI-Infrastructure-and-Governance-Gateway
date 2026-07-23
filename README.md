@@ -9,7 +9,7 @@
 [![FAISS](https://img.shields.io/badge/VectorSearch-FAISS-red.svg?style=flat-square)](https://github.com/facebookresearch/faiss)
 [![Testing-Pytest](https://img.shields.io/badge/Testing-Pytest-yellow.svg?style=flat-square)](https://docs.pytest.org/)
 
-Gatekeeper is a research prototype **AI Governance Platform** and **AI Security Gateway** engineered as high-performance, asynchronous middleware. Sitting between end-users and Large Language Models (LLMs), Gatekeeper intercepts, sanitizes, and evaluates incoming prompts before they hit downstream inference endpoints. By fusing deterministic symbolic rules with sub-millisecond semantic vector search (FAISS), it enforces strict corporate guardrails, privacy compliance (GDPR/HIPAA), and real-time prompt-injection defense.
+Gatekeeper is a research prototype **AI Governance Platform** and **AI Security Gateway**. Sitting between end-users and Large Language Models (LLMs), Gatekeeper intercepts, sanitizes, and evaluates incoming prompts before they hit downstream inference endpoints. By fusing deterministic symbolic rules with semantic vector search (FAISS), it enforces corporate guardrails, privacy compliance (GDPR/HIPAA), and prompt-injection defense.
 
 ---
 
@@ -35,14 +35,14 @@ Gatekeeper is a research prototype **AI Governance Platform** and **AI Security 
 Gatekeeper is engineered to address a critical security gap in modern AI adoption: **the non-deterministic nature of raw LLM prompts**. In enterprise environments, relying purely on LLM system prompts for safety is a known vulnerability, subject to bypass via jailbreaks, obfuscation, and prompt injection attacks. 
 
 Gatekeeper solves this by acting as a **fail-closed, policy-enforcing API gateway**. The platform is built on two core principles:
-*   **Neuro-Symbolic Governance**: Fusing fast, deterministic symbolic filters (Regex, SpaCy Named Entity Recognition) with deep, context-aware neural embeddings to identify complex semantic threats.
-*   **Zero-Trust Observability**: Generating structured, immutable audit trails of every policy decision to meet regulatory standards like GDPR, HIPAA, and the EU AI Act.
+*   **Neuro-Symbolic Governance**: Fusing deterministic symbolic filters (Regex, SpaCy Named Entity Recognition) with neural embeddings to identify semantic threats.
+*   **Audit Logging**: Generating structured audit trails of policy decisions to meet regulatory standards like GDPR, HIPAA, and the EU AI Act.
 
-Gatekeeper is **not** a chat UI or a wrapper; it is backend governance infrastructure built for performance, reliability, and auditability.
+Gatekeeper is **not** a chat UI or a wrapper; it is backend governance infrastructure built for reliability and auditability.
 
-Key engineering outcomes so far:
-*   **O(log N) vector search via FAISS** replaced linear threat-signature scans, dropping retrieval latency from ~45 ms to under 1.2 ms across thousands of attack signatures.
-*   **Immutable JSON audit logging** with stage-specific timing middleware provides deterministic traceability of every policy decision.
+Key engineering outcomes:
+*   **O(log N) vector search via FAISS** replaced linear threat-signature scans, dropping retrieval latency across attack signatures.
+*   **JSON audit logging** with stage-specific timing middleware provides traceability of policy decisions.
 
 ---
 
@@ -69,15 +69,13 @@ Gatekeeper utilizes a clean, decoupled microservices model to separate client co
 
 ---
 
-## ⚙️ 5. Infrastructure & Backend Engineering Highlights
+## ⚙️ 5. Infrastructure & Backend Architecture
 
-Gatekeeper was built from the ground up to showcase platform engineering maturity:
-
-*   **Asynchronous High-Throughput I/O**: Designed using FastAPI's async/await framework, avoiding blocking calls during external LLM execution and audit file emissions.
-*   **O(log N) Vector Retrieval**: Abandoned linear list loops for threat-signature comparison, utilizing a FAISS-CPU index structure to query high-dimensional embeddings instantly.
+*   **Asynchronous I/O**: Designed using FastAPI's async/await framework, avoiding blocking calls during external LLM execution and audit file emissions.
+*   **O(log N) Vector Retrieval**: Utilizing a FAISS-CPU index structure to query high-dimensional embeddings instantly.
 *   **Fail-Closed Security Posture**: If the gateway is unable to load symbolic filters, connect to downstream classifiers, or communicate with the semantic judge, it defaults to a `HIGH` risk level and blocks execution to protect core data.
 *   **Centralized Config & Dotenv Setup**: Relies on a unified, pydantic-based configuration system that allows overriding thresholds, models, and file paths using environment variables without code modification.
-*   **CORS and Process Time Headers**: Includes customized FastAPI HTTP middleware that logs request execution times inside HTTP response headers (`X-Process-Time`) to provide client-side latency visibility.
+*   **CORS and Process Time Headers**: Includes customized FastAPI HTTP middleware that logs request execution times inside HTTP response headers (`X-Process-Time`).
 
 ---
 
@@ -158,7 +156,7 @@ The core governance pipeline is orchestrated via a staged execution model in [co
 
 *   **Framework**: FastAPI (Async I/O, OpenAPI docs, lightweight routing)
 *   **Vector Engine**: FAISS (Facebook AI Similarity Search, flat-IP index)
-*   **NLP & Embeddings**: SpaCy (`en_core_web_sm` model for NER), Sentence-Transformers (`all-MiniLM-L6-v2` for prompt vectorization)
+*   **NLP & Embeddings**: SpaCy (`en_core_web_sm` model for NER), Sentence-Transformers (`all-mpnet-base-v2` for prompt vectorization)
 *   **Interface**: Streamlit (Dashboard UI, simulation interface)
 *   **Logging**: `python-json-logger` (Structured JSON log formats)
 *   **Containerization**: Docker & Docker Compose (Multi-container architecture)
@@ -201,7 +199,7 @@ import faiss
 import numpy as np
 
 class ScalableVectorStore:
-    def __init__(self, dimension: int = 384):
+    def __init__(self, dimension: int = 768):
         self.dimension = dimension
         self.index = faiss.IndexFlatIP(dimension)
         self.texts = []
