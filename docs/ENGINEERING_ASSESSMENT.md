@@ -339,6 +339,19 @@ recall-at-budget answer different questions, and here they disagree.
 Non-overlapping intervals. ProtectAI holds up on German where the anchor
 detector collapses, and it does so at essentially identical English performance.
 
+**UPDATE — Prompt Guard 2 closes it outright.** Once access was granted:
+
+| Detector | English AUC | German AUC |
+|---|---|---|
+| `anchors` | 0.909 [0.901, 0.918] | 0.632 [0.562, 0.705] |
+| `protectai_injection` | 0.911 [0.900, 0.921] | 0.872 [0.820, 0.920] |
+| **`prompt_guard_2`** | **0.952 [0.945, 0.959]** | **0.970 [0.947, 0.990]** |
+
+Prompt Guard 2 scores *higher on German than on English* — it is genuinely
+multilingual, not an English model that degrades gracefully. The language gap is
+a solved problem given the right detector, and the report should say so plainly
+rather than listing it as future work.
+
 **This changes the recommendation in §1b.** Swapping to a multilingual encoder is
 no longer the necessary fix for the language gap — adopting ProtectAI as the
 injection detector achieves it directly. The encoder swap remains worthwhile for
@@ -410,18 +423,78 @@ auditable fusion policy outperforms any single detector.*
 | single: `madhurjindal_jailbreak` | 0.834 [0.822, 0.845] | 38.7% [36.3, 41.1] |
 | single: `toxic_bert` | 0.752 [0.740, 0.765] | 15.5% [13.1, 17.5] |
 
-### Verdict: SUPPORTED
+### Verdict: SUPPORTED — then OVERTURNED when a stronger detector was added
 
-ΔAUC **+0.0345** over the best single detector, with **non-overlapping**
-confidence intervals (0.936 vs 0.919). The claim survives a fair test.
+**This is the honest sequence, and it belongs in the report as a sequence.**
 
-One honest qualification: at the 5% FPR operating point the recall difference
-(82.8% [80.8, 84.7] vs 79.7% [77.7, 81.4]) **does** overlap. The fusion advantage
-is decisive in ranking quality and suggestive but not proven at that specific
-budget. Both facts belong in the report.
+Against the four detectors available at first measurement, the claim held:
+ΔAUC **+0.0345**, non-overlapping intervals. Reported as SUPPORTED.
 
-Learning the weights also beats a plain OR: 0.944 vs 0.935 for elementwise max,
-non-overlapping. Fusion policy is doing real work, not just aggregation.
+Meta's Prompt Guard 2 then became available and was added. Re-run:
+
+| Configuration | AUC | Recall @ 5% FPR |
+|---|---|---|
+| ensemble: learned (out-of-fold) | 0.952 [0.945, 0.958] | 86.1% [84.4, 87.5] |
+| **single: `prompt_guard_2`** | **0.949 [0.942, 0.956]** | 83.9% [81.9, 85.6] |
+| ensemble: max (untrained) | 0.938 [0.930, 0.945] | 81.7% [79.9, 83.5] |
+| single: `protectai_injection` | 0.909 [0.899, 0.919] | 79.7% [77.7, 81.4] |
+| single: `anchors` | 0.890 [0.880, 0.900] | 70.0% [67.6, 72.1] |
+
+ΔAUC collapses to **+0.0025** with heavily overlapping intervals. Recall at the
+operating point overlaps too (84.4–87.5 vs 81.9–85.6).
+
+**The thesis in its strong form — "fusion beats any single detector on pooled
+performance" — is NOT supported.** One sufficiently good specialist matches the
+ensemble on aggregate metrics. Do not restate the earlier SUPPORTED verdict; it
+was true only of a weaker detector pool.
+
+### The claim that DOES survive, stated precisely
+
+Fusion's value is **per-class coverage**, not pooled ranking:
+
+| Configuration | injection | jailbreak | harmful |
+|---|---|---|---|
+| single: `prompt_guard_2` | 88.7% | **97.1%** | 29.5% |
+| ensemble: max (untrained) | 89.4% | 94.7% | 16.5% |
+| **ensemble: learned** | **90.5%** | 95.2% | **44.5%** |
+
+On harmful content the fusion reaches **44.5% against Prompt Guard 2's 29.5%** —
+a 15-point gain on the class no single detector handles, achieved while holding
+the strong classes level. Pooled AUC hides this completely, because harmful
+content is a minority of the suite.
+
+So the defensible claim is narrower and better evidenced than the original:
+
+> A single strong detector can match an ensemble on aggregate metrics while
+> leaving a threat class largely uncovered. Fusion buys per-class coverage, and
+> only per-class evaluation makes that visible.
+
+That is a more interesting finding than the one originally proposed, and it is
+the same lesson §1d produced independently: **aggregate metrics conceal
+class-level failure.** The project now demonstrates it twice, from different
+directions.
+
+### A naive OR is actively harmful
+
+`max` scores **0.938**, WORSE than Prompt Guard 2 alone at 0.949, and collapses
+harmful content to 16.5%. Taking the maximum propagates every weak detector's
+false positives, so the shared FPR budget is consumed by noise and the threshold
+rises. Aggregation is not fusion — the weights are what does the work.
+
+### Coefficients after adding Prompt Guard 2
+
+```
+prompt_guard_2           +1.5195
+protectai_injection      +1.0046
+anchors                  +0.9831
+toxic_bert               +0.5009
+madhurjindal_jailbreak   +0.2151
+```
+
+The anchor layer drops from +1.466 to +0.983 — no longer near-parity with the
+best model, but still third of five and clearly non-zero. The earlier claim that
+it is "measurably additive" holds; the stronger phrasing that it rivals the best
+public model does not, once a genuinely strong detector is in the pool.
 
 ### The project's own detector is not redundant
 

@@ -508,13 +508,101 @@
         }
       },
       "polarity_check": "attack=0.019 benign=0.001"
+    },
+    {
+      "detector": "prompt_guard_2",
+      "description": "Meta Prompt Guard 2 86M (GATED: needs HF auth + licence acceptance)",
+      "targets": [
+        "prompt_injection",
+        "jailbreak"
+      ],
+      "trained_on": [],
+      "rows_excluded_for_contamination": 0,
+      "n": 6933,
+      "n_attack": 1925,
+      "n_benign": 5008,
+      "auc": {
+        "point": 0.9490802248869341,
+        "lo": 0.9420146286791166,
+        "hi": 0.9555512509468805,
+        "n": 6933,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "recall_at_fpr": {
+        "point": 0.8389610389610389,
+        "lo": 0.8194871794871795,
+        "hi": 0.8557894736842105,
+        "n": 6933,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "threshold": 0.004175707697868347,
+      "per_class": {
+        "prompt_injection": {
+          "n": 979,
+          "detected": 0.8866189989785496,
+          "targeted": true
+        },
+        "jailbreak": {
+          "n": 692,
+          "detected": 0.9710982658959537,
+          "targeted": true
+        },
+        "harmful_content": {
+          "n": 254,
+          "detected": 0.2952755905511811,
+          "targeted": false
+        }
+      },
+      "actual_fpr": 0.04912140575079872,
+      "per_language": {
+        "en": {
+          "n": 6458,
+          "auc": {
+            "point": 0.9517507623261322,
+            "lo": 0.9449312391362947,
+            "hi": 0.9587692281585936,
+            "n": 6458,
+            "n_boot_effective": 250,
+            "ci_level": 0.95
+          }
+        },
+        "de": {
+          "n": 234,
+          "auc": {
+            "point": 0.9695203197868087,
+            "lo": 0.9471283783783784,
+            "hi": 0.9898915187376726,
+            "n": 234,
+            "n_boot_effective": 250,
+            "ci_level": 0.95
+          }
+        },
+        "other": {
+          "n": 241,
+          "auc": {
+            "point": 0.951872399445215,
+            "lo": 0.8795430944963655,
+            "hi": 0.992371705963939,
+            "n": 241,
+            "n_boot_effective": 250,
+            "ci_level": 0.95
+          }
+        }
+      },
+      "polarity_check": "attack=0.999 benign=0.000"
     }
   ],
   "disqualified": [],
   "unavailable": [
     {
-      "detector": "prompt_guard_2",
-      "reason": "OSError: You are trying to access a gated repo."
+      "detector": "llama_guard_3_1b",
+      "reason": "insufficient memory: 2.2GB available, 3.0GB needed for meta-llama/Llama-Guard-3-1B. Close other processes or use a smaller variant."
+    },
+    {
+      "detector": "llama_guard_3_8b",
+      "reason": "insufficient memory: 2.2GB available, 18.0GB needed for meta-llama/Llama-Guard-3-8B. Close other processes or use a smaller variant."
     },
     {
       "detector": "prompt_guard_1",
