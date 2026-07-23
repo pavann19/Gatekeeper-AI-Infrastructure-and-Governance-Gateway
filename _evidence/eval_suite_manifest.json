@@ -1,0 +1,132 @@
+{
+  "seed": 20260723,
+  "total": 6933,
+  "attacks": 1925,
+  "benign": 5008,
+  "duplicates_dropped": 174,
+  "benign_cap": null,
+  "by_attack_class": {
+    "benign": 5008,
+    "prompt_injection": 979,
+    "jailbreak": 692,
+    "harmful_content": 254
+  },
+  "by_language": {
+    "en": 6458,
+    "other": 241,
+    "de": 234
+  },
+  "by_source": {
+    "lmsys/toxic-chat": 2939,
+    "jackhhao/jailbreak-classification": 1269,
+    "tatsu-lab/alpaca": 1200,
+    "lakera/gandalf_ignore_instructions": 776,
+    "deepset/prompt-injections": 546,
+    "JailbreakBench/JBB-Behaviors": 200,
+    "rubend18/ChatGPT-Jailbreak-Prompts": 3
+  },
+  "class_by_language": {
+    "prompt_injection": {
+      "en": 872,
+      "other": 33,
+      "de": 74
+    },
+    "benign": {
+      "de": 158,
+      "en": 4644,
+      "other": 206
+    },
+    "harmful_content": {
+      "en": 252,
+      "de": 1,
+      "other": 1
+    },
+    "jailbreak": {
+      "en": 690,
+      "de": 1,
+      "other": 1
+    }
+  },
+  "sources": [
+    {
+      "source": "deepset/prompt-injections",
+      "status": "ok",
+      "raw_rows": 546,
+      "sampled": 546,
+      "kept": 546,
+      "duplicates_dropped": 0,
+      "cap": null,
+      "note": "Original project benchmark. German-heavy instruction override."
+    },
+    {
+      "source": "jackhhao/jailbreak-classification",
+      "status": "ok",
+      "raw_rows": 1306,
+      "sampled": 1306,
+      "kept": 1269,
+      "duplicates_dropped": 36,
+      "cap": null,
+      "note": "DAN-style persona jailbreaks + benign."
+    },
+    {
+      "source": "lakera/gandalf_ignore_instructions",
+      "status": "ok",
+      "raw_rows": 777,
+      "sampled": 777,
+      "kept": 776,
+      "duplicates_dropped": 1,
+      "cap": 800,
+      "note": "Real attacker attempts from the Gandalf game. Attacks only."
+    },
+    {
+      "source": "rubend18/ChatGPT-Jailbreak-Prompts",
+      "status": "ok",
+      "raw_rows": 79,
+      "sampled": 79,
+      "kept": 3,
+      "duplicates_dropped": 76,
+      "cap": null,
+      "note": "In-the-wild jailbreaks. Attacks only."
+    },
+    {
+      "source": "lmsys/toxic-chat",
+      "status": "ok",
+      "raw_rows": 5082,
+      "sampled": 3000,
+      "kept": 2939,
+      "duplicates_dropped": 61,
+      "cap": 3000,
+      "note": "Real user traffic, human-annotated. Realistic benign distribution."
+    },
+    {
+      "source": "JailbreakBench/JBB-Behaviors",
+      "status": "ok",
+      "raw_rows": 200,
+      "sampled": 200,
+      "kept": 200,
+      "duplicates_dropped": 0,
+      "cap": null,
+      "note": "Harmful-behaviour goals paired with benign controls."
+    },
+    {
+      "source": "tatsu-lab/alpaca",
+      "status": "ok",
+      "raw_rows": 52002,
+      "sampled": 1200,
+      "kept": 1200,
+      "duplicates_dropped": 0,
+      "cap": 1200,
+      "note": "Ordinary instruction traffic. Anchors the false-positive rate."
+    }
+  ],
+  "excluded_sources": {
+    "hackaprompt/hackaprompt-dataset": "gated on the Hub; requires authentication",
+    "walledai/HarmBench": "gated on the Hub; requires authentication",
+    "JasperLS/prompt-injections": "byte-identical fork of deepset/prompt-injections; would be fully removed by dedup anyway"
+  },
+  "caveats": [
+    "Language tags come from a stopword-overlap heuristic (de/en/other), not a trained language identifier. Adequate for stratifying metrics; do not cite as ground-truth language labels.",
+    "Attack-class labels are assigned per SOURCE, inheriting each dataset's own labelling conventions. They are not independently re-annotated, so class boundaries between jailbreak and harmful_content are approximate where a source mixes them.",
+    "Benign rows are pooled from adversarial-adjacent datasets AND from ordinary instruction traffic (alpaca, toxic-chat). Report FPR separately for each if a realistic production estimate is needed."
+  ]
+}

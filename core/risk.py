@@ -7,7 +7,14 @@ from core.embeddings import get_embedding, cosine_similarity
 from core.cache import lookup_cache, save_cache_entry
 from core.updates import check_dynamic_threats, check_dynamic_safe_harbors
 from core.domain_classifier import is_domain_aligned
-from core.config import SEMANTIC_THRESHOLD_HIGH, SEMANTIC_THRESHOLD_MEDIUM, EDUCATIONAL_THRESHOLD, META_INTENT_THRESHOLD, POLICY_FILE
+from core.config import (
+    SEMANTIC_THRESHOLD_HIGH,
+    SEMANTIC_THRESHOLD_MEDIUM,
+    EDUCATIONAL_THRESHOLD,
+    META_INTENT_THRESHOLD,
+    POLICY_FILE,
+    settings,
+)
 from core.normalizer import normalize_prompt
 from core.threat_centroid import compute_centroid_similarity
 from core.vector_store import threat_store, educational_store
@@ -18,13 +25,36 @@ logger = get_logger(__name__)
 
 # --- 1. LOAD POLICIES ---
 def load_policies():
-    if not os.path.exists(POLICY_FILE):
-        return [], []
-    with open(POLICY_FILE, "r") as f:
-        data = json.load(f)
-        return data.get("safe_anchors", []), data.get("threat_anchors", [])
+    """
+    Loads safe and threat anchors from POLICY_FILE.
 
-EDUCATIONAL_ANCHORS, THREAT_ANCHORS = load_policies()
+    Threat anchors are grouped by attack class (`threat_anchor_classes`) so the
+    threat taxonomy is explicit and per-class metrics are possible. A flat
+    `threat_anchors` list is still accepted for backwards compatibility.
+
+    Returns (safe_anchors, threat_anchors_flat, threat_anchor_classes).
+    """
+    if not os.path.exists(POLICY_FILE):
+        logger.warning(f"{POLICY_FILE} not found. Semantic threat detection disabled.")
+        return [], [], {}
+
+    with open(POLICY_FILE, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    safe = data.get("safe_anchors", [])
+    classes = data.get("threat_anchor_classes", {})
+
+    if classes:
+        flat = [a for anchors in classes.values() for a in anchors]
+    else:
+        # Legacy flat format.
+        flat = data.get("threat_anchors", [])
+        classes = {"unclassified": flat} if flat else {}
+
+    return safe, flat, classes
+
+
+EDUCATIONAL_ANCHORS, THREAT_ANCHORS, THREAT_ANCHOR_CLASSES = load_policies()
 
 # EXPANDED ANCHORS for Educational Intent (Safe Harbor)
 EDUCATIONAL_CONTEXT_ANCHORS = [
@@ -44,6 +74,8 @@ def _ensure_faiss_initialized():
     """Populates FAISS indexes once on first use."""
     global _faiss_initialized
     if not _faiss_initialized:
+        counts = {k: len(v) for k, v in THREAT_ANCHOR_CLASSES.items()}
+        logger.info(f"Threat anchors by class: {counts} (total {len(THREAT_ANCHORS)})")
         threat_store.add_texts(THREAT_ANCHORS)
         educational_store.add_texts(EDUCATIONAL_CONTEXT_ANCHORS)
         _faiss_initialized = True
@@ -116,14 +148,7 @@ def check_meta_intent(prompt_vec) -> float:
             max_score = score
     return max_score
 
-def check_semantic_similarity(prompt_vec, anchors) -> float:
-    max_score = 0.0
-    for anchor in anchors:
-        anchor_vec = get_embedding(anchor)
-        score = cosine_similarity(prompt_vec, anchor_vec)
-        if score > max_score:
-            max_score = score
-    return max_score
+
 
 def check_educational_context(prompt_vec) -> bool:
     """
@@ -131,7 +156,7 @@ def check_educational_context(prompt_vec) -> bool:
     Returns: True/False based on semantic proximity to educational anchors.
     """
     # Strict threshold to prevent easy bypassing
-    max_score = check_semantic_similarity(prompt_vec, EDUCATIONAL_CONTEXT_ANCHORS)
+    max_score = educational_store.get_max_similarity(prompt_vec)
     
     # Check Dynamic Safe Harbors (from Feeds)
     dyn_score = check_dynamic_safe_harbors(prompt_vec)
@@ -191,14 +216,21 @@ def collect_semantic_signals(prompt: str, prompt_vec) -> dict:
     details["dynamic_threat_score"] = float(check_dynamic_threats(prompt_vec))
     details["is_educational"] = check_dynamic_safe_harbors(prompt_vec)
 
-    t0 = time.perf_counter()
-    # 3) Check Domain Alignment
-    domain_aligned, domain_score = is_domain_aligned(prompt)
-    t1 = time.perf_counter()
-    details["domain_alignment_ms"] = round((t1 - t0) * 1000, 2)
+    # 3) Check Domain Alignment (topicality — NOT a safety signal).
+    #    Skipped entirely when the guardrail is off, since the embedding
+    #    comparison is pure cost if nothing consumes the result.
+    if settings.DOMAIN_GUARDRAIL_MODE == "off":
+        details["domain_aligned"] = None
+        details["domain_score"] = None
+        details["domain_alignment_ms"] = 0.0
+    else:
+        t0 = time.perf_counter()
+        domain_aligned, domain_score = is_domain_aligned(prompt)
+        t1 = time.perf_counter()
+        details["domain_alignment_ms"] = round((t1 - t0) * 1000, 2)
+        details["domain_aligned"] = domain_aligned
+        details["domain_score"] = domain_score
 
-    details["domain_aligned"] = domain_aligned
-    details["domain_score"] = domain_score
     details["centroid_score"] = compute_centroid_similarity(prompt_vec)
 
     return details
@@ -207,38 +239,67 @@ def collect_semantic_signals(prompt: str, prompt_vec) -> dict:
 # STAGE 3: DETERMINISTIC FUSION
 # ============================================================================
 
+def classify_topicality(signals: dict) -> str:
+    """
+    Determines whether the prompt falls inside the deployment's configured
+    subject domain.  This is a SCOPING judgement, not a SAFETY judgement:
+    "is this prompt about my product?" is a different question from
+    "is this prompt an attack?".  Conflating the two is what produced the
+    ~98% false-positive rate in the pre-fix benchmark, because every benign
+    off-topic prompt was scored as a malice prediction.
+
+    Returns one of: IN_DOMAIN, OUT_OF_DOMAIN, UNKNOWN.
+    """
+    if signals.get("domain_aligned") is None:
+        return "UNKNOWN"
+    return "IN_DOMAIN" if signals["domain_aligned"] else "OUT_OF_DOMAIN"
+
+
 def fuse_signals(signals: dict, prompt: str) -> tuple:
     """
     Stage 3: Deterministic decision fusion from collected signals.
-    Returns (final_risk, source, judge_required).
+    Returns (final_risk, source, judge_required, topicality).
     Does NOT invoke the judge — only flags when it is needed.
+
+    `topicality` is reported independently of `final_risk`.  It only feeds
+    into the risk decision when DOMAIN_GUARDRAIL_MODE == "enforcing", which
+    is an opt-in posture for single-purpose deployments (e.g. a banking
+    assistant that should refuse to discuss anything else).  The default
+    ("off") means the domain corpus shipped in this repo never constrains a
+    third-party deployment.
     """
+    topicality = classify_topicality(signals)
+
     # 1) Meta-intent veto
     if signals["meta_intent_score"] >= META_INTENT_THRESHOLD:
         logger.warning(f"🚫 META-INTENT DETECTED (score: {signals['meta_intent_score']:.3f})")
-        return "HIGH", "semantic_meta_intent", False
+        return "HIGH", "semantic_meta_intent", False, topicality
 
-    # 2) Domain guardrail
-    if not signals["domain_aligned"]:
-        logger.warning(f"⚠️ OFF-TOPIC DETECTED (domain_score: {signals['domain_score']:.3f})")
-        return "MEDIUM", "domain_guardrail", False
+    # 2) Domain guardrail — enforcing mode only.
+    if settings.DOMAIN_GUARDRAIL_MODE == "enforcing" and topicality == "OUT_OF_DOMAIN":
+        logger.warning(f"⚠️ OFF-TOPIC BLOCKED (domain_score: {signals['domain_score']:.3f})")
+        return "MEDIUM", "domain_guardrail", False, topicality
+
+    if topicality == "OUT_OF_DOMAIN":
+        # Advisory mode: surfaced to the caller, does not alter the risk level.
+        logger.info(f"ℹ️ OFF-TOPIC (advisory, domain_score: {signals['domain_score']:.3f})")
 
     # 3) Vector threat scan
     logger.debug(f"🔍 Threat Score: {signals['threat_score']:.3f}")
 
     if signals["threat_score"] >= SEMANTIC_THRESHOLD_HIGH:
-        return "HIGH", "vector_threat_critical", False
+        return "HIGH", "vector_threat_critical", False, topicality
 
     # 4) Ambiguous zone — educational safe harbor or judge required
     if signals["threat_score"] >= SEMANTIC_THRESHOLD_MEDIUM:
         if signals["is_educational"]:
             logger.info("🛡️ SAFE HARBOR: Threat detected but Context is Educational.")
-            return "MEDIUM", "educational_safe_harbor", False
+            return "MEDIUM", "educational_safe_harbor", False, topicality
         else:
-            return "MEDIUM", "judge_pending", True
+            return "MEDIUM", "judge_pending", True, topicality
 
     # 5) Clean pass
-    return "LOW", "clean_pass", False
+    return "LOW", "clean_pass", False, topicality
 
 # ============================================================================
 # STAGE 4: JUDGE ARBITRATION
@@ -298,11 +359,13 @@ def assess_risk(prompt: str) -> tuple:
             logger.info(f"⚡ CACHE HIT (LOCKED HIGH) — cached HIGH cannot be downgraded.")
             return "HIGH", {"semantic_score": cached_score, "source": "cache_locked_high",
                             "educational_context": False, "domain_score": None,
+                            "topicality": "UNKNOWN",
                             "symbolic_triggered": False, "judge_invoked": False,
                             "dynamic_threat_score": None, "meta_intent_score": None}
         logger.info(f"⚡ CACHE HIT! Risk: {cached_risk}")
         return cached_risk, {"semantic_score": cached_score, "source": "cache",
                              "educational_context": False, "domain_score": None,
+                             "topicality": "UNKNOWN",
                              "symbolic_triggered": False, "judge_invoked": False,
                              "dynamic_threat_score": None, "meta_intent_score": None}
 
@@ -313,6 +376,7 @@ def assess_risk(prompt: str) -> tuple:
         save_cache_entry(prompt, prompt_vec, "HIGH", 1.0, source="symbolic_rule")
         return "HIGH", {"source": "symbolic_rule", "detail": detail, "semantic_score": 1.0,
                         "educational_context": False, "domain_score": None,
+                        "topicality": "UNKNOWN",
                         "symbolic_triggered": True, "judge_invoked": False,
                         "dynamic_threat_score": None, "meta_intent_score": None}
 
@@ -320,7 +384,7 @@ def assess_risk(prompt: str) -> tuple:
     signals = collect_semantic_signals(prompt, prompt_vec)
 
     # ---- STAGE 3: DETERMINISTIC FUSION ----
-    risk, source, judge_required = fuse_signals(signals, prompt)
+    risk, source, judge_required, topicality = fuse_signals(signals, prompt)
 
     judge_invoked = False
 
@@ -335,6 +399,7 @@ def assess_risk(prompt: str) -> tuple:
     return risk, {"semantic_score": signals["threat_score"], "source": source,
                   "educational_context": signals["is_educational"],
                   "domain_score": signals["domain_score"],
+                  "topicality": topicality,
                   "symbolic_triggered": False, "judge_invoked": judge_invoked,
                   "dynamic_threat_score": signals["dynamic_threat_score"],
                   "centroid_score": signals["centroid_score"],
