@@ -61,3 +61,6 @@ Thumbs.db
 
 # Evaluation run logs (tqdm noise; the JSON reports are the evidence)
 _evidence/*.log
+
+# API key store (hashed keys, but still a credential inventory)
+api_keys.json

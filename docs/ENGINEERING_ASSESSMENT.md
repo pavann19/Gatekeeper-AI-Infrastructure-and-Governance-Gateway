@@ -498,7 +498,21 @@ harmful-content coverage is made.
 
 These are the items that would stop any company from adopting this, ranked by how hard they block.
 
-### 3.1 Authentication is a hard-coded string comparison — **critical**
+### 3.1 Authentication is a hard-coded string comparison — **FIXED 2026-07-23**
+
+> **RESOLVED.** Capability is now resolved server-side from a verified API key
+> (`core/auth.py`), and `role` has been removed from `AssessRequest` with
+> `extra: "forbid"`, so a client still sending it receives a 422 rather than a
+> silent no-op. Keys are stored as SHA-256 hashes only; the plaintext is shown
+> once at issuance and is not recoverable. Anonymous callers resolve to GENERAL
+> (least privilege), and `AUTH_MODE="required"` rejects them with 401 instead.
+> The hard-coded tokens are gone, and a test asserts they cannot authenticate.
+> 28 tests cover this, led by a regression test for the exact bypass.
+>
+> Still outstanding from this section: the leaked tokens remain in git history
+> and should be treated as compromised. Original finding below for the record.
+
+
 
 `core/auth.py`:
 ```python
