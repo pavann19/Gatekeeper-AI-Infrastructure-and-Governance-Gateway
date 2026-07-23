@@ -29,10 +29,15 @@ SAFE_ID, UNSAFE_ID = 100, 200
 class FakeTokenizer:
     """Minimal stand-in for a Llama Guard tokenizer."""
 
-    def __init__(self, safe_ids=(SAFE_ID,), unsafe_ids=(UNSAFE_ID,), has_template=True):
+    def __init__(self, safe_ids=(SAFE_ID,), unsafe_ids=(UNSAFE_ID,), has_template=True,
+                 requires_content_parts=False):
         self._safe_ids = list(safe_ids)
         self._unsafe_ids = list(unsafe_ids)
         self._has_template = has_template
+        # Models the Llama Guard 3 1B quirk: a plain-string content renders an
+        # empty conversation, and only the content-parts form populates it.
+        self._requires_content_parts = requires_content_parts
+        self.chat_template = "TEMPLATE" if has_template else None
         self.padding_side = "right"
         self.pad_token = "<pad>"
         self.pad_token_id = 0
@@ -46,10 +51,18 @@ class FakeTokenizer:
             return self._unsafe_ids
         return [1, 2, 3]
 
-    def apply_chat_template(self, chat, tokenize=False):
+    def _extract_text(self, content):
+        if isinstance(content, list):
+            return "".join(part.get("text", "") for part in content)
+        # Plain string: empty body when the template requires content parts.
+        return "" if self._requires_content_parts else content
+
+    def apply_chat_template(self, chat, tokenize=False, add_generation_prompt=False):
         if not self._has_template:
-            raise ValueError("no chat template")
-        return f"<TEMPLATE>{chat[0]['content']}</TEMPLATE>"
+            raise AttributeError("'NoneType' object has no attribute ...")
+        body = self._extract_text(chat[0]["content"])
+        tail = "<|start_header_id|>assistant<|end_header_id|>" if add_generation_prompt else ""
+        return f"<TEMPLATE><BEGIN>{body}<END>{tail}"
 
     def __call__(self, texts, **kwargs):
         self.last_padding_side = self.padding_side
@@ -206,9 +219,51 @@ def test_empty_tokenization_is_a_load_error():
 
 # --- prompt construction ----------------------------------------------------
 
-def test_chat_template_is_applied():
+def test_chat_template_is_applied_with_generation_prompt():
     d = make_detector([(1.0, 1.0)])
-    assert d._build_inputs(["hello"])[0] == "<TEMPLATE>hello</TEMPLATE>"
+    built = d._build_inputs(["hello"])[0]
+    assert "hello" in built
+    assert "assistant" in built  # add_generation_prompt=True appended
+
+
+def test_scoring_seeds_the_verdict_newline_prefix():
+    """
+    THE VERDICT-OFFSET BUG. Llama Guard emits ['\\n\\n', 'safe'/'unsafe', ...],
+    so without seeding the newline prefix the read position predicts '\\n\\n'
+    and every input scores the same constant. Scoring inputs must end with the
+    prefix; classify inputs must not (it generates the prefix itself).
+    """
+    d = make_detector([(1.0, 1.0)])
+    scoring = d._build_inputs(["x"], for_scoring=True)[0]
+    generating = d._build_inputs(["x"], for_scoring=False)[0]
+    assert scoring.endswith(d._VERDICT_PREFIX)
+    assert not generating.endswith(d._VERDICT_PREFIX)
+
+
+def test_content_parts_form_is_used_when_plain_string_renders_empty():
+    """
+    THE EMPTY-CONVERSATION BUG. Llama Guard 3 1B's template drops a plain-string
+    content, rendering an empty conversation so every input looks identical. The
+    detector must use the content-parts form, and the user text must survive.
+    """
+    tok = FakeTokenizer(requires_content_parts=True)
+    d = make_detector([(1.0, 1.0)], tokenizer=tok)
+    built = d._build_inputs(["synthesize sarin"])[0]
+    assert "synthesize sarin" in built, (
+        "user content was dropped - the constant-score bug would return"
+    )
+
+
+def test_render_rejected_when_text_does_not_land_in_prompt():
+    """
+    A template that silently drops content in BOTH forms must be rejected
+    (None), not returned - a prompt missing its content scores constant.
+    """
+    tok = FakeTokenizer()
+    tok._extract_text = lambda content: ""  # every form yields empty body
+    d = LlamaGuardDetector("lg", "fake/m")
+    d._tokenizer = tok
+    assert d._render_chat("anything") is None
 
 
 def test_falls_back_when_tokenizer_has_no_template():
