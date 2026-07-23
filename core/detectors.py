@@ -216,6 +216,257 @@ class TransformerDetector(Detector):
 
 
 # ---------------------------------------------------------------------------
+# Generative safety classifiers (Llama Guard family)
+# ---------------------------------------------------------------------------
+
+class LlamaGuardDetector(Detector):
+    """
+    Wraps Meta's Llama Guard, which is a CAUSAL LM rather than a sequence
+    classifier: given a conversation it emits the literal token `safe`, or
+    `unsafe` followed by a hazard category (S1..S13).
+
+    WHY THIS CLASS EXISTS SEPARATELY
+    --------------------------------
+    `TransformerDetector` cannot drive it — different architecture, different
+    output contract, and a required chat template.
+
+    WHY IT MATTERS HERE
+    -------------------
+    Measurement showed harmful-content requests are the class every detector in
+    the stack misses: anchors 24.4%, ProtectAI 2.0%, toxic-bert 36.2%. The
+    diagnosis was that none of them models the right construct — toxicity
+    (abusive language) is not the same thing as dangerous capability uplift.
+    "How do I synthesise sarin" is calmly worded and not toxic at all. Llama
+    Guard is trained on a hazard taxonomy, which is that construct.
+
+    SCORING: ONE FORWARD PASS, NOT GENERATION
+    -----------------------------------------
+    The chat template ends exactly where the verdict token is emitted, so the
+    next-token distribution at the final position already contains the answer.
+    We read P(unsafe) from those logits directly instead of running
+    autoregressive generation.
+
+    Two benefits, one of them essential:
+      - Far cheaper: a single forward pass rather than a decode loop.
+      - CONTINUOUS score. Generation yields a hard safe/unsafe label, which
+        collapses ROC analysis to two points and makes threshold calibration
+        impossible. A probability keeps the detector comparable to every other
+        one in the registry and lets it participate in the learned fusion.
+
+    Use `classify()` when the hazard category is wanted; that path does
+    generate, and is for diagnostics rather than bulk scoring.
+    """
+
+    def __init__(self, name, model_id, targets=(CLASS_HARMFUL,), dtype="bfloat16",
+                 max_length=2048, min_free_gb=3.0, description="", trained_on=()):
+        self.name = name
+        self.model_id = model_id
+        self.targets = tuple(targets)
+        self.trained_on = tuple(trained_on)
+        self.description = description
+        self.dtype = dtype
+        self.max_length = max_length
+        self.min_free_gb = min_free_gb
+        self._model = None
+        self._tokenizer = None
+        self._safe_id = None
+        self._unsafe_id = None
+        self._lock = threading.Lock()
+        self._load_error = None
+
+    # -- loading ------------------------------------------------------------
+
+    def _resolve_verdict_tokens(self, tokenizer):
+        """
+        Finds the token ids that begin 'safe' and 'unsafe'.
+
+        Resolved from the tokenizer rather than hard-coded, because the ids
+        differ between Llama Guard versions. If the two words share a first
+        token the logit comparison is meaningless, so that is treated as a load
+        failure rather than silently producing a constant score.
+        """
+        safe_ids = tokenizer.encode("safe", add_special_tokens=False)
+        unsafe_ids = tokenizer.encode("unsafe", add_special_tokens=False)
+        if not safe_ids or not unsafe_ids:
+            return None, None, "tokenizer produced no ids for 'safe'/'unsafe'"
+        if safe_ids[0] == unsafe_ids[0]:
+            return None, None, (
+                f"'safe' and 'unsafe' share first token id {safe_ids[0]}; "
+                f"cannot separate verdicts from logits"
+            )
+        return safe_ids[0], unsafe_ids[0], None
+
+    def _load(self):
+        if self._model is not None or self._load_error is not None:
+            return
+        with self._lock:
+            if self._model is not None or self._load_error is not None:
+                return
+            try:
+                import torch
+                from transformers import AutoModelForCausalLM, AutoTokenizer
+
+                # Memory precheck. A 1B model at bfloat16 needs ~2.5GB resident;
+                # float32 doubles that. Failing here with a clear message beats
+                # an OOM kill halfway through a scoring run.
+                try:
+                    import psutil
+                    free_gb = psutil.virtual_memory().available / 1e9
+                    if free_gb < self.min_free_gb:
+                        self._load_error = (
+                            f"insufficient memory: {free_gb:.1f}GB available, "
+                            f"{self.min_free_gb:.1f}GB needed for {self.model_id}. "
+                            f"Close other processes or use a smaller variant."
+                        )
+                        logger.warning(f"Detector '{self.name}': {self._load_error}")
+                        return
+                except ImportError:
+                    pass
+
+                torch_dtype = getattr(torch, self.dtype, torch.float32)
+                logger.info(
+                    f"Loading '{self.name}' ({self.model_id}, {self.dtype}) — "
+                    f"this is a multi-GB download on first use."
+                )
+
+                tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+                # Left padding keeps the verdict position last in every row of a
+                # batch, which is what makes logits[:, -1] correct.
+                tokenizer.padding_side = "left"
+                if tokenizer.pad_token is None:
+                    tokenizer.pad_token = tokenizer.eos_token
+
+                safe_id, unsafe_id, err = self._resolve_verdict_tokens(tokenizer)
+                if err:
+                    self._load_error = err
+                    logger.error(f"Detector '{self.name}': {err}")
+                    return
+
+                model = AutoModelForCausalLM.from_pretrained(
+                    self.model_id,
+                    torch_dtype=torch_dtype,
+                    low_cpu_mem_usage=True,
+                )
+                model.eval()
+
+                self._tokenizer = tokenizer
+                self._model = model
+                self._safe_id = safe_id
+                self._unsafe_id = unsafe_id
+                logger.info(
+                    f"Detector '{self.name}' ready (safe={safe_id}, unsafe={unsafe_id})"
+                )
+            except Exception as e:
+                self._load_error = f"{type(e).__name__}: {str(e)[:200]}"
+                logger.warning(f"Detector '{self.name}' unavailable: {self._load_error}")
+
+    def available(self):
+        self._load()
+        if self._model is None:
+            return False, self._load_error or "not loaded"
+        return True, f"loaded {self.model_id} ({self.dtype})"
+
+    # -- prompt construction ------------------------------------------------
+
+    def _build_inputs(self, texts):
+        """
+        Applies the Llama Guard chat template to each text.
+
+        Falls back to a minimal hand-built prompt if the tokenizer ships no
+        template, so a template change upstream degrades rather than crashes.
+        """
+        rendered = []
+        for text in texts:
+            chat = [{"role": "user", "content": text}]
+            try:
+                rendered.append(
+                    self._tokenizer.apply_chat_template(chat, tokenize=False)
+                )
+            except Exception:
+                rendered.append(
+                    "<|begin_of_text|>Task: Check if there is unsafe content in "
+                    "the user message.\n\n<BEGIN CONVERSATION>\n\n"
+                    f"User: {text}\n\n<END CONVERSATION>\n\n"
+                    "Provide your safety assessment. First line must be 'safe' "
+                    "or 'unsafe'.\n"
+                )
+        return rendered
+
+    # -- scoring ------------------------------------------------------------
+
+    def score_batch(self, texts, batch_size=4):
+        """
+        Returns P(unsafe) per text, from the next-token distribution at the
+        verdict position. Renormalised over {safe, unsafe} so the score is a
+        proper two-way probability rather than a raw softmax over the full
+        vocabulary (where both would be small and the ratio hard to read).
+        """
+        self._load()
+        if self._model is None:
+            raise RuntimeError(f"detector '{self.name}' unavailable: {self._load_error}")
+
+        import torch
+
+        scores = []
+        with torch.no_grad():
+            for start in range(0, len(texts), batch_size):
+                chunk = [t if t.strip() else " " for t in texts[start:start + batch_size]]
+                enc = self._tokenizer(
+                    self._build_inputs(chunk),
+                    return_tensors="pt",
+                    padding=True,
+                    truncation=True,
+                    max_length=self.max_length,
+                    add_special_tokens=False,
+                )
+                logits = self._model(**enc).logits[:, -1, :].float()
+                pair = torch.stack(
+                    [logits[:, self._safe_id], logits[:, self._unsafe_id]], dim=-1
+                )
+                scores.extend(torch.softmax(pair, dim=-1)[:, 1].tolist())
+        return scores
+
+    def classify(self, text, max_new_tokens=20):
+        """
+        Full verdict including hazard category, e.g.
+        {"verdict": "unsafe", "categories": ["S9"], "raw": "unsafe\\nS9"}.
+
+        Generates, so it is for inspecting individual cases — not bulk scoring.
+        """
+        self._load()
+        if self._model is None:
+            raise RuntimeError(f"detector '{self.name}' unavailable: {self._load_error}")
+
+        import re
+
+        import torch
+
+        enc = self._tokenizer(
+            self._build_inputs([text]),
+            return_tensors="pt",
+            truncation=True,
+            max_length=self.max_length,
+            add_special_tokens=False,
+        )
+        with torch.no_grad():
+            out = self._model.generate(
+                **enc,
+                max_new_tokens=max_new_tokens,
+                do_sample=False,
+                pad_token_id=self._tokenizer.pad_token_id,
+            )
+        raw = self._tokenizer.decode(
+            out[0][enc["input_ids"].shape[-1]:], skip_special_tokens=True
+        ).strip()
+
+        return {
+            "verdict": "unsafe" if raw.lower().startswith("unsafe") else "safe",
+            "categories": re.findall(r"\bS(?:1[0-3]|[1-9])\b", raw),
+            "raw": raw,
+        }
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -266,6 +517,29 @@ def _build_registry():
             targets=(CLASS_HARMFUL,),
             multi_label=True,
             description="Unitary toxic-bert, multi-label toxicity",
+        ),
+
+        # --- Harmful content via safety taxonomy (GATED) ---
+        # The intended fix for the class every other detector misses.
+        "llama_guard_3_1b": LlamaGuardDetector(
+            name="llama_guard_3_1b",
+            model_id="meta-llama/Llama-Guard-3-1B",
+            targets=(CLASS_HARMFUL, CLASS_JAILBREAK),
+            dtype="bfloat16",
+            min_free_gb=3.0,
+            description="Meta Llama Guard 3 1B, hazard taxonomy (GATED; ~2.5GB at bf16)",
+        ),
+        # Registered for completeness. Needs roughly 17GB at bfloat16 and will
+        # refuse to load on a 12GB machine — by design, with a clear message
+        # rather than an OOM kill mid-run.
+        "llama_guard_3_8b": LlamaGuardDetector(
+            name="llama_guard_3_8b",
+            model_id="meta-llama/Llama-Guard-3-8B",
+            targets=(CLASS_HARMFUL, CLASS_JAILBREAK),
+            dtype="bfloat16",
+            min_free_gb=18.0,
+            description="Meta Llama Guard 3 8B (GATED; needs ~17GB RAM — not "
+                        "runnable on typical laptops)",
         ),
 
         # --- Gated: require `huggingface-cli login` + accepting Meta's licence ---
