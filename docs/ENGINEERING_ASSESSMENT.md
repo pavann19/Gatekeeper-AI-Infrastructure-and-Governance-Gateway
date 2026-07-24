@@ -627,6 +627,88 @@ every earlier detector missed — moves from ~24% (anchor baseline) to ~63%
 
 ---
 
+## 1g. End-to-end benchmark with a LIVE judge — the deployed pipeline underperforms its parts (2026-07-24)
+
+`benchmark_results.json`. The full request pipeline (`assess_risk` +
+`judge_arbitration` + policy) run over all 546 `deepset/prompt-injections`
+prompts, with the semantic judge **actually reachable** (Ollama, `llama3.2`).
+This is the first time this benchmark has ever produced valid numbers — see the
+judge-URL bug below.
+
+**Cold cache — the true detection quality with the judge in the loop:**
+
+| Operating point | Accuracy | Precision | Recall | F1 | FPR |
+|---|---|---|---|---|---|
+| Operational (HIGH or MEDIUM flagged) | 71.6% | 82.4% | **30.0%** | 0.44 | 3.8% |
+| Strict (HIGH only) | 67.8% | 88.6% | 15.3% | 0.26 | 1.2% |
+
+(TP=61, FP=13, TN=330, FN=142; judge invoked on 56 of 546 prompts.)
+
+### The integrated pipeline is much weaker than its best component
+
+The standalone detectors measured in §1d catch 70–84% of attacks at a 5% FPR
+budget. The **assembled pipeline catches 30%** at 3.8% FPR on this dataset. The
+gateway is leaving most of its own components' capability on the table — the
+conservative fusion + judge-arbitration path is operating at a far lower recall
+than the detectors it is built from can deliver.
+
+This is the single most important MVP finding: **the product's value proposition
+(fusion beats single detectors) is true in the offline analysis but is NOT yet
+realised in the deployed request path.** The fusion in §1e is a learned
+logistic regression; the fusion actually running in `core/risk.py` is a
+hand-tuned deterministic cascade. They are not the same system, and the running
+one is well behind. Wiring the learned fusion (or Llama Guard) into the live
+pipeline is the highest-leverage next step, and it is now quantified.
+
+### The semantic cache materially degrades accuracy
+
+Warm-cache pass, identical prompts:
+
+| | Recall | Precision | FPR | F1 |
+|---|---|---|---|---|
+| Cold (compute each time) | 30.0% | 82.4% | 3.8% | 0.44 |
+| **Warm (semantic cache)** | **13.3%** | **37.5%** | **13.1%** | 0.20 |
+
+The cache keys on embedding similarity, so it returns a *near neighbour's*
+verdict rather than the exact prompt's. The cost is severe: recall more than
+halves, FPR more than triples, precision falls from 82% to 38%. The 10× latency
+speedup is real, but as configured the cache trades away most of the pipeline's
+correctness to get it.
+
+**Recommendation:** raise the cache's similarity threshold sharply (only serve a
+cached verdict on a near-exact match) or restrict caching to verdicts that do
+not gate a block. A cache that flips 1-in-8 benign prompts to flagged is not
+deployable. This was invisible before because the benchmark had never run with a
+live judge to establish the correct cold-cache baseline to compare against.
+
+### Two bugs found while standing this up
+
+1. **Judge availability probe hit the wrong URL** (`core/semantic_judge.py`,
+   fixed, commit `791c1ae`). It stripped `/api/generate` down to the host and
+   appended `/tags`, producing `localhost:11434/tags` — a 404 against any real
+   Ollama server. The methodology gate therefore reported the judge offline even
+   when it was up, which is why this benchmark had never once run with a live
+   judge. Two regression tests pin the corrected `/api/tags` URL.
+
+2. **Dead threat centroid** (`core/threat_centroid.py`, fixed). It read the flat
+   `threat_anchors` key, which became empty when anchors were regrouped into
+   `threat_anchor_classes`, so it silently loaded ZERO anchors and computed a
+   meaningless `centroid_score`. That score is recorded but never used in a
+   decision, so it did NOT affect the recall numbers above — but it was a dead,
+   misleading signal and a latent trap. Now reads the grouped anchors (15
+   loaded). If this signal is ever promoted into the decision, it will at least
+   be computed against a real centroid.
+
+### Caveat
+
+`llama3.2` is the judge here, not the configured `mistral` (which was not
+installed; pulling it was avoided given the full C: drive). The judge model
+affects the 56 arbitrated verdicts, so the exact recall figure is judge-model
+dependent. The *structural* findings — pipeline << components, cache degrades
+accuracy — are not sensitive to which local model judges.
+
+---
+
 ## 2. Second-order defect — fail-closed is masking evaluation signal
 
 `judge_arbitration` returns `HIGH` on `JUDGE_OFFLINE`. This is correct security posture and wrong evaluation methodology. If Ollama was not running during the benchmark, every ambiguous prompt was scored `HIGH` for infrastructure reasons, and the published metrics measure the availability of a local LLM rather than the quality of the classifier.
