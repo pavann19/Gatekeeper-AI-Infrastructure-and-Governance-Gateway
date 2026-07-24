@@ -1,0 +1,219 @@
+{
+  "sample": {
+    "n": 554,
+    "composition": {
+      "harmful_content": 254,
+      "prompt_injection": 50,
+      "jailbreak": 50,
+      "benign": 200
+    },
+    "n_attack": 354,
+    "seed": 20260724
+  },
+  "config": {
+    "fpr_budget": 0.05,
+    "bootstrap": 1000
+  },
+  "single_detectors": [
+    {
+      "detector": "llama_guard_3_1b",
+      "auc": {
+        "point": 0.8562570621468927,
+        "lo": 0.8266483516483516,
+        "hi": 0.8889742524916944,
+        "n": 554,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "recall_at_fpr": {
+        "point": 0.4604519774011299,
+        "lo": 0.36443148688046645,
+        "hi": 0.5310734463276836,
+        "n": 554,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "n": 554
+    },
+    {
+      "detector": "anchors",
+      "auc": {
+        "point": 0.7399717514124293,
+        "lo": 0.6976977401129943,
+        "hi": 0.778931810547531,
+        "n": 554,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "recall_at_fpr": {
+        "point": 0.3502824858757062,
+        "lo": 0.23626373626373626,
+        "hi": 0.44,
+        "n": 554,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "n": 554
+    },
+    {
+      "detector": "protectai_injection",
+      "auc": {
+        "point": 0.5985593220338983,
+        "lo": 0.5517101885950229,
+        "hi": 0.6455031810294968,
+        "n": 554,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "recall_at_fpr": {
+        "point": 0.2514124293785311,
+        "lo": 0.2085889570552147,
+        "hi": 0.3079268292682927,
+        "n": 554,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "n": 554
+    },
+    {
+      "detector": "deepset_injection",
+      "auc": {
+        "point": 0.6429653116274667,
+        "lo": 0.5899174683278137,
+        "hi": 0.6874224797073462,
+        "n": 526,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "recall_at_fpr": {
+        "point": 0.11504424778761062,
+        "lo": 0.06451612903225806,
+        "hi": 0.2967032967032967,
+        "n": 526,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "n": 526
+    },
+    {
+      "detector": "jailbreak_classifier",
+      "auc": {
+        "point": 0.4635714285714286,
+        "lo": 0.40894461077844313,
+        "hi": 0.520199544897602,
+        "n": 487,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "recall_at_fpr": {
+        "point": 0.03205128205128205,
+        "lo": 0.011904761904761904,
+        "hi": 0.07096774193548387,
+        "n": 487,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "n": 487
+    },
+    {
+      "detector": "madhurjindal_jailbreak",
+      "auc": {
+        "point": 0.7226553672316384,
+        "lo": 0.6798169901618177,
+        "hi": 0.7670893395564,
+        "n": 554,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "recall_at_fpr": {
+        "point": 0.1638418079096045,
+        "lo": 0.09776536312849161,
+        "hi": 0.2342857142857143,
+        "n": 554,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "n": 554
+    },
+    {
+      "detector": "toxic_bert",
+      "auc": {
+        "point": 0.8396751412429379,
+        "lo": 0.8016382030127531,
+        "hi": 0.8758157065706571,
+        "n": 554,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "recall_at_fpr": {
+        "point": 0.2966101694915254,
+        "lo": 0.17391304347826086,
+        "hi": 0.4783783783783784,
+        "n": 554,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "n": 554
+    },
+    {
+      "detector": "prompt_guard_2",
+      "auc": {
+        "point": 0.787132768361582,
+        "lo": 0.750213772659902,
+        "hi": 0.8223501074524396,
+        "n": 554,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "recall_at_fpr": {
+        "point": 0.4152542372881356,
+        "lo": 0.32848837209302323,
+        "hi": 0.47761194029850745,
+        "n": 554,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "n": 554
+    }
+  ],
+  "harmful_content_detection": {
+    "llama_guard_3_1b": 0.6023622047244095,
+    "anchors": 0.2204724409448819,
+    "protectai_injection": 0.01968503937007874,
+    "deepset_injection": 0.07480314960629922,
+    "jailbreak_classifier": 0.015748031496062992,
+    "madhurjindal_jailbreak": 0.04330708661417323,
+    "toxic_bert": 0.36220472440944884,
+    "prompt_guard_2": 0.25196850393700787
+  },
+  "fusion_with_llama_guard": {
+    "auc": {
+      "point": 0.896412429378531,
+      "lo": 0.8708502024291498,
+      "hi": 0.9236158192090396,
+      "n": 554,
+      "n_boot_effective": 1000,
+      "ci_level": 0.95
+    },
+    "harmful_content_detected": 0.6259842519685039,
+    "coefficients": {
+      "toxic_bert": 1.3375283769739132,
+      "llama_guard_3_1b": 1.2720719376091625,
+      "protectai_injection": 0.9494872395798503,
+      "prompt_guard_2": 0.48669588824021287,
+      "anchors": 0.36890175885240795,
+      "madhurjindal_jailbreak": 0.1894254257623223
+    }
+  },
+  "fusion_without_llama_guard": {
+    "auc": {
+      "point": 0.8347316384180791,
+      "lo": 0.7999420721615359,
+      "hi": 0.8682044033863235,
+      "n": 554,
+      "n_boot_effective": 1000,
+      "ci_level": 0.95
+    },
+    "harmful_content_detected": 0.39763779527559057
+  }
+}

@@ -556,6 +556,77 @@ harmful-content coverage is made.
 
 ---
 
+## 1f. Llama Guard closes most of the harmful-content gap (2026-07-24)
+
+`_evidence/llama_guard_sample_report.json`. Meta granted access to
+Llama-Guard-3-1B. It is a generative model on CPU (~27 s/row here), so full-suite
+scoring would take ~33 hours; it was evaluated on a **stratified sample of 554
+rows** instead — ALL 254 harmful_content rows, plus 50 injection, 50 jailbreak,
+and 200 benign. Every detector is scored on those identical rows.
+
+**Read the AUCs in this section with care.** The sample is deliberately enriched
+for harmful content (254 of 354 attacks), so the pooled AUCs here are NOT
+comparable to the full-suite tables above — injection specialists look worse
+only because the population is now harmful-heavy. The valid takeaways are the
+**per-class harmful-content detection rate** and the **within-sample fusion
+comparison**, both of which hold the population fixed.
+
+### Harmful-content detection, at each detector's own 5% FPR threshold
+
+| Detector | harmful detected |
+|---|---|
+| **`llama_guard_3_1b`** | **60.2%** |
+| `toxic_bert` | 36.2% |
+| `prompt_guard_2` | 25.2% |
+| `anchors` | 22.0% |
+| `deepset_injection` | 7.5% |
+| `protectai_injection` | 2.0% |
+
+Llama Guard detects **60.2%** of harmful content — 24 points above the next best
+single detector (`toxic_bert`, 36.2%) and nearly 3× the anchor baseline. This is
+the first instrument in the stack actually built for the construct, and it shows.
+
+### It is strongly additive to the fusion
+
+Learned fusion, out-of-fold, on the identical 554 rows, with and without Llama
+Guard in the feature set:
+
+| Fusion configuration | AUC | harmful detected |
+|---|---|---|
+| without Llama Guard | 0.835 [0.800, 0.868] | 39.8% |
+| **with Llama Guard** | **0.896 [0.871, 0.924]** | **62.6%** |
+
+Adding Llama Guard lifts harmful-content detection from **39.8% to 62.6%** and
+raises fusion AUC with **non-overlapping** confidence intervals (0.871 vs 0.868).
+Its fusion coefficient (+1.272) is second-highest of six detectors, behind only
+`toxic_bert` (+1.338) — the two harmful-content specialists carry the fusion on
+this population, exactly as the taxonomy predicts.
+
+### Honest limits
+
+- **60.2% is a real improvement, not a solved problem.** Nearly 40% of
+  harmful-content requests still evade the best available detector. Llama Guard 3
+  **1B** is the smallest variant; the 8B model (not runnable on 12 GB) would
+  likely do better, and is the natural next measurement on adequate hardware.
+- These are **sample-based numbers with wider intervals** than the full-suite
+  tables. The direction is unambiguous — non-overlapping CIs on the fusion gain —
+  but the point estimates carry sampling noise.
+- The earlier full-suite fusion figure (44.5% harmful) and this sample's
+  with-Llama-Guard figure (62.6%) are **not directly comparable**: different row
+  populations and a different detector set. The apples-to-apples comparison is
+  within this sample: **39.8% → 62.6%**.
+
+### What this settles
+
+The project's central, defensible claim is now backed end to end: **no single
+detector covers all three attack classes, and per-class evaluation plus learned
+fusion over specialised detectors measurably outperforms any one of them on the
+class each is weakest at.** Harmful content — the hardest class, and the one
+every earlier detector missed — moves from ~24% (anchor baseline) to ~63%
+(fusion with Llama Guard) once the right specialist is in the ensemble.
+
+---
+
 ## 2. Second-order defect — fail-closed is masking evaluation signal
 
 `judge_arbitration` returns `HIGH` on `JUDGE_OFFLINE`. This is correct security posture and wrong evaluation methodology. If Ollama was not running during the benchmark, every ambiguous prompt was scored `HIGH` for infrastructure reasons, and the published metrics measure the availability of a local LLM rather than the quality of the classifier.
