@@ -7,7 +7,7 @@ import json
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(project_root)
 
-from core.semantic_judge import semantic_judge
+from core.semantic_judge import judge_available, semantic_judge
 
 class MockResponse:
     def __init__(self, json_data, status_code=200):
@@ -16,6 +16,45 @@ class MockResponse:
 
     def json(self):
         return self.json_data
+
+
+def test_judge_availability_probes_the_api_tags_endpoint():
+    """
+    Regression: judge_available built the probe URL by stripping TWO path
+    segments off OLLAMA_API_URL (.../api/generate -> .../ ) and appending
+    '/tags', producing '.../tags' — a 404 against any real Ollama server, which
+    made the methodology gate report the judge offline even when it was up. It
+    must hit '.../api/tags'.
+    """
+    captured = {}
+
+    def fake_get(url, timeout=None):
+        captured["url"] = url
+        return MockResponse({"models": [{"name": "llama3.2:latest"}]})
+
+    with mock.patch("core.semantic_judge.requests.get", side_effect=fake_get):
+        with mock.patch("core.semantic_judge.OLLAMA_API_URL",
+                        "http://localhost:11434/api/generate"):
+            with mock.patch("core.semantic_judge.OLLAMA_MODEL", "llama3.2"):
+                ok, detail = judge_available()
+
+    assert captured["url"] == "http://localhost:11434/api/tags", (
+        f"probe hit {captured['url']!r}, not the /api/tags endpoint"
+    )
+    assert ok is True, detail
+
+
+def test_judge_unavailable_when_model_absent():
+    """A reachable server missing the configured model is not 'available'."""
+    def fake_get(url, timeout=None):
+        return MockResponse({"models": [{"name": "some-other-model:latest"}]})
+
+    with mock.patch("core.semantic_judge.requests.get", side_effect=fake_get):
+        with mock.patch("core.semantic_judge.OLLAMA_MODEL", "llama3.2"):
+            ok, detail = judge_available()
+
+    assert ok is False
+    assert "not present" in detail
 
 def test_semantic_judge_substring_vulnerability():
     # We will test various adversarial and garbage outputs from the LLM

@@ -16,7 +16,10 @@ def judge_available() -> tuple:
     Returns (available: bool, detail: str).
     """
     try:
-        base_url = "/".join(OLLAMA_API_URL.split("/")[:-2])
+        # OLLAMA_API_URL ends in ".../api/generate"; the model list lives at
+        # ".../api/tags". Drop only the final segment ("generate") so the "api"
+        # segment is preserved — dropping two produced ".../tags" (404).
+        base_url = "/".join(OLLAMA_API_URL.split("/")[:-1])
         resp = requests.get(f"{base_url}/tags", timeout=5)
         if resp.status_code != 200:
             return False, f"judge endpoint returned HTTP {resp.status_code}"
