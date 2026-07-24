@@ -1,0 +1,132 @@
+{
+    "valid": true,
+    "invalid_reason": null,
+    "config": {
+        "domain_guardrail_mode": "off",
+        "semantic_threshold_high": 0.48,
+        "semantic_threshold_medium": 0.3,
+        "meta_intent_threshold": 0.3,
+        "domain_threshold": 0.22,
+        "embedding_model": "all-mpnet-base-v2",
+        "judge_model": "llama3.2"
+    },
+    "dataset": {
+        "name": "deepset/prompt-injections",
+        "n": 546
+    },
+    "cold": {
+        "run_name": "Cold Cache (uncached, FAISS)",
+        "avg_latency_ms": 827.838543223115,
+        "p50_latency_ms": 349.0479000029154,
+        "p95_latency_ms": 4304.575599991949,
+        "p99_latency_ms": 6379.1328000079375,
+        "metrics_operational": {
+            "mode": "operational (HIGH or MEDIUM)",
+            "accuracy": 0.7161172161172161,
+            "precision": 0.8243243243243243,
+            "recall_tpr": 0.30049261083743845,
+            "f1": 0.44043321299638993,
+            "fpr": 0.037900874635568516,
+            "confusion_matrix": {
+                "TP": 61,
+                "FP": 13,
+                "TN": 330,
+                "FN": 142
+            }
+        },
+        "metrics_strict": {
+            "mode": "strict (HIGH only)",
+            "accuracy": 0.6776556776556777,
+            "precision": 0.8857142857142857,
+            "recall_tpr": 0.15270935960591134,
+            "f1": 0.26050420168067234,
+            "fpr": 0.011661807580174927,
+            "confusion_matrix": {
+                "TP": 31,
+                "FP": 4,
+                "TN": 339,
+                "FN": 172
+            }
+        },
+        "risk_distribution": {
+            "LOW": 472,
+            "HIGH": 35,
+            "MEDIUM": 39
+        },
+        "source_distribution": {
+            "clean_pass": 463,
+            "vector_threat_critical": 7,
+            "semantic_judge_override_restricted": 33,
+            "semantic_judge": 19,
+            "semantic_judge_ambiguous": 4,
+            "semantic_meta_intent": 6,
+            "symbolic_rule": 3,
+            "cache": 11
+        },
+        "judge_invocations": 56,
+        "topicality": {
+            "mode": "off",
+            "distribution": {
+                "UNKNOWN": 546
+            },
+            "benign_flagged_out_of_domain": 0,
+            "benign_total": 343,
+            "note": "Scoping signal. Excluded from the safety confusion matrix by design."
+        }
+    },
+    "warm": {
+        "run_name": "Warm Cache (LRU + FAISS)",
+        "avg_latency_ms": 82.36809670318544,
+        "p50_latency_ms": 70.85180000285618,
+        "p95_latency_ms": 141.13209999050014,
+        "p99_latency_ms": 298.6209999944549,
+        "metrics_operational": {
+            "mode": "operational (HIGH or MEDIUM)",
+            "accuracy": 0.5952380952380952,
+            "precision": 0.375,
+            "recall_tpr": 0.1330049261083744,
+            "f1": 0.19636363636363638,
+            "fpr": 0.13119533527696792,
+            "confusion_matrix": {
+                "TP": 27,
+                "FP": 45,
+                "TN": 298,
+                "FN": 176
+            }
+        },
+        "metrics_strict": {
+            "mode": "strict (HIGH only)",
+            "accuracy": 0.6062271062271062,
+            "precision": 0.3235294117647059,
+            "recall_tpr": 0.054187192118226604,
+            "f1": 0.09282700421940929,
+            "fpr": 0.06705539358600583,
+            "confusion_matrix": {
+                "TP": 11,
+                "FP": 23,
+                "TN": 320,
+                "FN": 192
+            }
+        },
+        "risk_distribution": {
+            "LOW": 474,
+            "HIGH": 34,
+            "MEDIUM": 38
+        },
+        "source_distribution": {
+            "cache": 512,
+            "cache_locked_high": 34
+        },
+        "judge_invocations": 0,
+        "topicality": {
+            "mode": "off",
+            "distribution": {
+                "UNKNOWN": 546
+            },
+            "benign_flagged_out_of_domain": 0,
+            "benign_total": 343,
+            "note": "Scoping signal. Excluded from the safety confusion matrix by design."
+        }
+    },
+    "speedup": 10.050475564662403
+}

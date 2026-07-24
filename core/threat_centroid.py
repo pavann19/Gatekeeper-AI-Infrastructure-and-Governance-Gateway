@@ -22,9 +22,19 @@ def load_threat_anchors():
     try:
         with open(POLICY_FILE, "r") as f:
             data = json.load(f)
+        # Anchors were regrouped by attack class into `threat_anchor_classes`;
+        # the flat `threat_anchors` key is retained only for backward
+        # compatibility and is empty in the current policy file. Reading only
+        # the flat key (as this did) silently loaded ZERO anchors, so the
+        # centroid was undefined and centroid_score meaningless. Prefer the
+        # grouped classes, flattened, matching core.risk.load_policies().
+        classes = data.get("threat_anchor_classes")
+        if classes:
+            anchors = [a for group in classes.values() for a in group]
+        else:
             anchors = data.get("threat_anchors", [])
-            print(f"Loaded {len(anchors)} threat anchors for centroid computation.")
-            return anchors
+        print(f"Loaded {len(anchors)} threat anchors for centroid computation.")
+        return anchors
     except Exception as e:
         print(f"WARNING: Failed to load threat anchors: {e}")
         return []
