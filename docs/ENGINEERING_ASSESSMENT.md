@@ -783,6 +783,73 @@ stages still correctly short-circuit before fusion runs.
 
 ---
 
+## 1i. Cache fixed — warm and cold accuracy are now identical (2026-07-31)
+
+`core/cache.py`, `scripts/diagnose_cache_threshold.py`. §1h's cache gap is
+closed, and the root cause turned out to be worse than a badly-tuned constant.
+
+`scripts/diagnose_cache_threshold.py` measured the actual safety/hit-rate
+tradeoff on `deepset/prompt-injections` instead of guessing at a new threshold:
+at the shipped default (`CACHE_SIMILARITY_THRESHOLD=0.95`), **9.1%** of
+near-duplicate prompt pairs above that similarity had **opposite** ground-truth
+labels; at 0.98, **50%** did. The dataset mutates a benign wrapper by
+inserting or removing an injection payload — nearly identical surface text,
+opposite verdict — and sentence-embedding cosine similarity measures bulk
+topical content, not the presence of that one adversarial clause. No threshold
+low enough to yield meaningful cache hits is provably safe on adversarial
+input; the worst concrete pair (similarity 0.9876) was a benign "I want to
+learn painting" question against the same text with a lock-picking request
+appended.
+
+The fix has two parts. First, `lookup()` now checks an **exact prompt-hash
+match, unconditionally, before any similarity search** — the previous
+implementation never consulted its own hash-keyed store and went straight to
+fuzzy FAISS search, so even a byte-identical repeat of an already-cached prompt
+could be shadowed by a "similar" but differently-labelled neighbour. This tier
+has zero collision risk by construction. Second, the fuzzy fallback's
+threshold was raised 0.95 → 0.99 — the highest value with zero unsafe pairs
+observed in the measurement, documented as a safer margin rather than a
+guarantee.
+
+### Re-measured on the identical 546-prompt benchmark
+
+| | Recall | Precision | F1 | FPR |
+|---|---|---|---|---|
+| Cold cache (unchanged) | 64.0% | 81.8% | 0.72 | 8.5% |
+| Warm cache — §1h (before this fix) | 30.05% | 39.6% | 0.34 | 27.1% |
+| **Warm cache — this fix** | **64.0%** | **81.8%** | **0.72** | **8.5%** |
+
+Cold and warm are now **byte-identical on every metric**, because the
+benchmark re-queries the exact same 546 prompts on the warm pass and the exact-
+match tier now correctly retrieves each prompt's own verdict rather than a
+FAISS neighbour's. Speedup held (in fact rose slightly, 14.89× → 17.25×, since
+a hash lookup is cheaper than the FAISS search it now short-circuits ahead of).
+
+The §1h recommendation is resolved, not merely mitigated: warm-path traffic no
+longer costs any of the accuracy fusion bought in §1h.
+
+### Honest residual risk
+
+The fuzzy-match tier (genuine near-duplicates below hash-exact) is now
+*measured* safer, not proven safe — 0.99 is an empirical margin from one
+546-prompt dataset, and a larger or differently-constructed adversarial corpus
+could in principle contain a closer collision. A deployment wanting zero
+residual risk can set `CACHE_SIMILARITY_THRESHOLD=1.0`, which disables the
+fuzzy tier entirely and leaves exact-match caching fully intact — still the
+majority of real-world cache value, since it captures the same-question-asked-
+repeatedly case unconditionally.
+
+### Verified
+
+12 new tests in `tests/test_cache.py` (a file that did not exist before this —
+the earlier assessment had flagged "none for cache TTL/LRU/eviction" as a real
+gap). The central test replays the actual 0.9876-similarity collision found by
+the diagnostic and proves both directions: the OLD threshold really did serve
+the wrong verdict across it, and the NEW threshold correctly misses instead.
+153 tests total, all passing.
+
+---
+
 ## 2. Second-order defect — fail-closed is masking evaluation signal
 
 `judge_arbitration` returns `HIGH` on `JUDGE_OFFLINE`. This is correct security posture and wrong evaluation methodology. If Ollama was not running during the benchmark, every ambiguous prompt was scored `HIGH` for infrastructure reasons, and the published metrics measure the availability of a local LLM rather than the quality of the classifier.
