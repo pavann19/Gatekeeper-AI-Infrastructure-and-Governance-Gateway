@@ -709,6 +709,80 @@ accuracy — are not sensitive to which local model judges.
 
 ---
 
+## 1h. Fusion wired into the live pipeline — recall more than doubles (2026-07-31)
+
+`core/fusion.py`, `scripts/train_fusion_policy.py`, `core/risk.py`. The learned
+fusion validated out-of-fold in §1e (AUC 0.944 vs single-best 0.909) was, until
+now, never consulted by the deployed request path — `core/risk.py` only ever
+scored the anchor detector. This section is that gap closed, re-measured on the
+identical 546-prompt benchmark as §1g.
+
+**Live detector set is deliberately narrower than the offline ensemble**: only
+`anchors`, `protectai_injection`, `madhurjindal_jailbreak`, `toxic_bert` — the
+four detectors that are both unencumbered by external licensing and fast enough
+for a synchronous request (Prompt Guard 2 needs a per-deployment Meta licence;
+Llama Guard takes seconds per request on CPU, wrong order of magnitude for a
+live path). The persisted policy is plain JSON (`models/fusion_policy.json`) —
+five numbers per detector — not a pickled model, so it carries no sklearn
+version coupling into deployment.
+
+**Fail-closed to fallback, not fail-open, not crash.** If any live detector is
+unavailable, `fused_threat_score` reports `available: False` rather than
+imputing zero for the missing feature — imputing zero would understate risk
+exactly when a detector goes dark. `core/risk.py` then falls back to the exact
+pre-fusion anchors-only decision path, verbatim. Decision sources are labelled
+distinctly (`fusion_threat_critical` vs the legacy `vector_threat_critical`) so
+audit logs always show which system decided a given request.
+
+### Result: recall 30.0% → 63.6%, same benchmark, same prompts
+
+| | Recall | Precision | F1 | FPR |
+|---|---|---|---|---|
+| §1g, anchors-only (before) | 30.0% | 82.4% | 0.44 | 3.8% |
+| **§1h, fusion wired (after)** | **63.6%** | **81.1%** | **0.71** | **8.8%** |
+
+(TP=129, FP=30, TN=313, FN=74; judge invoked on 45 of 546, down from 56 — the
+fusion score resolves more cases decisively on its own.)
+
+This is the single largest improvement of the whole evaluation effort, and it
+required no new modelling — the capability already existed in the offline
+comparison; it simply was not reaching the request path. **§1g's headline
+finding — "the deployed pipeline uses a fraction of its own components'
+capability" — is now the headline finding that is fixed**, not merely diagnosed.
+
+Honest reading of the tradeoff: FPR rose from 3.8% to 8.8%. This is the
+predictable cost of a more sensitive decision boundary — it catches more real
+attacks and more borderline benign prompts. Whether 8.8% is acceptable is a
+deployment posture decision, and it is now a tunable one: `HIGH_FPR_BUDGET` /
+`MEDIUM_FPR_BUDGET` in `scripts/train_fusion_policy.py` set the operating point
+explicitly, rather than the legacy anchors-only cosine threshold that was set
+once and not revisited against a stated budget.
+
+### The cache gap did not close — and is now proportionally worse
+
+| | Recall | FPR |
+|---|---|---|
+| Cold cache (fusion, this section) | 63.6% | 8.8% |
+| **Warm cache (fusion, this section)** | **30.05%** | **27.1%** |
+
+Warm-cache recall (30.05%) lands almost exactly on the OLD anchors-only
+cold-cache number (30.0%) — the semantic cache is silently discarding most of
+what fusion just bought. The §1g recommendation stands and is now more urgent:
+tighten the cache's similarity threshold, or exclude cached verdicts from
+gating a block, before this ships. Shipping fusion without fixing the cache
+means most production traffic (whatever hits a warm entry) never benefits from
+the improvement measured above.
+
+### Verified
+
+141 tests pass (20 new: 14 pin `core/fusion.py`'s load/score/fail-closed-to-
+fallback contract; 6 pin the Stage-3 cascade's fusion-vs-fallback branching).
+Live smoke test confirmed fusion engages on real prompts (a DAN-style jailbreak
+scored 0.994; a benign prompt scored 0.023) and that hard-ban/meta-intent veto
+stages still correctly short-circuit before fusion runs.
+
+---
+
 ## 2. Second-order defect — fail-closed is masking evaluation signal
 
 `judge_arbitration` returns `HIGH` on `JUDGE_OFFLINE`. This is correct security posture and wrong evaluation methodology. If Ollama was not running during the benchmark, every ambiguous prompt was scored `HIGH` for infrastructure reasons, and the published metrics measure the availability of a local LLM rather than the quality of the classifier.
