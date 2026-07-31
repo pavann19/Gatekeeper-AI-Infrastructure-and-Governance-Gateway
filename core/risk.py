@@ -19,6 +19,7 @@ from core.normalizer import normalize_prompt
 from core.threat_centroid import compute_centroid_similarity
 from core.vector_store import threat_store, educational_store
 from core.logger import get_logger
+from core.fusion import fused_threat_score
 import time
 
 logger = get_logger(__name__)
@@ -233,6 +234,29 @@ def collect_semantic_signals(prompt: str, prompt_vec) -> dict:
 
     details["centroid_score"] = compute_centroid_similarity(prompt_vec)
 
+    # 4) Multi-detector learned fusion (see core/fusion.py). `threat_score`
+    #    above is the anchor-only signal this project shipped with originally;
+    #    the fusion combines it with three additional specialised detectors
+    #    and is the validated improvement (out-of-fold AUC 0.944 vs 0.890
+    #    anchors-alone — see docs/ENGINEERING_ASSESSMENT.md §1d-1e). It is
+    #    computed here, in Stage 2, so Stage 3 can make a single deterministic
+    #    decision from whichever signal is actually available.
+    t0 = time.perf_counter()
+    fusion = fused_threat_score(prompt, anchor_score=details["threat_score"])
+    t1 = time.perf_counter()
+    details["fusion_ms"] = round((t1 - t0) * 1000, 2)
+    details["fusion_available"] = fusion["available"]
+    details["fusion_score"] = fusion["score"]
+    details["fusion_threshold_high"] = fusion["threshold_high"]
+    details["fusion_threshold_medium"] = fusion["threshold_medium"]
+    details["fusion_detail"] = fusion["detail"]
+    details["fusion_detector_scores"] = fusion["detector_scores"]
+    if not fusion["available"]:
+        logger.warning(
+            f"Fusion unavailable ({fusion['detail']}) - falling back to the "
+            f"anchors-only decision path for this request."
+        )
+
     return details
 
 # ============================================================================
@@ -284,13 +308,39 @@ def fuse_signals(signals: dict, prompt: str) -> tuple:
         # Advisory mode: surfaced to the caller, does not alter the risk level.
         logger.info(f"ℹ️ OFF-TOPIC (advisory, domain_score: {signals['domain_score']:.3f})")
 
-    # 3) Vector threat scan
-    logger.debug(f"🔍 Threat Score: {signals['threat_score']:.3f}")
+    # 3) Primary threat signal — fused multi-detector score when available,
+    #    else the original anchors-only cosine similarity. Both branches use
+    #    the SAME decision structure (HIGH cutoff, MEDIUM/judge zone, clean
+    #    pass); only the signal and its calibrated thresholds differ. Sources
+    #    are labelled distinctly ("fusion_*" vs the legacy "vector_*" /
+    #    "clean_pass" names) so audit logs always show which decision system
+    #    actually fired for a given request.
+    if signals.get("fusion_available"):
+        score = signals["fusion_score"]
+        threshold_high = signals["fusion_threshold_high"]
+        threshold_medium = signals["fusion_threshold_medium"]
+        logger.debug(f"🔍 Fusion Score: {score:.3f}")
+
+        if score >= threshold_high:
+            return "HIGH", "fusion_threat_critical", False, topicality
+
+        if score >= threshold_medium:
+            if signals["is_educational"]:
+                logger.info("🛡️ SAFE HARBOR: Threat detected but Context is Educational.")
+                return "MEDIUM", "fusion_educational_safe_harbor", False, topicality
+            return "MEDIUM", "fusion_judge_pending", True, topicality
+
+        return "LOW", "fusion_clean_pass", False, topicality
+
+    # Fallback: fusion unavailable for this request (see collect_semantic_signals
+    # for why — a warning is already logged there). This is exactly the
+    # anchors-only decision path this project shipped and validated before
+    # fusion existed, kept verbatim as a safety net rather than removed.
+    logger.debug(f"🔍 Threat Score (anchors-only fallback): {signals['threat_score']:.3f}")
 
     if signals["threat_score"] >= SEMANTIC_THRESHOLD_HIGH:
         return "HIGH", "vector_threat_critical", False, topicality
 
-    # 4) Ambiguous zone — educational safe harbor or judge required
     if signals["threat_score"] >= SEMANTIC_THRESHOLD_MEDIUM:
         if signals["is_educational"]:
             logger.info("🛡️ SAFE HARBOR: Threat detected but Context is Educational.")
@@ -298,7 +348,6 @@ def fuse_signals(signals: dict, prompt: str) -> tuple:
         else:
             return "MEDIUM", "judge_pending", True, topicality
 
-    # 5) Clean pass
     return "LOW", "clean_pass", False, topicality
 
 # ============================================================================
@@ -391,16 +440,32 @@ def assess_risk(prompt: str) -> tuple:
     # ---- STAGE 4: JUDGE ARBITRATION (if required) ----
     if judge_required:
         judge_invoked = True
-        threat_present = signals["threat_score"] >= SEMANTIC_THRESHOLD_MEDIUM
+        if signals.get("fusion_available"):
+            threat_present = signals["fusion_score"] >= signals["fusion_threshold_medium"]
+        else:
+            threat_present = signals["threat_score"] >= SEMANTIC_THRESHOLD_MEDIUM
         risk, source = judge_arbitration(prompt, threat_present=threat_present)
 
     # ---- STAGE 5: CACHE SAVE + RETURN ----
-    save_cache_entry(prompt, prompt_vec, risk, signals["threat_score"], source=source)
-    return risk, {"semantic_score": signals["threat_score"], "source": source,
+    # Report the score that actually drove the decision: the fused probability
+    # when fusion ran, else the legacy anchors-only similarity. Reporting the
+    # anchors score while a fusion score decided the outcome would make the
+    # audit trail describe a different decision than the one actually made.
+    if signals.get("fusion_available"):
+        reported_score = signals["fusion_score"]
+    else:
+        reported_score = signals["threat_score"]
+
+    save_cache_entry(prompt, prompt_vec, risk, reported_score, source=source)
+    return risk, {"semantic_score": reported_score, "source": source,
                   "educational_context": signals["is_educational"],
                   "domain_score": signals["domain_score"],
                   "topicality": topicality,
                   "symbolic_triggered": False, "judge_invoked": judge_invoked,
                   "dynamic_threat_score": signals["dynamic_threat_score"],
                   "centroid_score": signals["centroid_score"],
+                  "fusion_available": signals.get("fusion_available"),
+                  "fusion_detail": signals.get("fusion_detail"),
+                  "fusion_detector_scores": signals.get("fusion_detector_scores"),
+                  "anchor_threat_score": signals["threat_score"],
                   "meta_intent_score": signals["meta_intent_score"]}
