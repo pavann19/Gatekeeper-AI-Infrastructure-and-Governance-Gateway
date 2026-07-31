@@ -24,8 +24,18 @@ with st.sidebar:
     
     st.divider()
     
-    # Let user select their role for testing different policies
-    role = st.selectbox("Simulate User Role", ["GENERAL", "ELEVATED", "INTERNAL"])
+    # Capability is resolved SERVER-SIDE from the API key, never chosen by the
+    # client. The old "Simulate User Role" dropdown sent the tier in the request
+    # body, which the gateway then trusted -- a privilege escalation, since
+    # INTERNAL maps HIGH -> ALLOW. Supplying a key is now the only way to raise
+    # privilege, and an empty box means anonymous (GENERAL).
+    api_key = st.text_input(
+        "API Key (optional)",
+        type="password",
+        help="Presented as 'Authorization: Bearer <key>'. Leave blank for "
+             "anonymous access at GENERAL. Issue keys with: "
+             "python -m scripts.manage_api_keys issue",
+    )
     
     st.divider()
     
@@ -79,7 +89,8 @@ if user_query:
         try:
             api_response = requests.post(
                 f"{API_URL}/assess",
-                json={"prompt": user_query, "role": role}
+                json={"prompt": user_query},
+                headers=({"Authorization": f"Bearer {api_key}"} if api_key else {}),
             )
             api_response.raise_for_status()
             result = api_response.json()

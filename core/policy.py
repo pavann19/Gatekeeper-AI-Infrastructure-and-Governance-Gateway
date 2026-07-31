@@ -30,7 +30,7 @@ def policy_decision(role: str, risk: str):
     """
     # Fail-safe default
     if not POLICY_RULES or "policies" not in POLICY_RULES:
-        return "BLOCK", "System Error: Politics not loaded"
+        return "BLOCK", "System Error: Policies not loaded"
 
     user_policy = POLICY_RULES["policies"].get(role)
     
