@@ -16,54 +16,55 @@
     },
     "cold": {
         "run_name": "Cold Cache (uncached, FAISS)",
-        "avg_latency_ms": 827.838543223115,
-        "p50_latency_ms": 349.0479000029154,
-        "p95_latency_ms": 4304.575599991949,
-        "p99_latency_ms": 6379.1328000079375,
+        "avg_latency_ms": 1192.3418521978035,
+        "p50_latency_ms": 780.3843999972742,
+        "p95_latency_ms": 4779.656899998372,
+        "p99_latency_ms": 8730.347699998674,
         "metrics_operational": {
             "mode": "operational (HIGH or MEDIUM)",
-            "accuracy": 0.7161172161172161,
-            "precision": 0.8243243243243243,
-            "recall_tpr": 0.30049261083743845,
-            "f1": 0.44043321299638993,
-            "fpr": 0.037900874635568516,
+            "accuracy": 0.8095238095238095,
+            "precision": 0.8113207547169812,
+            "recall_tpr": 0.6354679802955665,
+            "f1": 0.7127071823204421,
+            "fpr": 0.08746355685131195,
             "confusion_matrix": {
-                "TP": 61,
-                "FP": 13,
-                "TN": 330,
-                "FN": 142
+                "TP": 129,
+                "FP": 30,
+                "TN": 313,
+                "FN": 74
             }
         },
         "metrics_strict": {
             "mode": "strict (HIGH only)",
-            "accuracy": 0.6776556776556777,
-            "precision": 0.8857142857142857,
-            "recall_tpr": 0.15270935960591134,
-            "f1": 0.26050420168067234,
-            "fpr": 0.011661807580174927,
+            "accuracy": 0.7967032967032966,
+            "precision": 0.8770491803278688,
+            "recall_tpr": 0.5270935960591133,
+            "f1": 0.6584615384615385,
+            "fpr": 0.043731778425655975,
             "confusion_matrix": {
-                "TP": 31,
-                "FP": 4,
-                "TN": 339,
-                "FN": 172
+                "TP": 107,
+                "FP": 15,
+                "TN": 328,
+                "FN": 96
             }
         },
         "risk_distribution": {
-            "LOW": 472,
-            "HIGH": 35,
-            "MEDIUM": 39
+            "LOW": 387,
+            "HIGH": 122,
+            "MEDIUM": 37
         },
         "source_distribution": {
-            "clean_pass": 463,
-            "vector_threat_critical": 7,
-            "semantic_judge_override_restricted": 33,
-            "semantic_judge": 19,
-            "semantic_judge_ambiguous": 4,
+            "fusion_clean_pass": 381,
+            "fusion_threat_critical": 100,
+            "semantic_judge_override_restricted": 31,
+            "semantic_judge": 11,
+            "semantic_judge_ambiguous": 3,
             "semantic_meta_intent": 6,
             "symbolic_rule": 3,
-            "cache": 11
+            "cache_locked_high": 2,
+            "cache": 9
         },
-        "judge_invocations": 56,
+        "judge_invocations": 45,
         "topicality": {
             "mode": "off",
             "distribution": {
@@ -76,46 +77,46 @@
     },
     "warm": {
         "run_name": "Warm Cache (LRU + FAISS)",
-        "avg_latency_ms": 82.36809670318544,
-        "p50_latency_ms": 70.85180000285618,
-        "p95_latency_ms": 141.13209999050014,
-        "p99_latency_ms": 298.6209999944549,
+        "avg_latency_ms": 80.07389890107477,
+        "p50_latency_ms": 68.08950000049663,
+        "p95_latency_ms": 144.64539999971748,
+        "p99_latency_ms": 296.15340000236756,
         "metrics_operational": {
             "mode": "operational (HIGH or MEDIUM)",
-            "accuracy": 0.5952380952380952,
-            "precision": 0.375,
-            "recall_tpr": 0.1330049261083744,
-            "f1": 0.19636363636363638,
-            "fpr": 0.13119533527696792,
+            "accuracy": 0.5695970695970696,
+            "precision": 0.3961038961038961,
+            "recall_tpr": 0.30049261083743845,
+            "f1": 0.34173669467787116,
+            "fpr": 0.27113702623906705,
             "confusion_matrix": {
-                "TP": 27,
-                "FP": 45,
-                "TN": 298,
-                "FN": 176
+                "TP": 61,
+                "FP": 93,
+                "TN": 250,
+                "FN": 142
             }
         },
         "metrics_strict": {
             "mode": "strict (HIGH only)",
-            "accuracy": 0.6062271062271062,
-            "precision": 0.3235294117647059,
-            "recall_tpr": 0.054187192118226604,
-            "f1": 0.09282700421940929,
-            "fpr": 0.06705539358600583,
+            "accuracy": 0.5934065934065934,
+            "precision": 0.415929203539823,
+            "recall_tpr": 0.2315270935960591,
+            "f1": 0.2974683544303797,
+            "fpr": 0.1924198250728863,
             "confusion_matrix": {
-                "TP": 11,
-                "FP": 23,
-                "TN": 320,
-                "FN": 192
+                "TP": 47,
+                "FP": 66,
+                "TN": 277,
+                "FN": 156
             }
         },
         "risk_distribution": {
-            "LOW": 474,
-            "HIGH": 34,
-            "MEDIUM": 38
+            "LOW": 392,
+            "HIGH": 113,
+            "MEDIUM": 41
         },
         "source_distribution": {
-            "cache": 512,
-            "cache_locked_high": 34
+            "cache": 433,
+            "cache_locked_high": 113
         },
         "judge_invocations": 0,
         "topicality": {
@@ -128,5 +129,5 @@
             "note": "Scoping signal. Excluded from the safety confusion matrix by design."
         }
     },
-    "speedup": 10.050475564662403
+    "speedup": 14.89051824079219
 }
