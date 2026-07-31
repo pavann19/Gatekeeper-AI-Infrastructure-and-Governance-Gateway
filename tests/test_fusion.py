@@ -162,6 +162,112 @@ def test_clean_prompt_passes(domain_mode):
     assert topicality == "UNKNOWN"
 
 
+# --- multi-detector fusion branch -------------------------------------------
+#
+# core/fusion.py adds four keys to the signals dict: fusion_available,
+# fusion_score, fusion_threshold_high, fusion_threshold_medium. These tests
+# pin the CONTRACT between core/fusion.py and this Stage-3 cascade: when
+# fusion ran, its score and thresholds drive the decision and the source is
+# labelled "fusion_*"; when it did not (fusion_available absent or False),
+# behaviour is byte-for-byte the pre-fusion anchors-only path exercised above.
+
+def make_fusion_signals(**overrides):
+    signals = make_signals(threat_score=0.0)
+    signals.update({
+        "fusion_available": True,
+        "fusion_score": 0.0,
+        "fusion_threshold_high": 0.28,
+        "fusion_threshold_medium": 0.10,
+    })
+    signals.update(overrides)
+    return signals
+
+
+def test_fusion_high_risk_uses_fusion_threshold_not_legacy_threshold(domain_mode):
+    """
+    A score that would be LOW under the legacy anchors-only threshold (0.48)
+    but is ABOVE the fusion policy's calibrated HIGH threshold (0.28) must
+    still block — proving the fusion threshold, not the legacy constant, is
+    what gates the decision when fusion is available.
+    """
+    domain_mode("off")
+    signals = make_fusion_signals(fusion_score=0.30, threat_score=0.0)
+
+    level, source, judge_required, _ = fuse_signals(signals, "prompt")
+
+    assert level == "HIGH"
+    assert source == "fusion_threat_critical"
+    assert judge_required is False
+
+
+def test_fusion_medium_zone_routes_to_judge(domain_mode):
+    domain_mode("off")
+    signals = make_fusion_signals(fusion_score=0.15, is_educational=False)
+
+    level, source, judge_required, _ = fuse_signals(signals, "prompt")
+
+    assert level == "MEDIUM"
+    assert source == "fusion_judge_pending"
+    assert judge_required is True
+
+
+def test_fusion_medium_zone_educational_safe_harbor(domain_mode):
+    domain_mode("off")
+    signals = make_fusion_signals(fusion_score=0.15, is_educational=True)
+
+    level, source, judge_required, _ = fuse_signals(signals, "prompt")
+
+    assert level == "MEDIUM"
+    assert source == "fusion_educational_safe_harbor"
+    assert judge_required is False
+
+
+def test_fusion_below_medium_threshold_clean_pass(domain_mode):
+    domain_mode("off")
+    signals = make_fusion_signals(fusion_score=0.02)
+
+    level, source, judge_required, _ = fuse_signals(signals, "prompt")
+
+    assert level == "LOW"
+    assert source == "fusion_clean_pass"
+    assert judge_required is False
+
+
+def test_fusion_unavailable_falls_back_to_legacy_anchors_path(domain_mode):
+    """
+    THE FALLBACK CONTRACT. When fusion_available is False, behaviour must be
+    IDENTICAL to the pre-fusion cascade — same thresholds, same source labels
+    — regardless of whatever garbage sits in fusion_score. A caller that
+    forgets to check availability must not get a decision driven by a stale
+    or default fusion_score.
+    """
+    domain_mode("off")
+    signals = make_fusion_signals(
+        fusion_available=False,
+        fusion_score=0.99,       # would be HIGH if this were consulted
+        threat_score=0.50,       # above legacy SEMANTIC_THRESHOLD_HIGH (0.48)
+    )
+
+    level, source, judge_required, _ = fuse_signals(signals, "prompt")
+
+    assert level == "HIGH"
+    assert source == "vector_threat_critical"  # legacy label, not "fusion_*"
+
+
+def test_fusion_key_absent_also_falls_back(domain_mode):
+    """Signals dicts that never learned about fusion (e.g. older callers) must
+    behave exactly as before — this is what keeps every pre-existing test in
+    this file passing unchanged."""
+    domain_mode("off")
+    signals = make_signals(threat_score=0.50)
+    assert "fusion_available" not in signals
+
+    level, source, judge_required, _ = fuse_signals(signals, "prompt")
+
+    assert level == "HIGH"
+    assert source == "vector_threat_critical"
+
+
 # --- judge arbitration ------------------------------------------------------
 
 @pytest.mark.parametrize(
