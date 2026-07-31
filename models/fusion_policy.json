@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "trained_at": "2026-07-31T08:23:55.106425+00:00",
+  "feature_order": [
+    "anchors",
+    "protectai_injection",
+    "madhurjindal_jailbreak",
+    "toxic_bert"
+  ],
+  "scaler_mean": [
+    0.2962567657230941,
+    0.21466546452847723,
+    0.20102537147155802,
+    0.026653743805063877
+  ],
+  "scaler_scale": [
+    0.2097812830711559,
+    0.4080658664629443,
+    0.3529396694985894,
+    0.10965927251297326
+  ],
+  "coefficients": [
+    1.465967384924815,
+    1.5509659391528168,
+    0.5771681244376021,
+    0.48969295941325414
+  ],
+  "intercept": -1.1918660036085897,
+  "threshold_high": 0.27877340772461057,
+  "threshold_medium": 0.0966445965163971,
+  "fpr_budget_high": 0.05,
+  "fpr_budget_medium": 0.2,
+  "training": {
+    "n_rows": 6933,
+    "n_attack": 1925,
+    "n_benign": 5008,
+    "in_sample_auc": 0.9440375918011701,
+    "note": "in-sample AUC is NOT an accuracy estimate (fit and scored on the same data) - it exists only as a load-bearing sanity check that persistence round-trips correctly. The unbiased estimate is scripts.ensemble_analysis's out-of-fold AUC: 0.944 [0.936, 0.951] against this exact 4-detector pool."
+  }
+}
