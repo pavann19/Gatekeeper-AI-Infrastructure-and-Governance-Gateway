@@ -113,33 +113,74 @@ class FAISSCache:
         # Trigger non-blocking save
         self.save_async()
 
-    def lookup(self, query_vec):
+    def lookup(self, prompt, query_vec):
+        """
+        Two-tier lookup: an exact prompt-hash match first, a fuzzy FAISS
+        similarity match second. See module docstring for why the tiers exist
+        and are not interchangeable.
+        """
         if not self.cache_data:
             return None, None
-            
+
         with self._lock:
+            # ---- TIER 1: EXACT MATCH ----
+            # O(1), zero collision risk by construction — the same query text
+            # can only ever retrieve the verdict it (or an earlier identical
+            # query) actually received. This is what almost all real cache
+            # value comes from (the same question asked repeatedly) and it is
+            # the only tier this class can make an unconditional safety claim
+            # about.
+            prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()
+            entry = self.cache_data.get(prompt_hash)
+            if entry is not None:
+                if time.time() - entry.get("timestamp_epoch", 0) < TTL_SECONDS:
+                    self.cache_data.move_to_end(prompt_hash)
+                    return entry.get("risk"), entry.get("score")
+                else:
+                    del self.cache_data[prompt_hash]
+                    self._rebuild_faiss()
+                    # Fall through to fuzzy match below — the exact entry is
+                    # gone, but a similar one may still be usable.
+
+            # ---- TIER 2: FUZZY SIMILARITY MATCH ----
+            # measured (scripts/diagnose_cache_threshold.py) against
+            # deepset/prompt-injections: at the OLD default of 0.95, 9.1% of
+            # near-duplicate pairs above threshold had OPPOSITE ground-truth
+            # labels (the dataset mutates a benign wrapper by inserting an
+            # injection payload — nearly identical surface text, opposite
+            # verdict), and at 0.98 that rate was 50%. Sentence-embedding
+            # cosine similarity measures bulk topical content, not the
+            # presence of a short adversarial clause, so it cannot safely
+            # stand in for a security decision at any threshold low enough to
+            # matter. CACHE_SIMILARITY_THRESHOLD's default was raised to 0.99
+            # (zero unsafe pairs observed at or above that value in the same
+            # measurement) as a materially safer margin — NOT a guarantee.
+            # This tier exists for genuine near-duplicates; if this residual
+            # risk is unacceptable for a deployment, disable it entirely by
+            # setting the threshold to 1.0, which leaves exact-match caching
+            # (tier 1) fully intact.
             import faiss
             index = self._get_index()
             if index.ntotal == 0:
                 return None, None
-                
+
             if hasattr(query_vec, 'cpu'):
                 vec = query_vec.cpu().numpy()
             else:
                 vec = np.array(query_vec)
-                
+
             vec = vec.reshape(1, -1).astype('float32')
             faiss.normalize_L2(vec)
-            
+
             scores, indices = index.search(vec, 1)
             best_score = float(scores[0][0])
             best_idx = int(indices[0][0])
-            
+
             if best_score > CACHE_SIMILARITY_THRESHOLD and best_idx != -1 and best_idx < len(self.cache_data):
                 # We need to map FAISS index back to the OrderedDict
                 # Since we rebuild FAISS directly from OrderedDict.values(), indices map 1:1
                 entry = list(self.cache_data.values())[best_idx]
-                
+
                 # Check TTL
                 if time.time() - entry.get("timestamp_epoch", 0) < TTL_SECONDS:
                     # LRU update
@@ -150,7 +191,7 @@ class FAISSCache:
                     # Expired
                     del self.cache_data[entry["prompt_hash"]]
                     self._rebuild_faiss()
-                    
+
         return None, None
         
     def flush(self):
@@ -167,8 +208,8 @@ _cache.load()
 def save_cache_entry(prompt, vector, risk, score, source="unknown"):
     _cache.add(prompt, vector, risk, score, source)
 
-def lookup_cache(new_vector):
-    return _cache.lookup(new_vector)
+def lookup_cache(prompt, new_vector):
+    return _cache.lookup(prompt, new_vector)
 
 def flush_cache():
     _cache.flush()
