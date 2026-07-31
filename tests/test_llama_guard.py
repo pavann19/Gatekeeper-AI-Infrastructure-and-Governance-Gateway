@@ -1,24 +1,32 @@
 """
 Tests for the Llama Guard detector.
 
-IMPORTANT CAVEAT: these are wiring tests against a mocked model. The detector
-has NOT been verified end-to-end against real Llama Guard weights, because the
-model is gated and access has not been granted on this machine. What is verified
-here is the logic that is easy to get silently wrong:
+These are wiring tests against a MOCKED model — they pin the logic that is easy
+to get silently wrong (reading the verdict from the correct logit position,
+renormalising over {safe, unsafe} rather than the full vocabulary, left padding
+so logits[:, -1] is the verdict position for every row, refusing to load rather
+than scoring constant when verdict tokens collide, the memory precheck) without
+needing the real, gated, multi-GB weights on every CI run.
 
-  - reading the verdict from the correct logit positions
-  - renormalising over {safe, unsafe} rather than the full vocabulary
-  - left padding, so logits[:, -1] is the verdict position for every row
-  - refusing to load rather than scoring constant when verdict tokens collide
-  - the memory precheck
+The detector HAS since been validated end-to-end against real Llama Guard 3 1B
+weights (see the "Fix Llama Guard" commit) — that validation found three real
+bugs the mocks here could not catch (verdict-token offset, an empty-conversation
+chat-template quirk, a missing generation prompt), which is exactly why mocked
+wiring tests are necessary but not sufficient. Re-run
+`scripts/compare_detectors.py` and confirm the polarity check passes before
+trusting any number from a future change to this detector.
 
-Once access is granted, run scripts/compare_detectors.py and confirm the
-polarity check passes before believing any number this produces.
+`torch` is imported via `pytest.importorskip` rather than a plain `import torch`
+at module level: CI's requirements-ci.txt deliberately excludes heavy ML
+packages, and a bare top-level import would abort collection for the ENTIRE
+test suite (not just this file) when torch is absent, rather than cleanly
+skipping just these tests.
 """
 import types
 
 import pytest
-import torch
+
+torch = pytest.importorskip("torch")
 
 from core.detectors import CLASS_HARMFUL, LlamaGuardDetector, get_registry
 
