@@ -20,3 +20,11 @@ pytest>=8.0.0
 pytest-asyncio>=0.23.0
 torch>=2.0.0
 faiss-cpu>=1.7.4
+# psutil is NOT a transitive dependency of torch/transformers/faiss, and was
+# missing from BOTH requirement files until this line — meaning
+# LlamaGuardDetector's memory precheck (core/detectors.py) silently no-ops
+# whenever psutil happens to be absent, in CI or in a real deployment, and the
+# detector proceeds to attempt loading a multi-GB model regardless of whether
+# it fits in memory. Declaring it explicitly is a correctness fix, not just a
+# CI convenience.
+psutil>=5.9.0
