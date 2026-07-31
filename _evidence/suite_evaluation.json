@@ -1,0 +1,353 @@
+{
+  "config": {
+    "fpr_budget": 0.05,
+    "bootstrap_resamples": 1000,
+    "global_threshold": 0.36643463373184204,
+    "judge_excluded": true,
+    "detector": "deterministic signals (anchors + meta-intent + symbolic)"
+  },
+  "overall": {
+    "n": 6933,
+    "n_attack": 1925,
+    "n_benign": 5008,
+    "evaluable": true,
+    "auc": {
+      "point": 0.8897122007385586,
+      "lo": 0.8795164026996728,
+      "hi": 0.9001661529077526,
+      "n": 6933,
+      "n_boot_effective": 1000,
+      "ci_level": 0.95
+    },
+    "recall_at_fpr": {
+      "point": 0.6997402597402598,
+      "lo": 0.6759162303664922,
+      "hi": 0.720611491829204,
+      "n": 6933,
+      "n_boot_effective": 1000,
+      "ci_level": 0.95
+    },
+    "fpr_budget": 0.05,
+    "threshold": 0.36643463373184204,
+    "confusion_matrix": {
+      "TP": 1347,
+      "FP": 246,
+      "TN": 4762,
+      "FN": 578
+    },
+    "accuracy": 0.8811481321217366,
+    "precision": 0.8455743879472694,
+    "recall": 0.6997402597402598,
+    "f1": 0.7657760090960772,
+    "fpr": 0.04912140575079872
+  },
+  "by_attack_class": {
+    "benign": {
+      "n": 5008,
+      "n_attack": 0,
+      "n_benign": 5008,
+      "evaluable": false,
+      "note": "single-class slice: AUC and FPR are undefined. Only benign present — report FPR only.",
+      "fpr_at_threshold": 0.04912140575079872
+    },
+    "prompt_injection": {
+      "n": 979,
+      "n_attack": 979,
+      "n_benign": 0,
+      "evaluable": false,
+      "note": "single-class slice: AUC and FPR are undefined. Only attacks present — report recall only.",
+      "recall_at_threshold": 0.7844739530132788
+    },
+    "jailbreak": {
+      "n": 692,
+      "n_attack": 692,
+      "n_benign": 0,
+      "evaluable": false,
+      "note": "single-class slice: AUC and FPR are undefined. Only attacks present — report recall only.",
+      "recall_at_threshold": 0.7471098265895953
+    },
+    "harmful_content": {
+      "n": 254,
+      "n_attack": 254,
+      "n_benign": 0,
+      "evaluable": false,
+      "note": "single-class slice: AUC and FPR are undefined. Only attacks present — report recall only.",
+      "recall_at_threshold": 0.2440944881889764
+    }
+  },
+  "by_language": {
+    "en": {
+      "n": 6458,
+      "n_attack": 1814,
+      "n_benign": 4644,
+      "evaluable": true,
+      "auc": {
+        "point": 0.9088470072467277,
+        "lo": 0.9003102175352155,
+        "hi": 0.9179203652610843,
+        "n": 6458,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "recall_at_fpr": {
+        "point": 0.7205071664829107,
+        "lo": 0.6976744186046512,
+        "hi": 0.7458100558659218,
+        "n": 6458,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "fpr_budget": 0.05,
+      "threshold": 0.36643463373184204,
+      "confusion_matrix": {
+        "TP": 1322,
+        "FP": 243,
+        "TN": 4401,
+        "FN": 492
+      },
+      "accuracy": 0.8861876742025395,
+      "precision": 0.8447284345047923,
+      "recall": 0.7287761852260198,
+      "f1": 0.7824800236756435,
+      "fpr": 0.05232558139534884
+    },
+    "other": {
+      "n": 241,
+      "n_attack": 35,
+      "n_benign": 206,
+      "evaluable": true,
+      "auc": {
+        "point": 0.8968099861303744,
+        "lo": 0.8319919517102615,
+        "hi": 0.9559020791415158,
+        "n": 241,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "recall_at_fpr": {
+        "point": 0.6857142857142857,
+        "lo": 0.5,
+        "hi": 0.8461538461538461,
+        "n": 241,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "fpr_budget": 0.05,
+      "threshold": 0.36643463373184204,
+      "confusion_matrix": {
+        "TP": 22,
+        "FP": 3,
+        "TN": 203,
+        "FN": 13
+      },
+      "accuracy": 0.9336099585062241,
+      "precision": 0.88,
+      "recall": 0.6285714285714286,
+      "f1": 0.7333333333333334,
+      "fpr": 0.014563106796116505
+    },
+    "de": {
+      "n": 234,
+      "n_attack": 76,
+      "n_benign": 158,
+      "evaluable": true,
+      "auc": {
+        "point": 0.6324950033311126,
+        "lo": 0.5501598548345287,
+        "hi": 0.7123693379790941,
+        "n": 234,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "recall_at_fpr": {
+        "point": 0.2236842105263158,
+        "lo": 0.09523809523809523,
+        "hi": 0.3968253968253968,
+        "n": 234,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "fpr_budget": 0.05,
+      "threshold": 0.36643463373184204,
+      "confusion_matrix": {
+        "TP": 3,
+        "FP": 0,
+        "TN": 158,
+        "FN": 73
+      },
+      "accuracy": 0.688034188034188,
+      "precision": 1.0,
+      "recall": 0.039473684210526314,
+      "f1": 0.07594936708860758,
+      "fpr": 0.0
+    }
+  },
+  "by_source": {
+    "lmsys/toxic-chat": {
+      "n": 2939,
+      "n_attack": 212,
+      "n_benign": 2727,
+      "evaluable": true,
+      "auc": {
+        "point": 0.690465194318174,
+        "lo": 0.6493887740478281,
+        "hi": 0.7297945433609623,
+        "n": 2939,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "recall_at_fpr": {
+        "point": 0.25471698113207547,
+        "lo": 0.19555555555555557,
+        "hi": 0.3230769230769231,
+        "n": 2939,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "fpr_budget": 0.05,
+      "threshold": 0.36643463373184204,
+      "confusion_matrix": {
+        "TP": 46,
+        "FP": 106,
+        "TN": 2621,
+        "FN": 166
+      },
+      "accuracy": 0.9074515141204491,
+      "precision": 0.3026315789473684,
+      "recall": 0.2169811320754717,
+      "f1": 0.25274725274725274,
+      "fpr": 0.03887055372203887
+    },
+    "jackhhao/jailbreak-classification": {
+      "n": 1269,
+      "n_attack": 631,
+      "n_benign": 638,
+      "evaluable": true,
+      "auc": {
+        "point": 0.9460651103637059,
+        "lo": 0.9343906353252147,
+        "hi": 0.9566407511363919,
+        "n": 1269,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "recall_at_fpr": {
+        "point": 0.7717908082408875,
+        "lo": 0.6975308641975309,
+        "hi": 0.821875,
+        "n": 1269,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "fpr_budget": 0.05,
+      "threshold": 0.36643463373184204,
+      "confusion_matrix": {
+        "TP": 487,
+        "FP": 31,
+        "TN": 607,
+        "FN": 144
+      },
+      "accuracy": 0.8620961386918834,
+      "precision": 0.9401544401544402,
+      "recall": 0.7717908082408875,
+      "f1": 0.8476936466492603,
+      "fpr": 0.048589341692789965
+    },
+    "tatsu-lab/alpaca": {
+      "n": 1200,
+      "n_attack": 0,
+      "n_benign": 1200,
+      "evaluable": false,
+      "note": "single-class slice: AUC and FPR are undefined. Only benign present — report FPR only.",
+      "fpr_at_threshold": 0.07666666666666666
+    },
+    "lakera/gandalf_ignore_instructions": {
+      "n": 776,
+      "n_attack": 776,
+      "n_benign": 0,
+      "evaluable": false,
+      "note": "single-class slice: AUC and FPR are undefined. Only attacks present — report recall only.",
+      "recall_at_threshold": 0.9432989690721649
+    },
+    "deepset/prompt-injections": {
+      "n": 546,
+      "n_attack": 203,
+      "n_benign": 343,
+      "evaluable": true,
+      "auc": {
+        "point": 0.7451349294115958,
+        "lo": 0.6984097633136095,
+        "hi": 0.7884233849362084,
+        "n": 546,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "recall_at_fpr": {
+        "point": 0.37438423645320196,
+        "lo": 0.25,
+        "hi": 0.45544554455445546,
+        "n": 546,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "fpr_budget": 0.05,
+      "threshold": 0.36643463373184204,
+      "confusion_matrix": {
+        "TP": 36,
+        "FP": 4,
+        "TN": 339,
+        "FN": 167
+      },
+      "accuracy": 0.6868131868131868,
+      "precision": 0.9,
+      "recall": 0.17733990147783252,
+      "f1": 0.2962962962962963,
+      "fpr": 0.011661807580174927
+    },
+    "JailbreakBench/JBB-Behaviors": {
+      "n": 200,
+      "n_attack": 100,
+      "n_benign": 100,
+      "evaluable": true,
+      "auc": {
+        "point": 0.73065,
+        "lo": 0.658011272141707,
+        "hi": 0.8010025062656642,
+        "n": 200,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "recall_at_fpr": {
+        "point": 0.16,
+        "lo": 0.08653846153846154,
+        "hi": 0.38317757009345793,
+        "n": 200,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "fpr_budget": 0.05,
+      "threshold": 0.36643463373184204,
+      "confusion_matrix": {
+        "TP": 44,
+        "FP": 13,
+        "TN": 87,
+        "FN": 56
+      },
+      "accuracy": 0.655,
+      "precision": 0.7719298245614035,
+      "recall": 0.44,
+      "f1": 0.5605095541401274,
+      "fpr": 0.13
+    },
+    "rubend18/ChatGPT-Jailbreak-Prompts": {
+      "n": 3,
+      "n_attack": 3,
+      "n_benign": 0,
+      "evaluable": false,
+      "note": "single-class slice: AUC and FPR are undefined. Only attacks present — report recall only.",
+      "recall_at_threshold": 0.6666666666666666,
+      "underpowered": true,
+      "warning": "n=3 < 20; interval is too wide to act on"
+    }
+  }
+}

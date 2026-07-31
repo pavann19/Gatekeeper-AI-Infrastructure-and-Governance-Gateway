@@ -1,13 +1,16 @@
 from fastapi import FastAPI, HTTPException, Request, Response
 import time
+import asyncio
 from fastapi.middleware.cors import CORSMiddleware
-from api.schemas import AssessRequest, AssessResponse
+from api.schemas import AssessRequest, AssessResponse, AssessOutputRequest, AssessOutputResponse
+from core.auth import auth_required, resolve_principal
 from core.privacy import redact_pii
 from core.risk import assess_risk
 from core.updates import fetch_latest_threats
 from core.cache import flush_cache
 from core.logger import get_logger, log_event
 from core.policy import policy_decision
+from core.config import settings
 
 logger = get_logger("gatekeeper.api")
 
@@ -17,12 +20,25 @@ app = FastAPI(
     version="2.0.0"
 )
 
+# CORS. The previous configuration paired allow_origins=["*"] with
+# allow_credentials=True, which browsers reject outright per the CORS spec and
+# which would be unsafe if honoured — any origin could drive authenticated
+# requests. Credentials are only permitted against an explicit origin allowlist.
+_cors_origins = [o.strip() for o in settings.CORS_ORIGINS.split(",") if o.strip()]
+_allow_credentials = "*" not in _cors_origins
+if not _allow_credentials:
+    logger.warning(
+        "CORS is configured with a wildcard origin, so credentialed "
+        "cross-origin requests are disabled. Set CORS_ORIGINS to an explicit "
+        "comma-separated allowlist to permit them."
+    )
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_cors_origins,
+    allow_credentials=_allow_credentials,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 @app.middleware("http")
@@ -35,26 +51,45 @@ async def add_process_time_header(request: Request, call_next):
     return response
 
 @app.post("/api/v1/assess", response_model=AssessResponse)
-def assess_prompt(req: AssessRequest, request: Request):
+async def assess_prompt(req: AssessRequest, request: Request):
     request.state.start_time = time.perf_counter()
-    logger.info(f"Received request for role: {req.role}")
-    
+
+    # 0. AUTHENTICATION — the security boundary.
+    #    Capability comes from a verified credential, never from the request
+    #    body. An anonymous caller gets GENERAL (least privilege); it cannot
+    #    escalate by asserting anything about itself.
+    principal = resolve_principal(authorization=request.headers.get("Authorization"))
+    if auth_required() and not principal.authenticated:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required. Present a valid API key as "
+                   "'Authorization: Bearer <key>'.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    logger.info(
+        f"Assess request | capability={principal.capability} "
+        f"tenant={principal.tenant} key_id={principal.key_id} "
+        f"authenticated={principal.authenticated}"
+    )
+
     # 1. Privacy Layer
     clean_query, redacted_info = redact_pii(req.prompt)
     redacted_items = redacted_info.get("items", [])
-    
-    # 2. Risk Assessment (Neuro-Symbolic)
-    risk_level, details = assess_risk(clean_query)
-    
-    # 3. Policy Arbitration
-    decision, reason = policy_decision(req.role, risk_level)
-    
-    # Update details with reason
+
+    # 2. Risk Assessment (Neuro-Symbolic) - offloaded to thread to avoid blocking event loop
+    risk_level, details = await asyncio.to_thread(assess_risk, clean_query)
+
+    # 3. Policy Arbitration — using the SERVER-RESOLVED capability.
+    decision, reason = policy_decision(principal.capability, risk_level)
+
+    # Update details with reason and the identity the decision was made under.
     details["policy_reason"] = reason
-    
+    details["principal"] = principal.to_audit()
+
     # 4. Audit Logging
-    log_event(req.role, clean_query, risk_level, decision, details)
-    
+    log_event(principal.capability, clean_query, risk_level, decision, details)
+
     # Calculate process time explicitly for the response body (if needed by client directly)
     # The header is already set by middleware, but this makes it visible in the JSON
     # We'll just pass 0.0 here since the middleware calculates the true end-to-end,
@@ -64,9 +99,30 @@ def assess_prompt(req: AssessRequest, request: Request):
     return AssessResponse(
         decision=decision,
         risk_level=risk_level,
+        topicality=details.get("topicality", "UNKNOWN"),
+        capability=principal.capability,
+        authenticated=principal.authenticated,
         details=details,
         clean_prompt=clean_query,
         redacted_items=redacted_items,
+        process_time_ms=process_time_ms
+    )
+
+@app.post("/api/v1/assess_output", response_model=AssessOutputResponse)
+async def assess_output_endpoint(req: AssessOutputRequest, request: Request):
+    request.state.start_time = time.perf_counter()
+    logger.info("Received request for output assessment")
+    
+    from core.output_guardrails import assess_output
+    
+    # 1. Output Assessment (PII + Toxicity)
+    decision, details = await asyncio.to_thread(assess_output, req.response_text)
+    
+    process_time_ms = round((time.perf_counter() - request.state.start_time) * 1000, 2) if hasattr(request.state, "start_time") else 0.0
+    
+    return AssessOutputResponse(
+        decision=decision,
+        details=details,
         process_time_ms=process_time_ms
     )
 
@@ -84,4 +140,52 @@ def flush_semantic_cache():
 
 @app.get("/health")
 def health_check():
-    return {"status": "healthy"}
+    import os
+    import requests
+    from core.config import POLICY_FILE, POLICY_RULES_FILE, OLLAMA_API_URL
+    from core.privacy import NLP_MODEL
+    from core.embeddings import _get_model
+    
+    status = {
+        "status": "healthy",
+        "checks": {
+            "policy_files": False,
+            "spacy_model": False,
+            "embedding_model": False,
+            "semantic_judge": False
+        }
+    }
+    
+    # 1. Check Policy Files
+    if os.path.exists(POLICY_FILE) and os.path.exists(POLICY_RULES_FILE):
+        status["checks"]["policy_files"] = True
+    else:
+        status["status"] = "degraded"
+        
+    # 2. Check spaCy Model
+    if NLP_MODEL is not None:
+        status["checks"]["spacy_model"] = True
+    else:
+        status["status"] = "degraded"
+        
+    # 3. Check Embedding Model
+    try:
+        model = _get_model()
+        if model is not None:
+            status["checks"]["embedding_model"] = True
+    except Exception:
+        status["status"] = "degraded"
+        
+    # 4. Check Semantic Judge (Ollama)
+    try:
+        # Check base URL
+        base_url = "/".join(OLLAMA_API_URL.split("/")[:-2])
+        r = requests.get(f"{base_url}/tags", timeout=2)
+        if r.status_code == 200:
+            status["checks"]["semantic_judge"] = True
+        else:
+            status["status"] = "degraded"
+    except Exception:
+        status["status"] = "degraded"
+        
+    return status

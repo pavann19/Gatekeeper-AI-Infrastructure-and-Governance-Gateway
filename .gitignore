@@ -25,6 +25,15 @@ evaluation_results.txt
 logging/
 *.jsonl
 
+# Agent/debug scaffolding — must never be committed
+debug-*.log
+
+# Evaluation intermediates. The calibration REPORT and curves are evidence and
+# are committed; the raw signal cache is a regenerable multi-MB intermediate.
+_evidence/calibration_signals.json
+_evidence/evaluation_results.csv
+benchmark_rows.csv
+
 # Notes, Clutter & Archive (Crucial: never commit the archive folder to GitHub)
 Notes.txt
 Gatekeeper_Technical_Report.md
@@ -46,3 +55,12 @@ Thumbs.db
 
 # Binary & reports
 *.pdf
+
+# Local HuggingFace model cache (redirected off the C: drive)
+.hf_cache/
+
+# Evaluation run logs (tqdm noise; the JSON reports are the evidence)
+_evidence/*.log
+
+# API key store (hashed keys, but still a credential inventory)
+api_keys.json

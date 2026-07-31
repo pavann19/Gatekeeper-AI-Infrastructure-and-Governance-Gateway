@@ -1,0 +1,271 @@
+{
+  "config": {
+    "fpr_budget": 0.05,
+    "bootstrap_resamples": 1000,
+    "cv_folds": 5,
+    "seed": 20260723,
+    "detectors": [
+      "anchors",
+      "protectai_injection",
+      "madhurjindal_jailbreak",
+      "toxic_bert",
+      "prompt_guard_2"
+    ],
+    "excluded": [
+      {
+        "detector": "deepset_injection",
+        "reason": "trained on ['deepset/prompt-injections'] (excluded)"
+      },
+      {
+        "detector": "jailbreak_classifier",
+        "reason": "trained on ['jackhhao/jailbreak-classification'] (excluded)"
+      },
+      {
+        "detector": "llama_guard_3_1b",
+        "reason": "no cached scores; run scripts.compare_detectors"
+      },
+      {
+        "detector": "llama_guard_3_8b",
+        "reason": "no cached scores; run scripts.compare_detectors"
+      },
+      {
+        "detector": "prompt_guard_1",
+        "reason": "no cached scores; run scripts.compare_detectors"
+      }
+    ],
+    "contaminated_included": false
+  },
+  "results": [
+    {
+      "name": "single: anchors",
+      "auc": {
+        "point": 0.8897122007385586,
+        "lo": 0.8795164026996728,
+        "hi": 0.9001661529077526,
+        "n": 6933,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "recall_at_fpr": {
+        "point": 0.6997402597402598,
+        "lo": 0.6759162303664922,
+        "hi": 0.720611491829204,
+        "n": 6933,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "threshold": 0.36643463373184204,
+      "confusion_matrix": {
+        "TP": 1347,
+        "FP": 246,
+        "TN": 4762,
+        "FN": 578
+      },
+      "accuracy": 0.8811481321217366,
+      "precision": 0.8455743879472694,
+      "recall": 0.6997402597402598,
+      "f1": 0.7657760090960772,
+      "fpr": 0.04912140575079872
+    },
+    {
+      "name": "single: protectai_injection",
+      "auc": {
+        "point": 0.9092581220696236,
+        "lo": 0.8990597058543116,
+        "hi": 0.9186666694879928,
+        "n": 6933,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "recall_at_fpr": {
+        "point": 0.7974025974025974,
+        "lo": 0.7771181867242309,
+        "hi": 0.8139904610492846,
+        "n": 6933,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "threshold": 0.0006233625463210046,
+      "confusion_matrix": {
+        "TP": 1535,
+        "FP": 249,
+        "TN": 4759,
+        "FN": 390
+      },
+      "accuracy": 0.9078321073128516,
+      "precision": 0.8604260089686099,
+      "recall": 0.7974025974025974,
+      "f1": 0.827716365597196,
+      "fpr": 0.04972044728434505
+    },
+    {
+      "name": "single: madhurjindal_jailbreak",
+      "auc": {
+        "point": 0.8341263847973113,
+        "lo": 0.8223150667184869,
+        "hi": 0.8453072561445946,
+        "n": 6933,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "recall_at_fpr": {
+        "point": 0.38701298701298703,
+        "lo": 0.36280020439448135,
+        "hi": 0.4105925537493445,
+        "n": 6933,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "threshold": 0.8509184718132019,
+      "confusion_matrix": {
+        "TP": 745,
+        "FP": 250,
+        "TN": 4758,
+        "FN": 1180
+      },
+      "accuracy": 0.7937400836578682,
+      "precision": 0.7487437185929648,
+      "recall": 0.38701298701298703,
+      "f1": 0.5102739726027398,
+      "fpr": 0.04992012779552716
+    },
+    {
+      "name": "single: toxic_bert",
+      "auc": {
+        "point": 0.7517396062404049,
+        "lo": 0.7396849911323858,
+        "hi": 0.7646238405116568,
+        "n": 6933,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "recall_at_fpr": {
+        "point": 0.1548051948051948,
+        "lo": 0.131286394917946,
+        "hi": 0.174594877156299,
+        "n": 6933,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "threshold": 0.051396444439888,
+      "confusion_matrix": {
+        "TP": 298,
+        "FP": 248,
+        "TN": 4760,
+        "FN": 1627
+      },
+      "accuracy": 0.7295543054954565,
+      "precision": 0.5457875457875457,
+      "recall": 0.1548051948051948,
+      "f1": 0.2411978955888304,
+      "fpr": 0.04952076677316294
+    },
+    {
+      "name": "single: prompt_guard_2",
+      "auc": {
+        "point": 0.9490802248869341,
+        "lo": 0.9420146286791166,
+        "hi": 0.9555512509468805,
+        "n": 6933,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "recall_at_fpr": {
+        "point": 0.8389610389610389,
+        "lo": 0.8194871794871795,
+        "hi": 0.8557894736842105,
+        "n": 6933,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "threshold": 0.004175707697868347,
+      "confusion_matrix": {
+        "TP": 1615,
+        "FP": 246,
+        "TN": 4762,
+        "FN": 310
+      },
+      "accuracy": 0.9198038367229193,
+      "precision": 0.8678130037614186,
+      "recall": 0.8389610389610389,
+      "f1": 0.8531431590068673,
+      "fpr": 0.04912140575079872
+    },
+    {
+      "name": "ensemble: max (untrained)",
+      "auc": {
+        "point": 0.9383335235052488,
+        "lo": 0.9300230053442676,
+        "hi": 0.9452901438612438,
+        "n": 6933,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "recall_at_fpr": {
+        "point": 0.8166233766233766,
+        "lo": 0.7993630573248408,
+        "hi": 0.8348144276006273,
+        "n": 6933,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "threshold": 0.9257091879844666,
+      "confusion_matrix": {
+        "TP": 1572,
+        "FP": 240,
+        "TN": 4768,
+        "FN": 353
+      },
+      "accuracy": 0.9144670416846964,
+      "precision": 0.8675496688741722,
+      "recall": 0.8166233766233766,
+      "f1": 0.8413165640888413,
+      "fpr": 0.04792332268370607
+    },
+    {
+      "name": "ensemble: learned (out-of-fold)",
+      "auc": {
+        "point": 0.9515547072735571,
+        "lo": 0.9446115924053646,
+        "hi": 0.9578527908270382,
+        "n": 6933,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "recall_at_fpr": {
+        "point": 0.8612987012987013,
+        "lo": 0.8443051201671892,
+        "hi": 0.8753260302556077,
+        "n": 6933,
+        "n_boot_effective": 1000,
+        "ci_level": 0.95
+      },
+      "threshold": 0.15928893568901611,
+      "confusion_matrix": {
+        "TP": 1658,
+        "FP": 250,
+        "TN": 4758,
+        "FN": 267
+      },
+      "accuracy": 0.9254291071686139,
+      "precision": 0.8689727463312369,
+      "recall": 0.8612987012987013,
+      "f1": 0.8651187059744326,
+      "fpr": 0.04992012779552716
+    }
+  ],
+  "thesis": {
+    "best_single": "single: prompt_guard_2",
+    "delta_auc_learned_vs_best_single": 0.002474482386622956,
+    "confidence_intervals_overlap": true,
+    "verdict": "INCONCLUSIVE - confidence intervals overlap. The ensemble is not demonstrably better than the best single detector on this data."
+  },
+  "fusion_coefficients": {
+    "prompt_guard_2": 1.5194912264024882,
+    "protectai_injection": 1.00460587155928,
+    "anchors": 0.9831164691191037,
+    "toxic_bert": 0.5009012827211698,
+    "madhurjindal_jailbreak": 0.21506820228354007
+  },
+  "fusion_intercept": -1.017548576302378
+}

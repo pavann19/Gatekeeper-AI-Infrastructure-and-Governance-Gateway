@@ -19,4 +19,11 @@ def get_embedding(text: str):
 def cosine_similarity(vec1, vec2) -> float:
     """Calculates similarity."""
     from sentence_transformers import util  # noqa: PLC0415
+    import torch
+    
+    if not isinstance(vec1, torch.Tensor):
+        vec1 = torch.tensor(vec1)
+    if not isinstance(vec2, torch.Tensor):
+        vec2 = torch.tensor(vec2)
+        
     return float(util.pytorch_cos_sim(vec1, vec2).item())
