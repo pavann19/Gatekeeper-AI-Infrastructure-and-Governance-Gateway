@@ -32,7 +32,18 @@ class Settings(BaseSettings):
     # Not yet calibrated — no labelled data for these decisions.
     EDUCATIONAL_THRESHOLD: float = 0.45
     DOMAIN_THRESHOLD: float = 0.22
-    CACHE_SIMILARITY_THRESHOLD: float = 0.95
+
+    # CALIBRATED via scripts/diagnose_cache_threshold.py against
+    # deepset/prompt-injections: at the old default (0.95), 9.1% of
+    # near-duplicate prompt pairs above threshold had OPPOSITE ground-truth
+    # labels; at 0.98, 50% did. Sentence-embedding cosine similarity measures
+    # bulk topical content, not the presence of a short adversarial clause, so
+    # no threshold low enough to matter is provably safe for this cache's
+    # fuzzy-match tier. 0.99 is the highest value with zero observed unsafe
+    # pairs in that measurement — a materially safer margin, not a guarantee.
+    # core/cache.py checks an exact prompt-hash match FIRST and unconditionally
+    # (zero collision risk); this threshold only governs the fuzzy fallback.
+    CACHE_SIMILARITY_THRESHOLD: float = 0.99
 
     # Domain (topicality) guardrail posture.
     #   "off"       — do not evaluate topicality at all (default).

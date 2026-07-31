@@ -400,7 +400,7 @@ def assess_risk(prompt: str) -> tuple:
 
     # ---- STAGE 0: CACHE CHECK ----
     prompt_vec = get_embedding(prompt)
-    cached_risk, cached_score = lookup_cache(prompt_vec)
+    cached_risk, cached_score = lookup_cache(prompt, prompt_vec)
     if cached_risk:
 
         # SAFETY: Never downgrade a HIGH-risk cached decision
