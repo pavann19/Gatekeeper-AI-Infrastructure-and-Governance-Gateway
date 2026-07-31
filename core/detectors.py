@@ -303,12 +303,15 @@ class LlamaGuardDetector(Detector):
             if self._model is not None or self._load_error is not None:
                 return
             try:
-                import torch
-                from transformers import AutoModelForCausalLM, AutoTokenizer
-
-                # Memory precheck. A 1B model at bfloat16 needs ~2.5GB resident;
-                # float32 doubles that. Failing here with a clear message beats
-                # an OOM kill halfway through a scoring run.
+                # Memory precheck FIRST, before importing torch/transformers.
+                # Importing a multi-GB library stack is pure waste when the
+                # memory budget already rules the model out, and checking
+                # first is also what makes this gate testable independent of
+                # whether torch/transformers happen to be installed at all —
+                # checking it after those imports meant an environment
+                # without transformers reported "No module named transformers"
+                # instead of the actual, more useful "insufficient memory"
+                # reason, even when memory really was the constraint.
                 try:
                     import psutil
                     free_gb = psutil.virtual_memory().available / 1e9
@@ -322,6 +325,9 @@ class LlamaGuardDetector(Detector):
                         return
                 except ImportError:
                     pass
+
+                import torch
+                from transformers import AutoModelForCausalLM, AutoTokenizer
 
                 torch_dtype = getattr(torch, self.dtype, torch.float32)
                 logger.info(
