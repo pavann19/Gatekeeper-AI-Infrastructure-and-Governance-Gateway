@@ -850,6 +850,97 @@ the wrong verdict across it, and the NEW threshold correctly misses instead.
 
 ---
 
+## 1j. Llama Guard wired as judge-arbitration arbiter — measured live, twice (2026-08-01)
+
+`core/risk.py::llama_guard_arbitration`, tried before the Ollama judge in
+Stage 4; falls back if Llama Guard is unavailable for any reason (see
+§1h/§1i's fail-closed-to-fallback pattern, now extended to the judge stage).
+Measured on the identical 546-prompt `deepset/prompt-injections` benchmark,
+twice, on real hardware with no mocking of memory or availability.
+
+### First attempt: fell back to Ollama for all 48 judge invocations
+
+With the full pipeline warm (embedding model, spaCy NER, FAISS, and all three
+fusion detectors already resident), only 1.5GB was free when Stage 4 first
+needed Llama Guard's 2.3GB — starting from request #9, 46 seconds into the
+run. The memory precheck (§1e's ordering fix) caught this correctly every
+time and fell back cleanly; zero crashes, zero silent failures. But it means
+this run tested the fallback path, not Llama Guard, and its numbers were
+identical to the pre-arbitration baseline (recall 64.0%, FPR 8.5%) because
+that is exactly what they should be when the fallback fires every time.
+
+**This is a real, honest finding in its own right:** on this 12GB machine,
+the full pipeline's other models leave too little headroom for Llama Guard to
+also fit once warm. The wiring is correct; it is not currently functional in
+practice on this hardware without freeing memory before a run.
+
+### Second attempt, with more headroom: Llama Guard fired for all 48
+
+With 5.3GB free at start (vs. an unknown, evidently lower figure in the first
+attempt), Llama Guard succeeded for every single judge invocation — the
+`Decision sources` breakdown shows `llama_guard_override_restricted: 37,
+llama_guard_arbitration: 11`, zero `semantic_judge_*` entries. This is a
+genuine, full live measurement, not a mock.
+
+| | Recall | Precision | F1 | FPR |
+|---|---|---|---|---|
+| Operational (HIGH or MEDIUM) | 64.04% | 81.76% | 0.718 | 8.45% |
+| Strict (HIGH only) | 53.20% | 88.52% | 0.665 | 4.08% |
+
+**Operational metrics are identical to every prior run, and this is expected
+rather than a null result.** Stage 4 only fires from the ambiguous zone, which
+by construction means the fusion score has already cleared the MEDIUM
+threshold — so `threat_present` is always `True` when either judge is
+invoked, and a SAFE verdict from *any* arbiter is capped at MEDIUM, never
+cleared to LOW. Under the Operational view, which arbiter runs cannot change
+the flagged/not-flagged outcome once a prompt reaches Stage 4. This is a
+property of the fusion/arbitration boundary, not of Llama Guard specifically,
+and is worth fixing if a future report wants Stage 4 accuracy to be visible
+under the Operational metric at all.
+
+**Strict metrics are where the arbiter's actual verdict shows up**, and they
+moved in the right direction versus the Ollama-fallback run measured
+immediately prior on the same suite:
+
+| | Recall | Precision | FPR |
+|---|---|---|---|
+| Ollama fallback (previous run, same suite) | 51.72% | 87.50% | 4.37% |
+| **Llama Guard (this run)** | **53.20%** | **88.52%** | **4.08%** |
+
+Better on every axis — recall up, precision up, FPR down. With only 48
+judge-invoked prompts total this is a small sample and should not be
+oversold as decisive, but it is directionally exactly what swapping a
+general-purpose chat model for a purpose-built safety classifier predicts.
+
+### The honest cost: tail latency roughly doubled to tripled
+
+| | avg | p95 | p99 |
+|---|---|---|---|
+| Ollama fallback | 1194 ms | 4666 ms | 8708 ms |
+| **Llama Guard live** | **1820 ms** | **12420 ms** | **18141 ms** |
+
+This is the real price of the harmful-content improvement validated in §1f/
+§1h reaching the live path: the ~9% of traffic landing in the ambiguous zone
+can now take up to ~18 seconds. **This is a genuine product blocker, not a
+footnote** — at this latency, Stage 4 needs to be asynchronous (return a
+pending status, do not hold the connection open) before this is exposed to
+real traffic. Cache speedup rose to 29.31x in the same run, since a warm hit
+skips this cost entirely — the §1i cache fix is doing more relative work now
+that the cold path is slower.
+
+### What this settles, and what it doesn't
+
+Settled: the wiring is correct, the fail-closed-to-fallback contract holds
+under real (not simulated) resource pressure, and Llama Guard's arbitration
+measurably improves Strict-metric quality when it actually runs. Not settled:
+this benchmark (`deepset/prompt-injections`) is injection/jailbreak-dominant,
+not harmful-content-heavy, so it cannot demonstrate the harmful-content-
+specific gain already measured offline in §1f/§1h — a live measurement on a
+harmful-content-heavy sample, and a plan for Stage 4's latency under real
+concurrency, are the two clear next steps.
+
+---
+
 ## 2. Second-order defect — fail-closed is masking evaluation signal
 
 `judge_arbitration` returns `HIGH` on `JUDGE_OFFLINE`. This is correct security posture and wrong evaluation methodology. If Ollama was not running during the benchmark, every ambiguous prompt was scored `HIGH` for infrastructure reasons, and the published metrics measure the availability of a local LLM rather than the quality of the classifier.
