@@ -354,6 +354,69 @@ def fuse_signals(signals: dict, prompt: str) -> tuple:
 # STAGE 4: JUDGE ARBITRATION
 # ============================================================================
 
+def llama_guard_arbitration(prompt: str, threat_present: bool = False):
+    """
+    Stage 4 arbiter using Llama Guard's hazard-taxonomy classification,
+    preferred over the generic Ollama judge when available.
+
+    WHY THIS EXISTS: Llama Guard is a purpose-built safety classifier —
+    measured at 60-63% harmful-content detection offline (see
+    docs/ENGINEERING_ASSESSMENT.md §1f/§1h) versus the anchor baseline's
+    ~24%, and versus whatever the general-purpose chat model behind the
+    Ollama judge happens to achieve when repurposed via a prompt. Until this
+    function, that offline number never reached the live pipeline.
+
+    WHY ONLY HERE, NOT IN THE ALWAYS-ON FUSION: Llama Guard takes seconds per
+    prompt on CPU (core/fusion.py's LIVE_MODEL_DETECTORS deliberately excludes
+    it for exactly this reason). Stage 4 only runs for the ambiguous zone — a
+    small fraction of total traffic — where that latency is an acceptable
+    trade for materially better harmful-content coverage, unlike the
+    always-on Stage 2/3 fusion path where it would be a latency regression on
+    every request.
+
+    Returns (risk, source) on success, or None if Llama Guard is unavailable
+    (not loaded, gated, out of memory, or raises for any reason) — the caller
+    falls back to judge_arbitration (the Ollama judge), the same fail-closed-
+    to-fallback pattern core/fusion.py already established for detector
+    availability.
+    """
+    from core.detectors import get_detector
+
+    detector = get_detector("llama_guard_3_1b")
+    ok, detail = detector.available()
+    if not ok:
+        logger.warning(
+            f"Llama Guard arbitration unavailable ({detail}); "
+            f"falling back to the Ollama judge."
+        )
+        return None
+
+    try:
+        result = detector.classify(prompt)
+    except Exception as e:
+        logger.warning(
+            f"Llama Guard arbitration raised {type(e).__name__}: {e}; "
+            f"falling back to the Ollama judge."
+        )
+        return None
+
+    logger.info(f"⚖️  Llama Guard verdict: {result['verdict']} {result['categories']}")
+
+    if result["verdict"] == "unsafe":
+        return "HIGH", "llama_guard_arbitration"
+
+    # verdict == "safe": same anti-escape restriction as the Ollama judge —
+    # a threat signal already fired upstream, so "safe" caps at MEDIUM rather
+    # than fully clearing the request.
+    if threat_present:
+        logger.warning(
+            "⚠️ JUDGE RESTRICTION: Llama Guard SAFE verdict overridden to "
+            "MEDIUM (threat signal present)."
+        )
+        return "MEDIUM", "llama_guard_override_restricted"
+    return "LOW", "llama_guard_override"
+
+
 def judge_arbitration(prompt: str, threat_present: bool = False) -> tuple:
     """
     Stage 4: Invokes the semantic judge for ambiguous cases.
@@ -362,6 +425,9 @@ def judge_arbitration(prompt: str, threat_present: bool = False) -> tuple:
 
     If threat_present is True, the judge is NOT allowed to downgrade to LOW.
     A SAFE verdict is restricted to MEDIUM to prevent adversarial escape.
+
+    This is the FALLBACK arbiter, tried when llama_guard_arbitration is
+    unavailable — see assess_risk's Stage 4 for the preference order.
     """
     logger.info("⚖️  Invoking Semantic Judge...")
     judge_verdict = semantic_judge(prompt)
@@ -444,7 +510,15 @@ def assess_risk(prompt: str) -> tuple:
             threat_present = signals["fusion_score"] >= signals["fusion_threshold_medium"]
         else:
             threat_present = signals["threat_score"] >= SEMANTIC_THRESHOLD_MEDIUM
-        risk, source = judge_arbitration(prompt, threat_present=threat_present)
+
+        # Prefer Llama Guard (purpose-built safety classifier) over the
+        # generic Ollama judge; fall back if it's unavailable (gated,
+        # OOM, not loaded). See llama_guard_arbitration's docstring.
+        llama_guard_result = llama_guard_arbitration(prompt, threat_present=threat_present)
+        if llama_guard_result is not None:
+            risk, source = llama_guard_result
+        else:
+            risk, source = judge_arbitration(prompt, threat_present=threat_present)
 
     # ---- STAGE 5: CACHE SAVE + RETURN ----
     # Report the score that actually drove the decision: the fused probability
