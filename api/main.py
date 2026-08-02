@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
 import time
 import asyncio
 from fastapi.middleware.cors import CORSMiddleware
@@ -51,7 +51,7 @@ async def add_process_time_header(request: Request, call_next):
     return response
 
 @app.post("/api/v1/assess", response_model=AssessResponse)
-async def assess_prompt(req: AssessRequest, request: Request):
+async def assess_prompt(req: AssessRequest, request: Request, background_tasks: BackgroundTasks):
     request.state.start_time = time.perf_counter()
 
     # 0. AUTHENTICATION — the security boundary.
@@ -77,8 +77,16 @@ async def assess_prompt(req: AssessRequest, request: Request):
     clean_query, redacted_info = redact_pii(req.prompt)
     redacted_items = redacted_info.get("items", [])
 
-    # 2. Risk Assessment (Neuro-Symbolic) - offloaded to thread to avoid blocking event loop
-    risk_level, details = await asyncio.to_thread(assess_risk, clean_query)
+    # 2. Risk Assessment (Neuro-Symbolic) - offloaded to thread to avoid blocking event loop.
+    #    background_tasks.add_task is passed through as the async scheduler:
+    #    if Stage 4 needs judge arbitration, the caller gets the fast Ollama
+    #    verdict now, and Llama Guard's slower, more accurate confirmation
+    #    runs after this request completes (see
+    #    core.risk.llama_guard_async_confirmation) rather than adding its
+    #    multi-second tail latency to this response.
+    risk_level, details = await asyncio.to_thread(
+        assess_risk, clean_query, background_tasks.add_task
+    )
 
     # 3. Policy Arbitration — using the SERVER-RESOLVED capability.
     decision, reason = policy_decision(principal.capability, risk_level)

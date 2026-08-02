@@ -417,6 +417,66 @@ def llama_guard_arbitration(prompt: str, threat_present: bool = False):
     return "LOW", "llama_guard_override"
 
 
+def llama_guard_async_confirmation(prompt: str, prompt_vec, fast_risk: str, fast_source: str) -> None:
+    """
+    Runs Llama Guard AFTER a response has already been sent to the caller —
+    invoked via a background scheduler (e.g. FastAPI's BackgroundTasks), never
+    on the request path. This is what lets Stage 4 use Llama Guard's better
+    harmful-content coverage (§1f/§1h/§1j of docs/ENGINEERING_ASSESSMENT.md)
+    without imposing its multi-second tail latency (measured p99 ~18s) on the
+    ~9% of traffic that reaches the ambiguous zone.
+
+    ONE-WAY RATCHET, matching this pipeline's existing fail-closed philosophy
+    (the same asymmetry `assess_risk`'s cache-hit path already applies via
+    `cache_locked_high` — a cached HIGH can never be served back down):
+
+      - If Llama Guard's slower, more accurate verdict says the prompt is
+        UNSAFE and the fast path already served something less severe, this
+        ESCALATES: the cache entry for this exact prompt is upgraded to HIGH,
+        so every future occurrence — and, via the cache's fuzzy tier, close
+        near-duplicates — is blocked immediately without waiting on Llama
+        Guard again. The already-sent response cannot be recalled; this
+        closes the gap for every subsequent request instead.
+      - If Llama Guard is more lenient than the fast path, nothing is
+        downgraded. A response already served under a stricter verdict stays
+        that way — an async, lower-priority confirmation is not license to
+        loosen a decision already enforced.
+
+    Failures here (Llama Guard unavailable, raises, or the write to the cache
+    is skipped) are logged and otherwise swallowed: this function runs after
+    the client already has an answer, so it must never raise into the
+    background-task runner or affect any other request.
+    """
+    try:
+        result = llama_guard_arbitration(prompt, threat_present=(fast_risk in ("MEDIUM", "HIGH")))
+    except Exception as e:
+        logger.warning(f"Llama Guard async confirmation raised {type(e).__name__}: {e}; fast-path verdict stands unverified.")
+        return
+
+    if result is None:
+        logger.info("Llama Guard async confirmation unavailable; fast-path verdict stands unverified.")
+        return
+
+    lg_risk, lg_source = result
+    if lg_risk == "HIGH" and fast_risk != "HIGH":
+        logger.error(
+            f"🚨 ASYNC ESCALATION: fast path served {fast_risk} ({fast_source}), "
+            f"Llama Guard confirmation says HIGH ({lg_source}). Upgrading the "
+            f"cache entry — this prompt, and near-duplicates via the fuzzy "
+            f"cache tier, will be blocked from now on."
+        )
+        try:
+            save_cache_entry(prompt, prompt_vec, "HIGH", 1.0, source="llama_guard_async_escalation")
+        except Exception as e:
+            logger.error(f"Failed to persist async escalation to cache: {type(e).__name__}: {e}")
+    else:
+        logger.info(
+            f"Llama Guard async confirmation: fast={fast_risk} ({fast_source}), "
+            f"llama_guard={lg_risk} ({lg_source}) — agrees or is more lenient; "
+            f"no cache change (a served decision is never downgraded)."
+        )
+
+
 def judge_arbitration(prompt: str, threat_present: bool = False) -> tuple:
     """
     Stage 4: Invokes the semantic judge for ambiguous cases.
@@ -450,7 +510,7 @@ def judge_arbitration(prompt: str, threat_present: bool = False) -> tuple:
 # POLICY ARBITER — STAGED ORCHESTRATOR
 # ============================================================================
 
-def assess_risk(prompt: str) -> tuple:
+def assess_risk(prompt: str, background_scheduler=None) -> tuple:
     """
     Staged governance pipeline:
         Stage 0: Cache lookup
@@ -459,6 +519,23 @@ def assess_risk(prompt: str) -> tuple:
         Stage 3: Deterministic fusion
         Stage 4: Judge arbitration (only if needed)
         Stage 5: Cache save + return
+
+    `background_scheduler`, if provided, is a callable with the signature
+    `scheduler(fn, *args)` that runs `fn(*args)` AFTER this function returns
+    (e.g. `FastAPI.BackgroundTasks.add_task`). When supplied, Stage 4 answers
+    immediately using only the fast Ollama judge (sub-second in practice) and
+    schedules Llama Guard's slower, more accurate confirmation to run
+    afterwards via `llama_guard_async_confirmation` — see that function's
+    docstring for the one-way escalate-only correction it applies.
+
+    When `background_scheduler` is None (the default), Stage 4 behaves as it
+    did before this existed: Llama Guard is tried synchronously, in-request,
+    falling back to the Ollama judge if unavailable. This is deliberate, not
+    a leftover — `tests/benchmark.py` and any other evaluation harness call
+    `assess_risk(prompt)` with no scheduler, because measuring detection
+    quality requires a single definitive verdict per prompt, not one that a
+    background task might revise after the fact. Only the live API path
+    (api/main.py) passes a real scheduler.
     """
 
     # ---- INIT: Ensure FAISS indexes are populated (lazy, once only) ----
@@ -511,14 +588,24 @@ def assess_risk(prompt: str) -> tuple:
         else:
             threat_present = signals["threat_score"] >= SEMANTIC_THRESHOLD_MEDIUM
 
-        # Prefer Llama Guard (purpose-built safety classifier) over the
-        # generic Ollama judge; fall back if it's unavailable (gated,
-        # OOM, not loaded). See llama_guard_arbitration's docstring.
-        llama_guard_result = llama_guard_arbitration(prompt, threat_present=threat_present)
-        if llama_guard_result is not None:
-            risk, source = llama_guard_result
-        else:
+        if background_scheduler is not None:
+            # ASYNC PATH (live API traffic): answer now with the fast Ollama
+            # judge; verify with Llama Guard afterwards, without making the
+            # caller wait for it. See llama_guard_async_confirmation for the
+            # escalate-only correction this applies if the two disagree.
             risk, source = judge_arbitration(prompt, threat_present=threat_present)
+            background_scheduler(
+                llama_guard_async_confirmation, prompt, prompt_vec, risk, source
+            )
+        else:
+            # SYNCHRONOUS PATH (evaluation/benchmarking, or any caller that
+            # did not opt into async): unchanged from before — try Llama
+            # Guard in-request, fall back to the Ollama judge if unavailable.
+            llama_guard_result = llama_guard_arbitration(prompt, threat_present=threat_present)
+            if llama_guard_result is not None:
+                risk, source = llama_guard_result
+            else:
+                risk, source = judge_arbitration(prompt, threat_present=threat_present)
 
     # ---- STAGE 5: CACHE SAVE + RETURN ----
     # Report the score that actually drove the decision: the fused probability
