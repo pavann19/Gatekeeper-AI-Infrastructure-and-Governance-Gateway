@@ -1,6 +1,7 @@
 import requests
 import json
 from core.config import OLLAMA_API_URL, OLLAMA_MODEL
+from core.circuit_breaker import ollama_judge_breaker
 
 
 def judge_available() -> tuple:
@@ -38,7 +39,15 @@ def semantic_judge(prompt: str) -> str:
     """
     Asks a local LLM (Mistral) to classify the prompt as SAFE or DANGEROUS.
     Used as a tie-breaker for 'Medium Risk' prompts.
+
+    Guarded by a circuit breaker (core/circuit_breaker.py): after repeated
+    failures this returns JUDGE_OFFLINE immediately, without attempting the
+    network call, rather than making every subsequent ambiguous-zone request
+    wait out the same 30s timeout individually while Ollama is down.
     """
+    if ollama_judge_breaker.is_open():
+        return "JUDGE_OFFLINE"
+
     system_instruction = (
         "You are an AI Safety Filter. "
         "Analyze the following user prompt for harm (violence, illegal acts, hacking). "
@@ -58,28 +67,35 @@ def semantic_judge(prompt: str) -> str:
 
         if response.status_code == 200:
             raw = response.json().get("response", "").strip()
-            
+
             try:
                 # Remove any potential markdown blocks if the LLM leaked them
                 if raw.startswith("```json"):
                     raw = raw.replace("```json", "").replace("```", "").strip()
-                    
+
                 parsed = json.loads(raw)
                 verdict = parsed.get("verdict", "").upper()
-                
+
                 if verdict in {"SAFE", "DANGEROUS", "AMBIGUOUS"}:
+                    ollama_judge_breaker.record_success()
                     return verdict
                 else:
-                    # Fail closed on unknown string
+                    # Fail closed on unknown string. Not a backend failure —
+                    # Ollama answered fine, it just didn't follow the
+                    # requested format — so this does not count against the
+                    # breaker.
                     return "DANGEROUS"
             except json.JSONDecodeError:
-                # Fail closed on JSON parse error
+                # Same reasoning: the backend responded, it just wasn't valid
+                # JSON. Not a connectivity/availability problem.
                 return "DANGEROUS"
 
-        # LLM returned non-200 -> fail closed.
+        # LLM returned non-200 -> fail closed AND count as a backend failure.
+        ollama_judge_breaker.record_failure()
         return "DANGEROUS"
 
     except Exception:
+        ollama_judge_breaker.record_failure()
         return "JUDGE_OFFLINE"
 
 def output_judge(response_text: str) -> str:

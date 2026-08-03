@@ -941,6 +941,75 @@ concurrency, are the two clear next steps.
 
 ---
 
+## 1k. Infra hardening: shared cache backend + circuit breakers (2026-08-03)
+
+Scoped deliberately to infrastructure, not detection — a prior gap analysis
+against industry-standard guardrail products put the biggest, most concrete
+shortfall on "single-node, file-based cache, no rate limiting, no circuit
+breakers," not on detection quality (which measured closer to competitive).
+This addresses two of those three items.
+
+### The single-node cache bottleneck
+
+Before this, the semantic cache's exact-match tier (§1i) lived only in a
+process-local dict plus a JSON file. A verdict learned by one gateway
+instance — including an async Llama Guard escalation
+(`llama_guard_async_confirmation`, §1j) — was invisible to every other
+instance. That coupling meant this system could not run more than one replica
+and still behave consistently, which is disqualifying for any real
+horizontal scaling story.
+
+`core/cache_backend.py` introduces a pluggable `ExactCacheBackend` — Redis
+when `REDIS_URL` is set and reachable at startup, a local file-backed store
+otherwise. Selection happens once, at process start, not per request, and a
+configured-but-unreachable Redis falls back to local cleanly with a clear
+log message rather than crashing or silently degrading. The **fuzzy** FAISS
+tier deliberately stays per-instance: it is already the tier this project
+does not make an unconditional safety claim about (§1i), so per-instance
+eventual consistency there does not weaken any existing guarantee, and a
+truly distributed vector index is a larger undertaking left for later.
+
+### Circuit breakers for the judge backends
+
+Before this, a slow or failing judge backend made every ambiguous-zone
+request pay the full cost of trying it individually — Ollama's 30s timeout,
+or Llama Guard's multi-second call under memory pressure. Under sustained
+backend trouble this cascades: every request in the ambiguous zone queues
+behind the same slow failure. The async fix (§1j — Stage 4 answering from the
+fast judge, Llama Guard confirming after) does not help here, since the fast
+path still calls its judge synchronously — that is exactly the call this
+wraps.
+
+`core/circuit_breaker.py` trips a per-backend breaker after 3 consecutive
+failures, then fails fast (no call attempted at all) for a 30s cooldown,
+before allowing exactly one half-open probe through. Deliberately
+process-local for now — a distributed breaker needs shared state (the same
+Redis instance above would be the natural place), left for later. Wired into
+both `semantic_judge` (Ollama) and `llama_guard_arbitration`, counting only
+genuine backend failures (timeouts, connection errors, exceptions) — not,
+for example, Llama Guard's fast "insufficient memory" precheck result, which
+already fails fast on its own and is an expected, not anomalous, outcome.
+
+### Verified
+
+26 new tests: 16 for the cache backend (Redis mocked, no real server needed
+in CI — the contract that matters most is that a broken Redis falls back to
+local rather than crashing startup) and 10 for the circuit breaker (the
+property that matters most is that it self-heals via the half-open probe
+rather than requiring a manual reset). A `tests/conftest.py` autouse fixture
+now resets both breakers before and after every test, since they are
+deliberately process-wide singletons and would otherwise leak failure counts
+between unrelated tests. 172 → 198 tests, all passing.
+
+### What this does not close
+
+Rate limiting and per-tenant isolation remain open. So does the audit log,
+which is still a flat JSONL file — a reasonable next candidate for the same
+shared-backend treatment, since it has the identical single-node problem the
+cache had.
+
+---
+
 ## 2. Second-order defect — fail-closed is masking evaluation signal
 
 `judge_arbitration` returns `HIGH` on `JUDGE_OFFLINE`. This is correct security posture and wrong evaluation methodology. If Ollama was not running during the benchmark, every ambiguous prompt was scored `HIGH` for infrastructure reasons, and the published metrics measure the availability of a local LLM rather than the quality of the classifier.
