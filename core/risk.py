@@ -379,8 +379,19 @@ def llama_guard_arbitration(prompt: str, threat_present: bool = False):
     falls back to judge_arbitration (the Ollama judge), the same fail-closed-
     to-fallback pattern core/fusion.py already established for detector
     availability.
+
+    A circuit breaker (core/circuit_breaker.py) guards the `classify()` call
+    specifically: repeated inference failures (as opposed to the fast,
+    expected "insufficient memory" precheck result, which already fails fast
+    on its own and isn't counted here) trip the breaker so subsequent
+    requests skip straight to the Ollama fallback instead of each retrying a
+    call that just failed.
     """
     from core.detectors import get_detector
+    from core.circuit_breaker import llama_guard_breaker
+
+    if llama_guard_breaker.is_open():
+        return None
 
     detector = get_detector("llama_guard_3_1b")
     ok, detail = detector.available()
@@ -393,7 +404,9 @@ def llama_guard_arbitration(prompt: str, threat_present: bool = False):
 
     try:
         result = detector.classify(prompt)
+        llama_guard_breaker.record_success()
     except Exception as e:
+        llama_guard_breaker.record_failure()
         logger.warning(
             f"Llama Guard arbitration raised {type(e).__name__}: {e}; "
             f"falling back to the Ollama judge."

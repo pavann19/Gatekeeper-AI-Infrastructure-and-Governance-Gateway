@@ -6,6 +6,7 @@ from collections import OrderedDict
 from datetime import datetime, timezone
 import threading
 from core.config import CACHE_SIMILARITY_THRESHOLD
+from core.cache_backend import build_exact_cache_backend
 from core.logger import get_logger
 from core.embeddings import cosine_similarity
 import numpy as np
@@ -23,6 +24,14 @@ class FAISSCache:
         self._index = None
         self._lock = threading.Lock()
         self._save_thread = None
+        # Exact-match tier (Tier 1 in lookup()) is delegated to a pluggable
+        # backend — Redis when REDIS_URL is configured and reachable, else a
+        # local file-backed store. See core/cache_backend.py for why this
+        # tier specifically is the one worth making shared across instances.
+        # cache_data (above) remains the LOCAL, per-instance store backing
+        # the fuzzy FAISS index (Tier 2) regardless of which exact backend is
+        # active.
+        self._exact = build_exact_cache_backend(max_size=MAX_CACHE_SIZE)
         
     def _get_index(self):
         if self._index is None:
@@ -83,11 +92,11 @@ class FAISSCache:
     def add(self, prompt, vector, risk, score, source="unknown"):
         with self._lock:
             prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()
-            if hasattr(vector, 'tolist'): 
+            if hasattr(vector, 'tolist'):
                 vector_list = vector.tolist()
             else:
                 vector_list = vector
-                
+
             entry = {
                 "prompt": prompt,
                 "vector": vector_list,
@@ -98,19 +107,31 @@ class FAISSCache:
                 "timestamp_epoch": time.time(),
                 "source": source
             }
-            
-            # LRU Eviction
+
+            # LRU Eviction (local fuzzy-index copy only — the exact backend
+            # manages its own eviction/TTL independently, see cache_backend.py)
             if prompt_hash in self.cache_data:
                 del self.cache_data[prompt_hash]
             elif len(self.cache_data) >= MAX_CACHE_SIZE:
                 self.cache_data.popitem(last=False)
-                
+
             self.cache_data[prompt_hash] = entry
-            
+
             # Since we modify the OrderedDict, we must rebuild FAISS
             self._rebuild_faiss()
-            
-        # Trigger non-blocking save
+
+        # Write-through to the exact-match backend OUTSIDE the lock — this
+        # may be a network call (Redis) and must not hold up the fuzzy-index
+        # rebuild above for other threads. A failure here is logged, not
+        # raised: the local fuzzy tier above already has the entry, so this
+        # instance still benefits even if the shared write failed.
+        try:
+            self._exact.set(prompt_hash, entry, ttl_seconds=TTL_SECONDS)
+        except Exception as e:
+            logger.error(f"Exact-cache backend write failed ({type(e).__name__}: {e}); "
+                        f"this instance's local cache still has the entry.")
+
+        # Trigger non-blocking save of the local fuzzy-index snapshot
         self.save_async()
 
     def lookup(self, prompt, query_vec):
@@ -119,29 +140,29 @@ class FAISSCache:
         similarity match second. See module docstring for why the tiers exist
         and are not interchangeable.
         """
+        # ---- TIER 1: EXACT MATCH ----
+        # O(1) (or one Redis round-trip when shared), zero collision risk by
+        # construction — the same query text can only ever retrieve the
+        # verdict it (or an earlier identical query, on ANY instance sharing
+        # this backend) actually received. This is what almost all real cache
+        # value comes from and it is the only tier this class makes an
+        # unconditional safety claim about. Deliberately OUTSIDE self._lock:
+        # this may be a network call (Redis), and must not block the
+        # in-process fuzzy-index lock for the duration of that round-trip.
+        prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()
+        try:
+            entry = self._exact.get(prompt_hash)
+        except Exception as e:
+            logger.error(f"Exact-cache backend read failed ({type(e).__name__}: {e}); "
+                        f"treating as a miss and falling through to fuzzy match.")
+            entry = None
+        if entry is not None:
+            return entry.get("risk"), entry.get("score")
+
         if not self.cache_data:
             return None, None
 
         with self._lock:
-            # ---- TIER 1: EXACT MATCH ----
-            # O(1), zero collision risk by construction — the same query text
-            # can only ever retrieve the verdict it (or an earlier identical
-            # query) actually received. This is what almost all real cache
-            # value comes from (the same question asked repeatedly) and it is
-            # the only tier this class can make an unconditional safety claim
-            # about.
-            prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()
-            entry = self.cache_data.get(prompt_hash)
-            if entry is not None:
-                if time.time() - entry.get("timestamp_epoch", 0) < TTL_SECONDS:
-                    self.cache_data.move_to_end(prompt_hash)
-                    return entry.get("risk"), entry.get("score")
-                else:
-                    del self.cache_data[prompt_hash]
-                    self._rebuild_faiss()
-                    # Fall through to fuzzy match below — the exact entry is
-                    # gone, but a similar one may still be usable.
-
             # ---- TIER 2: FUZZY SIMILARITY MATCH ----
             # measured (scripts/diagnose_cache_threshold.py) against
             # deepset/prompt-injections: at the OLD default of 0.95, 9.1% of
@@ -199,7 +220,11 @@ class FAISSCache:
             self.cache_data = OrderedDict()
             self._rebuild_faiss()
             self._save_to_disk()
-            logger.info("Cache Flushed.")
+        try:
+            self._exact.flush()
+        except Exception as e:
+            logger.error(f"Exact-cache backend flush failed: {type(e).__name__}: {e}")
+        logger.info("Cache Flushed.")
 
 # Singleton instance
 _cache = FAISSCache()

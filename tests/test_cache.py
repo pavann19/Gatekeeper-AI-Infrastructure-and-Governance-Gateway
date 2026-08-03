@@ -60,10 +60,13 @@ def cache(monkeypatch):
     An isolated cache instance. `add()` normally spawns a background thread
     that writes to the shared semantic_cache.json — patched to a no-op here so
     these tests can never race with, or clobber, the real project cache file.
+    The exact-match tier (cache._exact, core/cache_backend.py) has its own,
+    separate disk-write path and needs the same isolation.
     """
     c = FAISSCache(dimension=8)
     monkeypatch.setattr(c, "save_async", lambda: None)
     monkeypatch.setattr(c, "_save_to_disk", lambda: None)  # flush() calls this directly
+    monkeypatch.setattr(c._exact, "_save_async", lambda: None)
     return c
 
 
@@ -112,17 +115,32 @@ def test_exact_match_used_even_when_a_closer_fuzzy_neighbor_exists(cache):
 
 
 def test_exact_match_respects_ttl(cache, monkeypatch):
+    """
+    The exact tier now lives in cache._exact (core/cache_backend.py), not
+    cache.cache_data — that dict backs only the fuzzy FAISS index (Tier 2),
+    which keeps its OWN, separate copy of timestamp_epoch. Querying with the
+    SAME vector used at insertion would let an "expired" exact match get
+    silently rescued by a still-fresh fuzzy hit (cosine similarity 1.0) —
+    querying with a dissimilar vector isolates Tier 1's TTL behaviour, which
+    is what this test is actually about (Tier 1 keys on prompt TEXT, not the
+    vector, so the exact-match half of the lookup is unaffected).
+    """
     vec = unit_vector(seed=3)
     cache.add("expiring prompt", vec, "HIGH", 0.9)
+    prompt_hash = list(cache._exact._data.keys())[0]
     # Force the entry to look 25 hours old (TTL is 24h).
-    entry = cache.cache_data[list(cache.cache_data.keys())[0]]
-    entry["timestamp_epoch"] = time.time() - 90000
+    cache._exact._data[prompt_hash]["timestamp_epoch"] = time.time() - 90000
 
-    risk, score = cache.lookup("expiring prompt", vec)
+    dissimilar_vec = unit_vector(seed=99)
+    risk, score = cache.lookup("expiring prompt", dissimilar_vec)
     assert risk is None and score is None
 
 
 def test_exact_match_is_lru_promoted(cache):
+    """LRU promotion on an exact hit happens within cache._exact now — a
+    fuzzy-index cache_data touch was never a correctness property, only ever
+    a memory-management nicety for Tier 2, and exact hits no longer need to
+    touch Tier 2's structure at all to be served correctly."""
     vecs = [unit_vector(seed=i) for i in range(3)]
     cache.add("first", vecs[0], "LOW", 0.1)
     cache.add("second", vecs[1], "LOW", 0.1)
@@ -130,10 +148,8 @@ def test_exact_match_is_lru_promoted(cache):
 
     cache.lookup("first", vecs[0])  # touch "first" -> moves to MRU end
 
-    keys = list(cache.cache_data.keys())
-    first_hash = list(cache.cache_data.keys())[
-        [cache.cache_data[k]["prompt"] for k in keys].index("first")
-    ]
+    keys = list(cache._exact._data.keys())
+    first_hash = [k for k, v in cache._exact._data.items() if v["prompt"] == "first"][0]
     assert keys[-1] == first_hash
 
 
@@ -200,7 +216,15 @@ def test_empty_cache_is_a_clean_miss(cache):
 
 
 def test_lru_eviction_drops_oldest_when_full(cache, monkeypatch):
+    """
+    The exact tier (cache._exact) has ITS OWN max_size, set once at
+    construction from core.cache.MAX_CACHE_SIZE (see FAISSCache.__init__) —
+    patching the module constant after the fixture already built cache._exact
+    would have no effect, since exact-tier lookups (Tier 1) never consult the
+    fuzzy cache_data's eviction at all. Set it directly on the instance.
+    """
     monkeypatch.setattr("core.cache.MAX_CACHE_SIZE", 2)
+    cache._exact.max_size = 2
     cache.add("a", unit_vector(seed=1), "LOW", 0.1)
     cache.add("b", unit_vector(seed=2), "LOW", 0.1)
     cache.add("c", unit_vector(seed=3), "LOW", 0.1)  # should evict "a"
