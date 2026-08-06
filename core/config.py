@@ -45,6 +45,17 @@ class Settings(BaseSettings):
     # (zero collision risk); this threshold only governs the fuzzy fallback.
     CACHE_SIMILARITY_THRESHOLD: float = 0.99
 
+    # Run the fusion's transformer detectors concurrently rather than one
+    # after another. Wall time becomes roughly the slowest detector instead
+    # of the sum of all of them — but ONLY when the CPU has headroom to run
+    # them at once. PyTorch already parallelises within a single forward
+    # pass, so on a small core count this can oversubscribe the CPU and win
+    # nothing (or lose). It is a flag, not a constant, so a deployment that
+    # measures no gain — or measures a regression — can turn it off without
+    # a redeploy. See scripts/benchmark_fusion_parallel.py for the
+    # measurement on a given machine.
+    FUSION_PARALLEL: bool = True
+
     # Domain (topicality) guardrail posture.
     #   "off"       — do not evaluate topicality at all (default).
     #   "advisory"  — report topicality in the response; does not affect risk.

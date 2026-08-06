@@ -251,3 +251,96 @@ def test_partial_detector_scores_are_still_reported_on_failure(artifact_file, mo
     assert result["detector_scores"]["anchors"] == 0.6
     assert result["detector_scores"]["protectai_injection"] == 0.4
     assert "madhurjindal_jailbreak" not in result["detector_scores"]
+
+
+# --- parallel detector execution --------------------------------------------
+#
+# Parallelism must be a pure LATENCY optimisation: identical scores, identical
+# availability semantics, identical error strings. Anything else means the
+# optimisation changed the decision, which is a correctness bug wearing a
+# performance costume.
+
+@pytest.fixture(params=[False, True], ids=["sequential", "parallel"])
+def both_paths(request, monkeypatch):
+    """Runs a test under BOTH execution paths so they cannot silently diverge."""
+    monkeypatch.setattr(fusion_mod.settings, "FUSION_PARALLEL", request.param)
+    return request.param
+
+
+def test_both_paths_produce_identical_scores(artifact_file, monkeypatch):
+    """The whole premise: parallel is a latency change, not a maths change."""
+    scores = {"protectai_injection": 0.9, "madhurjindal_jailbreak": 0.8, "toxic_bert": 0.1}
+
+    _patch_detectors(monkeypatch, scores)
+    monkeypatch.setattr(fusion_mod.settings, "FUSION_PARALLEL", False)
+    seq = fusion_mod.fused_threat_score("some text", anchor_score=0.7)
+
+    _patch_detectors(monkeypatch, scores)
+    monkeypatch.setattr(fusion_mod.settings, "FUSION_PARALLEL", True)
+    par = fusion_mod.fused_threat_score("some text", anchor_score=0.7)
+
+    assert seq["score"] == par["score"]
+    assert seq["available"] == par["available"] is True
+    assert seq["detector_scores"] == par["detector_scores"]
+
+
+def test_unavailable_detector_still_fails_closed_under_both_paths(artifact_file, monkeypatch, both_paths):
+    _patch_detectors(monkeypatch, {
+        "protectai_injection": StubDetector(available=False, detail="gated repo"),
+        "madhurjindal_jailbreak": 0.5, "toxic_bert": 0.1,
+    })
+    result = fusion_mod.fused_threat_score("text", anchor_score=0.5)
+
+    assert result["available"] is False
+    assert result["score"] is None
+    assert "protectai_injection" in result["detail"]
+
+
+def test_raising_detector_still_fails_closed_under_both_paths(artifact_file, monkeypatch, both_paths):
+    _patch_detectors(monkeypatch, {
+        "protectai_injection": StubDetector(raises=RuntimeError("cuda oom")),
+        "madhurjindal_jailbreak": 0.5, "toxic_bert": 0.1,
+    })
+    result = fusion_mod.fused_threat_score("text", anchor_score=0.5)
+
+    assert result["available"] is False
+    assert "RuntimeError" in result["detail"]
+
+
+def test_error_reported_is_deterministic_by_declared_order(artifact_file, monkeypatch):
+    """
+    With two detectors failing concurrently, whichever finishes first is a
+    race. The reported error must follow LIVE_MODEL_DETECTORS order instead,
+    so the same failure always produces the same message.
+    """
+    monkeypatch.setattr(fusion_mod.settings, "FUSION_PARALLEL", True)
+    _patch_detectors(monkeypatch, {
+        "protectai_injection": StubDetector(available=False, detail="first"),
+        "madhurjindal_jailbreak": StubDetector(available=False, detail="second"),
+        "toxic_bert": 0.1,
+    })
+
+    for _ in range(5):  # repeat: a race would show up as flapping
+        result = fusion_mod.fused_threat_score("text", anchor_score=0.5)
+        assert "protectai_injection" in result["detail"]
+
+
+def test_parallel_path_reports_all_successful_scores_on_failure(artifact_file, monkeypatch):
+    """
+    Sequential stopped at the first failure, so later detectors never ran.
+    Parallel runs them all, so a failed request now carries MORE diagnostic
+    detail — every score that did compute. Strictly better for debugging, and
+    still never mistaken for a usable result (available stays False).
+    """
+    monkeypatch.setattr(fusion_mod.settings, "FUSION_PARALLEL", True)
+    _patch_detectors(monkeypatch, {
+        "protectai_injection": 0.4,
+        "madhurjindal_jailbreak": StubDetector(available=False, detail="down"),
+        "toxic_bert": 0.1,
+    })
+    result = fusion_mod.fused_threat_score("text", anchor_score=0.6)
+
+    assert result["available"] is False
+    assert result["detector_scores"]["protectai_injection"] == 0.4
+    assert result["detector_scores"]["toxic_bert"] == 0.1  # ran despite the earlier failure
+    assert "madhurjindal_jailbreak" not in result["detector_scores"]
