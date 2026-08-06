@@ -36,7 +36,10 @@ A documented, tested fallback beats either a crash or a wrong number.
 import json
 import math
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
+from core.config import settings
 from core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -52,6 +55,11 @@ LIVE_MODEL_DETECTORS = ("protectai_injection", "madhurjindal_jailbreak", "toxic_
 _policy = None
 _policy_error = None
 _policy_loaded = False
+
+# Shared worker pool for concurrent detector scoring, created lazily on first
+# use so importing this module costs nothing when FUSION_PARALLEL is off.
+_pool = None
+_pool_lock = threading.Lock()
 
 
 def _load_policy():
@@ -123,6 +131,61 @@ def _apply_policy(feature_values: dict) -> float:
     return _sigmoid(z)
 
 
+def _score_one_detector(name, prompt):
+    """
+    Scores one detector. Returns (name, score, error_detail) and NEVER raises
+    — it runs inside a worker thread where an escaping exception would be
+    swallowed by the executor and surface as an opaque future failure rather
+    than the specific, actionable message the caller needs.
+
+    Error strings are byte-identical to the ones the original sequential
+    implementation produced, so audit records and existing tests that match
+    on them keep working.
+    """
+    from core.detectors import get_detector
+
+    try:
+        detector = get_detector(name)
+        det_ok, det_detail = detector.available()
+        if not det_ok:
+            return name, None, f"detector '{name}' unavailable: {det_detail}"
+        return name, detector.score_batch([prompt])[0], None
+    except Exception as e:
+        return name, None, f"detector '{name}' raised {type(e).__name__}: {e}"
+
+
+def _get_pool(n_workers):
+    """
+    A module-level thread pool, created once and reused.
+
+    Creating a ThreadPoolExecutor per request would add thread-spawn overhead
+    to every single request — on a path where the whole point is shaving
+    milliseconds, that can erase the gain being chased.
+    """
+    global _pool
+    if _pool is None:
+        with _pool_lock:
+            if _pool is None:
+                _pool = ThreadPoolExecutor(
+                    max_workers=n_workers, thread_name_prefix="fusion-detector"
+                )
+    return _pool
+
+
+def _score_detectors_parallel(names, prompt):
+    """
+    Runs the detectors concurrently, returning results in DECLARED order.
+
+    Thread safety: each detector owns a separate model object, so no model
+    state is shared across threads, and each detector's lazy `_load()` is
+    already lock-guarded. Inference is a forward pass under `torch.no_grad()`
+    with the model in eval mode — no parameter mutation, nothing to race on.
+    """
+    pool = _get_pool(len(names))
+    futures = [pool.submit(_score_one_detector, n, prompt) for n in names]
+    return [f.result() for f in futures]
+
+
 def fused_threat_score(prompt: str, anchor_score: float) -> dict:
     """
     Computes the fused attack probability for one prompt.
@@ -149,29 +212,33 @@ def fused_threat_score(prompt: str, anchor_score: float) -> dict:
         return {"available": False, "score": None, "threshold_high": None,
                 "threshold_medium": None, "detail": detail, "detector_scores": {}}
 
-    from core.detectors import get_detector
+    names = [n for n in LIVE_MODEL_DETECTORS if n in _policy["feature_order"]]
+
+    if settings.FUSION_PARALLEL and len(names) > 1:
+        results = _score_detectors_parallel(names, prompt)
+    else:
+        results = [_score_one_detector(n, prompt) for n in names]
 
     feature_values = {"anchors": anchor_score}
     detector_scores = {"anchors": anchor_score}
-    for name in LIVE_MODEL_DETECTORS:
-        if name not in _policy["feature_order"]:
+    first_error = None
+    # Iterate in DECLARED order, not completion order, so the reported error
+    # is deterministic and reproducible regardless of which detector happened
+    # to finish first — otherwise the same failure would produce different
+    # `detail` strings run to run, which is miserable to debug and impossible
+    # to assert on in a test.
+    for name, score, error in results:
+        if error is not None:
+            if first_error is None:
+                first_error = error
             continue
-        try:
-            detector = get_detector(name)
-            det_ok, det_detail = detector.available()
-            if not det_ok:
-                return {"available": False, "score": None, "threshold_high": None,
-                        "threshold_medium": None,
-                        "detail": f"detector '{name}' unavailable: {det_detail}",
-                        "detector_scores": detector_scores}
-            score = detector.score_batch([prompt])[0]
-        except Exception as e:
-            return {"available": False, "score": None, "threshold_high": None,
-                    "threshold_medium": None,
-                    "detail": f"detector '{name}' raised {type(e).__name__}: {e}",
-                    "detector_scores": detector_scores}
         feature_values[name] = score
         detector_scores[name] = score
+
+    if first_error is not None:
+        return {"available": False, "score": None, "threshold_high": None,
+                "threshold_medium": None, "detail": first_error,
+                "detector_scores": detector_scores}
 
     missing = [f for f in _policy["feature_order"] if f not in feature_values]
     if missing:

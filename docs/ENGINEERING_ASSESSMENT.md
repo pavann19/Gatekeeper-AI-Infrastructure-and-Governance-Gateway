@@ -1142,6 +1142,81 @@ declares non-empty `targets` and `description`, which this satisfies.
 
 ---
 
+## 1m. Parallel detector execution — a real but modest win, and no tail improvement (2026-08-06)
+
+`core/fusion.py` ran its three transformer detectors in a sequential loop:
+three forward passes back to back on one thread. They are independent, so
+this was pure serialisation. They now run through a shared
+`ThreadPoolExecutor` behind a `FUSION_PARALLEL` config flag.
+
+### Measured, because the prediction was wrong
+
+The expectation going in was "wall time becomes the slowest detector instead
+of the sum" — on three detectors, roughly a 2–3× cut. **That prediction was
+wrong, and the measurement is the reason this section exists rather than a
+claimed speedup.** `scripts/benchmark_fusion_parallel.py`, real models, both
+paths interleaved A/B/A/B in one process (a block design would attribute
+thermal drift to whichever path ran second), 30 runs per path over prompts
+of deliberately varied length:
+
+| path | mean | median | p95 | min | max |
+|---|---|---|---|---|---|
+| sequential | 368.5 ms | 366.6 ms | 475.5 ms | 244.2 ms | 606.8 ms |
+| parallel | 331.7 ms | **308.4 ms** | 476.6 ms | 230.2 ms | 632.3 ms |
+
+**1.19× on the median (58 ms), and nothing at all on p95.**
+
+The gap between the predicted 2–3× and the measured 1.19× is CPU
+oversubscription, which was flagged as a risk before running this and turned
+out to be half right. PyTorch already parallelises *within* a forward pass —
+`torch.get_num_threads()` is 6 on this 12-logical-core machine — so three
+concurrent detectors ask for ~18 threads on 12 cores. When there is headroom
+(short prompts, light passes) concurrency wins; on the longest prompts every
+core is already busy and there is nothing left to overlap. That is precisely
+why the tail does not move: p95 is composed of exactly the heavy requests
+where the CPU was already saturated.
+
+**This matters more than the median win.** Latency SLAs are written against
+p95/p99, not medians, and this optimisation does not touch them. It is worth
+keeping — 19% on typical traffic for zero accuracy change — but it is not a
+latency fix, and quantisation (ONNX/int8) or an early-exit cascade remain the
+levers that could actually move the tail.
+
+Statistical honesty: at n=30 per path the p95 comparison is underpowered.
+"Unchanged" is a fair reading; a finer claim than that would not be
+defensible at this sample size.
+
+### Correctness: a latency change must not become a decision change
+
+Three things were preserved deliberately, each with a test:
+
+- **Deterministic error reporting.** Concurrently, whichever detector fails
+  first in wall-clock time is a race. Results are collected and the error
+  reported is the first failure in *declared* order, so identical failures
+  always produce identical `detail` strings — otherwise the message would
+  flap run to run, which is both undebuggable and unassertable.
+- **The fail-closed contract is unchanged.** Any detector failure still
+  yields `available: False`, still never imputes a zero for a missing
+  feature, and error strings are byte-identical to the sequential
+  implementation so audit records and existing assertions keep working.
+- **The worker never raises.** An exception escaping into the executor would
+  surface as an opaque future failure instead of the specific, actionable
+  message the caller needs.
+
+One deliberate semantic improvement: sequential stopped at the first failure,
+so later detectors never ran. Parallel runs all of them, so a *failed*
+request now carries strictly more diagnostic detail — every score that did
+compute — while still never being mistaken for a usable result.
+
+### Verified
+
+198 → 205 tests. The 39 pre-existing fusion tests pass unchanged. Of the 7
+new ones, the failure-mode tests run under a parametrised fixture that
+exercises **both** execution paths, so the two cannot silently diverge, and
+an equivalence test asserts identical scores from both.
+
+---
+
 ## 2. Second-order defect — fail-closed is masking evaluation signal
 
 `judge_arbitration` returns `HIGH` on `JUDGE_OFFLINE`. This is correct security posture and wrong evaluation methodology. If Ollama was not running during the benchmark, every ambiguous prompt was scored `HIGH` for infrastructure reasons, and the published metrics measure the availability of a local LLM rather than the quality of the classifier.
