@@ -14,3 +14,5 @@ pytest>=8.0.0
 faiss-cpu>=1.7.4
 psutil>=5.9.0
 redis>=5.0.0
+nemoguardrails>=0.23.0
+einops>=0.8.0

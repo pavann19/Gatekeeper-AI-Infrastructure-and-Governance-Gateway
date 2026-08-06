@@ -1010,6 +1010,138 @@ cache had.
 
 ---
 
+## 1l. Benchmarking against an established vendor framework: NVIDIA NeMo Guardrails (2026-08-06)
+
+Every comparison so far (§1d, §1e, §1f) has been against open-weight
+*models*. This section compares against an open-weight *product* —
+NVIDIA's NeMo Guardrails (Apache-2.0) — which matters because it is the
+only major commercial guardrail framework this project can benchmark
+honestly at all. Lakera Guard and Azure AI Content Safety are closed APIs
+with undisclosed methodology and, in at least one case, Terms of Service
+language restricting published comparative benchmarking; no same-suite
+number can be produced for them without a live API relationship this
+project does not have. NeMo Guardrails has none of those restrictions:
+downloadable weights, an open licence, runnable on our own 6,933-row suite
+under our own methodology.
+
+### Which part of NeMo was benchmarked, and why
+
+NeMo ships two jailbreak-detection mechanisms. The **heuristics** path
+(`jailbreak_detection/heuristics`) uses `gpt2-large` perplexity —
+`length_per_perplexity` and `prefix_suffix_perplexity` — and targets
+GCG-style adversarial-suffix attacks specifically; NVIDIA's own code skips
+inputs under 20 words as "not useful to evaluate GCG-style attacks" on.
+Our suite is overwhelmingly human-written semantic attacks ("ignore all
+previous instructions", "you are now DAN") — fluent, low-perplexity
+English by construction. Scoring the heuristics on this suite would
+produce a near-zero result and a headline that NVIDIA's guardrails "fail",
+which would be measuring a GCG detector against a dataset containing no
+GCG attacks — the same category of error this project has already caught
+in itself (§1: the domain guardrail scored as a safety signal) and it is
+not made honest by flattering us. The **model-based** rail —
+`NemoGuard-JailbreakDetect`, a Snowflake arctic-embed-m-long embedding
+feeding an ONNX random forest — does the same job as this project's
+detectors on the same kind of attack, so it is the comparable one, and is
+what `core/detectors.py::NemoGuardJailbreakDetector` wraps.
+
+### A real bug in NeMo Guardrails 0.23.0, found while wiring this up
+
+`SnowflakeEmbed.__init__` calls `AutoModel.from_pretrained` with
+`use_safetensors=True`, but the arctic-embed-m-long remote code it depends
+on (`modeling_hf_nomic_bert.py`) reads a *different* kwarg —
+`safe_serialization`, defaulting to `False` — so it looks for
+`pytorch_model.bin`. The Snowflake repository ships only
+`model.safetensors`. The load fails with a misleading
+`OSError: Model name ... was not found`, which reads like a missing or
+renamed repository rather than a kwarg mismatch. Confirmed by loading the
+same model with `safe_serialization=True` directly
+(`<All keys matched successfully>`). Worked around by bypassing the broken
+`__init__` and constructing the embedder and tokenizer directly with the
+kwarg the remote code actually reads — NVIDIA's embedding, ONNX
+random-forest inference, and signed-score convention are used exactly as
+shipped, so the benchmark measures their classifier, not a reimplementation
+of it.
+
+### A bug in this project's own harness, exposed by NeMo
+
+`scripts.compare_detectors`'s polarity self-check — the gate that must pass
+before any detector's numbers are trusted — originally probed every
+detector with the same three "obvious attack" sentences, two of which were
+prompt injections. NemoGuard, a jailbreak-only specialist, scored those two
+probes near zero and was flagged `POLARITY INVERTED` — **the harness would
+have silently disqualified a detector working correctly at its actual job**,
+which is precisely the failure mode that check exists to catch, misapplied.
+`CLASS_PROBES` now maps each attack class to its own probe sentences, and
+`check_polarity` draws probes from a detector's declared `targets` rather
+than a single generic set. `NemoGuardJailbreakDetector.targets` was also
+corrected from `(jailbreak, injection)` — an assumption — to `(jailbreak,)`,
+once measurement (see below) showed injection performance worse than
+random. A detector should declare what it is measured to do, not what its
+product name implies.
+
+### Results: full 6,933-row suite, 5% FPR budget, 1,000-bootstrap CIs
+
+| Detector | AUC | Recall @ 5% FPR | Targets |
+|---|---|---|---|
+| Prompt Guard 2 | 0.949 [0.942, 0.956] | 83.9% | injection, jailbreak |
+| ProtectAI | 0.909 [0.899, 0.919] | 79.7% | injection |
+| Anchors (this project) | 0.890 [0.880, 0.900] | 70.0% | all three |
+| Madhurjindal jailbreak | 0.834 [0.822, 0.845] | 38.7% | jailbreak |
+| deepset injection | 0.828 [0.817, 0.840] | 26.5% | injection |
+| toxic-bert | 0.752 [0.740, 0.765] | 15.5% | harmful |
+| jailbreak-classifier | 0.659 [0.640, 0.678] | 14.3% | jailbreak |
+| **NemoGuard-JailbreakDetect** | **0.650 [0.634, 0.667]** | 39.1% [36.8, 41.3] | jailbreak |
+
+On pooled AUC, NVIDIA's detector places last — the exact metric this
+project has repeatedly warned against trusting in isolation (§1d, §1e). Per
+class tells a different story:
+
+| Detector | injection | jailbreak | harmful |
+|---|---|---|---|
+| NemoGuard-JailbreakDetect | 4.5% | **98.6%** | 10.2% |
+| Prompt Guard 2 | 88.7%* | 97.1% | 29.5% |
+| Madhurjindal jailbreak | 9.6% | 91.0%* | 8.3% |
+
+**NemoGuard scores the single highest jailbreak detection rate of any
+detector measured in this project, including Prompt Guard 2 (98.6% vs
+97.1%).** Its low pooled AUC is entirely an artefact of being a pure
+specialist scored across three classes it was never built to cover — a
+300-row pilot sample predicted exactly this shape (AUC 1.000 jailbreak,
+0.402 injection — worse than random) before the full run confirmed it.
+
+One more measured result worth flagging: NemoGuard's German AUC (0.764) is
+*higher* than its English AUC (0.649) — cross-lingual jailbreak signal
+this project did not expect from a product with no stated multilingual
+claim.
+
+### The comparison this project cannot make fair, and says so
+
+Every other contaminated detector in this registry (`jailbreak_classifier`,
+`deepset_injection`) declares its known training-data overlap with this
+suite, and the harness excludes those sources before reporting a number.
+**NVIDIA does not publish NemoGuard's training corpus, so that protection
+cannot be applied here.** A 98.6% jailbreak detection rate against
+substantially public jailbreak data is consistent with genuine
+generalisation and *also* consistent with memorisation of data this suite
+draws from — there is no way to distinguish the two from outside NVIDIA,
+and `NemoGuardJailbreakDetect.trained_on` is declared empty for that
+reason, not because contamination has been ruled out. Any citation of this
+number outside this document must carry that caveat; reporting 98.6%
+without it would apply a standard of scrutiny to this project's own
+detectors that NVIDIA's is not held to, which is the exact asymmetry this
+project's methodology has tried throughout to avoid.
+
+### Verified
+
+Registered in `core/detectors.py`, scored on the full suite alongside every
+other detector, polarity-checked under the corrected class-aware harness.
+The workaround is scoped to the loading path only — NVIDIA's classification
+logic is untouched. No new test failures; the existing detector-registry
+tests (`test_detectors.py`) already assert every registered detector
+declares non-empty `targets` and `description`, which this satisfies.
+
+---
+
 ## 2. Second-order defect — fail-closed is masking evaluation signal
 
 `judge_arbitration` returns `HIGH` on `JUDGE_OFFLINE`. This is correct security posture and wrong evaluation methodology. If Ollama was not running during the benchmark, every ambiguous prompt was scored `HIGH` for infrastructure reasons, and the published metrics measure the availability of a local LLM rather than the quality of the classifier.
