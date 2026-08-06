@@ -533,6 +533,173 @@ class LlamaGuardDetector(Detector):
 
 
 # ---------------------------------------------------------------------------
+# NVIDIA NeMo Guardrails
+# ---------------------------------------------------------------------------
+
+class NemoGuardJailbreakDetector(Detector):
+    """
+    NVIDIA's NemoGuard JailbreakDetect, the model-based jailbreak rail shipped
+    with NeMo Guardrails (Apache-2.0). Architecture: a Snowflake
+    arctic-embed-m-long embedding feeding a random-forest classifier exported
+    to ONNX.
+
+    WHY THIS DETECTOR MATTERS FOR THE COMPARISON
+    --------------------------------------------
+    Every other "established product" worth comparing against — Lakera Guard,
+    Azure AI Content Safety — is a closed API with undisclosed methodology and
+    ToS restrictions on published benchmarking, so no honest same-suite number
+    can be produced for them. NeMo Guardrails is the exception: open licence,
+    downloadable weights, runnable on our own evaluation suite under our own
+    methodology. It is the only major vendor framework this project can
+    compare against fairly, which is precisely why it is worth the effort.
+
+    WHY THE *MODEL-BASED* RAIL SPECIFICALLY, AND NOT THE HEURISTICS
+    ---------------------------------------------------------------
+    NeMo also ships perplexity heuristics (`jailbreak_detection/heuristics`)
+    using gpt2-large: `length_per_perplexity` and `prefix_suffix_perplexity`.
+    Those target GCG-style adversarial-suffix attacks — machine-generated
+    high-perplexity token soup — and NVIDIA's own code says so, skipping any
+    input under 20 words as "not useful to evaluate GCG-style attacks" on.
+    Our evaluation suite is overwhelmingly *human-written semantic* attacks
+    ("ignore all previous instructions", "you are now DAN"), which are fluent,
+    low-perplexity English by construction. Scoring the heuristics on this
+    suite would produce a near-zero result and a headline that NVIDIA's
+    guardrails "fail" — which would be measuring a GCG detector against a
+    dataset containing no GCG attacks. That is the same category of
+    methodological error this project has caught in itself repeatedly (the
+    domain-guardrail-as-safety-signal conflation, the contaminated-detector
+    problem), and it is not made honest by the fact that it would flatter us.
+    The model-based rail does the same job as our detectors on the same kind
+    of attack, so it is the comparable one.
+
+    UNKNOWN TRAINING DATA — READ BEFORE CITING ANY NUMBER FROM THIS
+    ---------------------------------------------------------------
+    `trained_on` is declared empty because NVIDIA does not publish this
+    model's training corpus, NOT because it has been verified clean. Every
+    other detector in this registry declares its known contamination and the
+    harness excludes those sources. That protection cannot be applied here:
+    if NemoGuard was fitted on data overlapping our suite, its score is
+    inflated by memorisation and we have no way to detect or exclude it. Any
+    comparison that cites this detector must state that asymmetry — we hold
+    ourselves to a contamination standard we cannot hold NVIDIA to.
+    """
+
+    name = "nemoguard_jailbreak"
+    # JAILBREAK ONLY, and this is measured rather than assumed. An initial
+    # version of this class also declared prompt_injection; a 300-row sample
+    # put it at AUC 1.000 on jailbreak but 0.402 on injection — WORSE than
+    # random, i.e. it scores injections lower than benign text. NVIDIA's own
+    # naming ("JailbreakDetect") agrees. Declaring a target a detector
+    # demonstrably does not serve would corrupt the per-class comparison and
+    # the polarity probe that depends on `targets`.
+    targets = (CLASS_JAILBREAK,)
+    trained_on = ()  # UNKNOWN, not verified clean — see class docstring
+    description = ("NVIDIA NeMo Guardrails model-based jailbreak rail "
+                   "(Snowflake embed + NemoGuard RF; training data undisclosed)")
+
+    def __init__(self, model_dir=None):
+        self._model_dir = model_dir or os.path.join(".hf_cache", "nemoguard")
+        self._classifier = None
+        self._load_error = None
+        self._lock = threading.Lock()
+
+    def _load(self):
+        if self._classifier is not None or self._load_error is not None:
+            return
+        with self._lock:
+            if self._classifier is not None or self._load_error is not None:
+                return
+            try:
+                from onnxruntime import InferenceSession
+                from transformers import AutoModel, AutoTokenizer
+
+                from nemoguardrails.library.jailbreak_detection.model_based.checks import (
+                    _ensure_model_downloaded,
+                )
+                from nemoguardrails.library.jailbreak_detection.model_based.models import (
+                    SNOWFLAKE_MODEL_ID,
+                    JailbreakClassifier,
+                    SnowflakeEmbed,
+                )
+
+                logger.info(
+                    f"Loading NemoGuard JailbreakDetect into {self._model_dir} "
+                    f"(downloads the ONNX classifier and Snowflake embedder on first use)."
+                )
+                model_path = _ensure_model_downloaded(self._model_dir)
+
+                # WORKAROUND for a real bug in nemoguardrails 0.23.0, not ours.
+                # SnowflakeEmbed.__init__ calls AutoModel.from_pretrained with
+                # `use_safetensors=True`, but the arctic-embed remote code it
+                # depends on (modeling_hf_nomic_bert.py) reads a DIFFERENT
+                # kwarg — `safe_serialization`, defaulting to False — so it
+                # looks for pytorch_model.bin. That file does not exist in the
+                # Snowflake repo, which ships only model.safetensors, so the
+                # load dies with a misleading "Model name ... was not found".
+                #
+                # We bypass the broken __init__ and populate the objects
+                # directly, passing the kwarg the remote code actually reads.
+                # NVIDIA's __call__ logic — embedding, ONNX random-forest
+                # inference, and the signed-score convention — is left exactly
+                # as shipped, so this benchmarks THEIR classifier rather than a
+                # reimplementation of it. Only the weight-loading call is fixed.
+                embed = SnowflakeEmbed.__new__(SnowflakeEmbed)
+                embed.device = "cpu"
+                embed.tokenizer = AutoTokenizer.from_pretrained(
+                    SNOWFLAKE_MODEL_ID, trust_remote_code=True
+                )
+                embed.model = AutoModel.from_pretrained(
+                    SNOWFLAKE_MODEL_ID,
+                    trust_remote_code=True,
+                    add_pooling_layer=False,
+                    safe_serialization=True,
+                )
+                embed.model.to(embed.device)
+                embed.model.eval()
+
+                classifier = JailbreakClassifier.__new__(JailbreakClassifier)
+                classifier.embed = embed
+                classifier.classifier = InferenceSession(
+                    str(model_path), providers=["CPUExecutionProvider"]
+                )
+
+                self._classifier = classifier
+                logger.info("Detector 'nemoguard_jailbreak' ready.")
+            except Exception as e:
+                self._load_error = f"{type(e).__name__}: {str(e)[:200]}"
+                logger.warning(f"Detector '{self.name}' unavailable: {self._load_error}")
+
+    def available(self):
+        self._load()
+        if self._classifier is None:
+            return False, self._load_error or "not loaded"
+        return True, "loaded NemoGuard JailbreakDetect (Snowflake embed + ONNX RF)"
+
+    def score_batch(self, texts):
+        """
+        Returns P(jailbreak) in [0, 1].
+
+        NeMo's classifier returns a SIGNED score: `+prob` when it predicts
+        jailbreak, `-prob` when it predicts benign (where `prob` is the
+        random forest's confidence in whichever class it chose). Mapping to a
+        one-sided probability so it is comparable with every other detector
+        here: a positive score is already P(jailbreak); a negative score
+        carries P(benign), so P(jailbreak) = 1 - P(benign) = 1 + score.
+        """
+        self._load()
+        if self._classifier is None:
+            raise RuntimeError(f"detector '{self.name}' unavailable: {self._load_error}")
+
+        out = []
+        for text in texts:
+            # The embedder tokenizes with padding=True; an empty string yields
+            # a degenerate batch, so substitute a single space as elsewhere.
+            _, signed = self._classifier(text if text.strip() else " ")
+            out.append(float(signed) if signed > 0 else float(1.0 + signed))
+        return out
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -584,6 +751,13 @@ def _build_registry():
             multi_label=True,
             description="Unitary toxic-bert, multi-label toxicity",
         ),
+
+        # --- Established vendor framework, open licence (benchmark target) ---
+        # The only major commercial guardrail product that can be benchmarked
+        # honestly on our own suite; Lakera and Azure are closed APIs. See the
+        # class docstring for why the model-based rail is used rather than
+        # NeMo's perplexity heuristics.
+        "nemoguard_jailbreak": NemoGuardJailbreakDetector(),
 
         # --- Harmful content via safety taxonomy (GATED) ---
         # The intended fix for the class every other detector misses.
