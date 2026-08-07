@@ -1217,6 +1217,86 @@ an equivalence test asserts identical scores from both.
 
 ---
 
+## 1n. Fixed: threat_present was tautologically True, capping every SAFE verdict at MEDIUM (2026-08-07)
+
+Flagged during the live Llama Guard benchmark (§1j) and confirmed by reading
+the code, not assumed: Stage 4 is only ever reached from `fuse_signals`'
+ambiguous-zone branch (`score >= threshold_medium`), so re-checking
+`score >= threshold_medium` again at the Stage 4 call site —
+which is what `threat_present` was — evaluated True on literally every
+invocation. The practical effect: a SAFE verdict from **any** arbiter, the
+Ollama judge or Llama Guard, was unconditionally capped at MEDIUM, never LOW.
+This is exactly why swapping in Llama Guard moved the Strict metric (§1j) but
+left the Operational metric completely flat — no arbiter's SAFE verdict
+could reach the Operational metric's LOW bucket, by construction, regardless
+of how good the arbiter was.
+
+### The fix is proportionate, not a removal
+
+The naive fix — make `threat_present` sometimes False — would have weakened
+a real security property: an attack that evades the fast fusion *and* fools
+the judge is exactly the case this restriction exists to catch. Instead the
+ambiguous band `[threshold_medium, threshold_high)` is split at its midpoint
+(`core/risk.py::_in_upper_ambiguous_band`). A score in the lower half — only
+mildly suspicious — lets a SAFE verdict fully clear to LOW. A score in the
+upper half — close to the HIGH boundary, where a fooled judge is most
+consequential — keeps the restriction. Applied identically to both the
+fusion-score path and the anchors-only fallback path.
+
+**Declared limitation, in the code and here:** the midpoint is a principled
+default, not a calibrated threshold. Every other threshold in this project
+was calibrated by ROC sweep against labelled data; this one cannot be yet,
+because the label it would need — "was the arbiter's SAFE verdict actually
+correct at this score" — does not exist as a dataset. It now accumulates for
+free: every `llama_guard_async_confirmation` escalation (§1j) is exactly that
+label for one point in the band.
+
+### Verified two ways: the tests are real, and the real pipeline moved
+
+Every pre-existing test in the suite passed **unchanged** after this fix —
+which sounds reassuring until you notice why: every existing test mocks
+`judge_arbitration` or `llama_guard_arbitration` directly, never exercising
+the Stage 4 call site's `threat_present` computation at all. **Zero existing
+coverage would have caught this bug, or would catch a regression of the
+fix.** `tests/test_threat_present_band.py` exercises `assess_risk`
+end-to-end with only the judge backend mocked, and includes a test that
+inlines the old buggy computation and asserts it disagrees with the new
+behaviour — proving the new tests are sensitive to the fix, not vacuously
+passing either way.
+
+Re-ran the identical 546-prompt live-judge benchmark (Ollama fallback —
+memory was too tight for Llama Guard to load this run, 0.4GB free vs 2.3GB
+needed, correctly falling back as designed):
+
+| | Recall | Precision | F1 | FPR |
+|---|---|---|---|---|
+| Before (tautological bug) | 64.04% | 81.76% | 0.718 | 8.45% |
+| **After (fixed)** | 57.14% | 84.06% | **0.680** | 6.41% |
+
+`Decision sources` confirms the mechanism directly: 21 SAFE verdicts cleared
+to `semantic_judge_override` (LOW) and 12 stayed `semantic_judge_override_restricted`
+(MEDIUM) — a split that was structurally impossible before this fix, when
+all 33 would have gone to `restricted`. The Strict metric (HIGH vs not-HIGH)
+is **byte-identical** to the pre-fix run (53.20% / 88.52% / 4.08%), confirming
+the fix is correctly scoped to the SAFE branch only.
+
+### Honest reading: F1 went down, and that is informative, not a regression
+
+Recall dropped and FPR dropped together among the 21 newly-cleared prompts —
+meaning that group contains both real attacks that now slip through (hurting
+recall) and genuine benign prompts correctly released (helping FPR). This is
+not a flaw in the fix; it accurately reflects the arbiter it ran against.
+**This benchmark used the fallback Ollama judge (`llama3.2`), not Llama
+Guard** — a general-purpose chat model repurposed via prompting is not
+especially reliable in the lower band. The prediction this sets up, stated
+as a prediction rather than a result: a purpose-built arbiter's lower-band
+SAFE verdicts should be more trustworthy, which would show up as recall
+*not* dropping while FPR still improves. Re-running with Llama Guard actually
+engaged, once memory allows, is the direct test of that prediction and the
+clear next step.
+
+---
+
 ## 2. Second-order defect — fail-closed is masking evaluation signal
 
 `judge_arbitration` returns `HIGH` on `JUDGE_OFFLINE`. This is correct security posture and wrong evaluation methodology. If Ollama was not running during the benchmark, every ambiguous prompt was scored `HIGH` for infrastructure reasons, and the published metrics measure the availability of a local LLM rather than the quality of the classifier.

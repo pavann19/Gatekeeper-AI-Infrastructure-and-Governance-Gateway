@@ -23,6 +23,7 @@ import numpy as np
 import pytest
 
 from core.cache import FAISSCache
+from core.cache_backend import LocalExactCache
 
 
 # The real collision from scripts/diagnose_cache_threshold.py, similarity 0.9876:
@@ -55,14 +56,34 @@ def near_duplicate(base_vec, similarity, dim=8, seed=0):
 
 
 @pytest.fixture
-def cache(monkeypatch):
+def cache(monkeypatch, tmp_path):
     """
-    An isolated cache instance. `add()` normally spawns a background thread
-    that writes to the shared semantic_cache.json — patched to a no-op here so
-    these tests can never race with, or clobber, the real project cache file.
-    The exact-match tier (cache._exact, core/cache_backend.py) has its own,
-    separate disk-write path and needs the same isolation.
+    An isolated cache instance.
+
+    THE BUG THIS FIXTURE ONCE HAD: patching `_save_async` to a no-op stops
+    WRITES to the shared default-path files, but does nothing about READS —
+    `LocalExactCache.__init__` calls `self._load()` before the fixture body
+    gets a chance to patch anything, so if a real `semantic_cache_exact.json`
+    happens to exist on disk (e.g. from running `tests/benchmark.py`, which
+    exercises the real production singleton at the same default path since no
+    REDIS_URL is configured), a "fresh" test instance silently loads
+    thousands of real entries. `test_exact_match_respects_ttl` and
+    `test_lru_eviction_drops_oldest_when_full` both failed this exact way —
+    `list(cache._exact._data.keys())[0]` grabbed an arbitrary STALE entry
+    instead of the one the test had just added, and a 2-item eviction cap
+    evicted a stale entry instead of the fresh one under test.
+
+    The fix is to redirect `build_exact_cache_backend` to a tmp_path BEFORE
+    constructing FAISSCache, not to patch save behaviour after construction —
+    isolation has to happen before the read that matters, not only block the
+    write that comes later.
     """
+    monkeypatch.setattr(
+        "core.cache.build_exact_cache_backend",
+        lambda max_size=5000: LocalExactCache(
+            path=str(tmp_path / "exact_test.json"), max_size=max_size
+        ),
+    )
     c = FAISSCache(dimension=8)
     monkeypatch.setattr(c, "save_async", lambda: None)
     monkeypatch.setattr(c, "_save_to_disk", lambda: None)  # flush() calls this directly

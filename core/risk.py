@@ -279,6 +279,58 @@ def classify_topicality(signals: dict) -> str:
     return "IN_DOMAIN" if signals["domain_aligned"] else "OUT_OF_DOMAIN"
 
 
+def _in_upper_ambiguous_band(score: float, threshold_medium: float, threshold_high: float) -> bool:
+    """
+    THE FIX for a real structural bug found while benchmarking Llama Guard
+    live (docs/ENGINEERING_ASSESSMENT.md §1j): Stage 4 is only ever reached
+    from fuse_signals' ambiguous-zone branch (score >= threshold_medium), so
+    `threat_present = score >= threshold_medium`, computed again at the Stage
+    4 call site, was TAUTOLOGICALLY TRUE every single time — the condition
+    had already been guaranteed true by the caller before this function could
+    ever run. The practical effect: a SAFE verdict from ANY arbiter — the
+    Ollama judge or Llama Guard — was unconditionally capped at MEDIUM, never
+    LOW, regardless of how confident or accurate the arbiter was. This is why
+    swapping in Llama Guard moved the Strict metric (HIGH vs not-HIGH) but
+    left the Operational metric (HIGH-or-MEDIUM vs LOW) completely flat: no
+    arbiter's SAFE verdict could ever reach the Operational metric's LOW
+    bucket, by construction, no matter how good it was.
+
+    The fix is NOT to make the restriction disappear — an attack that evades
+    the fast fusion AND fools the judge is exactly the case this restriction
+    exists to catch, and removing it outright would weaken a legitimate
+    defence-in-depth posture. Instead the ambiguous band [threshold_medium,
+    threshold_high) is split at its MIDPOINT. A score in the lower half —
+    barely past threshold_medium, the mildest kind of "ambiguous" — lets a
+    SAFE verdict fully clear to LOW: the fast path was only weakly suspicious,
+    and a confident arbiter is trusted. A score in the upper half — close to
+    the HIGH boundary, the strongest kind of "ambiguous" — keeps the
+    restriction: this is precisely the case where a judge being fooled is
+    most consequential, so SAFE still caps at MEDIUM. This makes the
+    restriction proportionate to how suspicious the original signal was,
+    rather than a single bit that is identical for every ambiguous-zone
+    prompt regardless of where in that zone it actually falls.
+
+    HONEST CAVEAT: the midpoint is a principled DEFAULT, not an empirically
+    calibrated threshold — this project has no labelled data yet on how often
+    a SAFE verdict in the lower half is actually correct. Every other
+    threshold in this codebase (SEMANTIC_THRESHOLD_HIGH/MEDIUM, the fusion
+    policy's own thresholds) was calibrated by ROC sweep against a stated FPR
+    budget on labelled data; this one cannot be yet, because the relevant
+    label — "was the arbiter's SAFE verdict actually correct for a prompt at
+    this score" — does not exist as a dataset. It does now start
+    accumulating for free: every llama_guard_async_confirmation escalation is
+    exactly that label for one point in the band. Once enough of those exist,
+    this midpoint should be replaced with a calibrated split, the same way
+    every other guessed threshold in this project's history eventually was.
+    """
+    band = threshold_high - threshold_medium
+    if band <= 0:
+        # Degenerate config (medium >= high) — fail toward the more
+        # conservative reading rather than divide by a non-positive band.
+        return True
+    return score >= threshold_medium + band / 2.0
+
+
 def fuse_signals(signals: dict, prompt: str) -> tuple:
     """
     Stage 3: Deterministic decision fusion from collected signals.
@@ -419,8 +471,10 @@ def llama_guard_arbitration(prompt: str, threat_present: bool = False):
         return "HIGH", "llama_guard_arbitration"
 
     # verdict == "safe": same anti-escape restriction as the Ollama judge —
-    # a threat signal already fired upstream, so "safe" caps at MEDIUM rather
-    # than fully clearing the request.
+    # threat_present means the score is in the UPPER half of the ambiguous
+    # band specifically (see _in_upper_ambiguous_band), not merely that this
+    # function was reached at all. Only there does "safe" cap at MEDIUM
+    # rather than fully clearing the request.
     if threat_present:
         logger.warning(
             "⚠️ JUDGE RESTRICTION: Llama Guard SAFE verdict overridden to "
@@ -496,8 +550,14 @@ def judge_arbitration(prompt: str, threat_present: bool = False) -> tuple:
     Returns (final_risk, source).
     Fail-closed: any unrecognized verdict results in HIGH risk.
 
-    If threat_present is True, the judge is NOT allowed to downgrade to LOW.
-    A SAFE verdict is restricted to MEDIUM to prevent adversarial escape.
+    If threat_present is True, the judge is NOT allowed to downgrade to LOW —
+    a SAFE verdict is restricted to MEDIUM to prevent adversarial escape.
+    `threat_present` means the score is in the UPPER half of the ambiguous
+    band (close to threshold_high), not merely "ambiguous" — see
+    _in_upper_ambiguous_band's docstring for why that distinction is the
+    entire point. Every prompt reaching this function is already ambiguous by
+    definition; treating that as the trigger made the restriction apply
+    unconditionally to every call, regardless of judge quality.
 
     This is the FALLBACK arbiter, tried when llama_guard_arbitration is
     unavailable — see assess_risk's Stage 4 for the preference order.
@@ -596,10 +656,24 @@ def assess_risk(prompt: str, background_scheduler=None) -> tuple:
     # ---- STAGE 4: JUDGE ARBITRATION (if required) ----
     if judge_required:
         judge_invoked = True
+        # See _in_upper_ambiguous_band's docstring: judge_required is ONLY
+        # ever True when the score already cleared threshold_medium (that is
+        # what "ambiguous zone" means in fuse_signals), so re-checking
+        # `score >= threshold_medium` here would be tautologically True on
+        # every single call — that was the actual bug. threat_present now
+        # asks a real question: is this score in the upper half of the
+        # ambiguous band, close to threshold_high, where a SAFE verdict
+        # should still be treated with suspicion?
         if signals.get("fusion_available"):
-            threat_present = signals["fusion_score"] >= signals["fusion_threshold_medium"]
+            threat_present = _in_upper_ambiguous_band(
+                signals["fusion_score"],
+                signals["fusion_threshold_medium"],
+                signals["fusion_threshold_high"],
+            )
         else:
-            threat_present = signals["threat_score"] >= SEMANTIC_THRESHOLD_MEDIUM
+            threat_present = _in_upper_ambiguous_band(
+                signals["threat_score"], SEMANTIC_THRESHOLD_MEDIUM, SEMANTIC_THRESHOLD_HIGH
+            )
 
         if background_scheduler is not None:
             # ASYNC PATH (live API traffic): answer now with the fast Ollama
