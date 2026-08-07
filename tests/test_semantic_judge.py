@@ -87,3 +87,108 @@ def test_semantic_judge_substring_vulnerability():
 
 if __name__ == "__main__":
     test_semantic_judge_substring_vulnerability()
+
+
+# --- Llama Guard judge protocol ---------------------------------------------
+#
+# Llama Guard is a fine-tuned classifier, not an instructable chat model: it
+# emits `safe` / `unsafe\nS<n>` and ignores output-format instructions
+# entirely. Verified against the real model. Routing it through the general
+# JSON path makes json.loads() raise on EVERY prompt, failing closed to
+# DANGEROUS every time — a judge that blocks everything. These tests pin the
+# separate protocol path that prevents that.
+
+from core.semantic_judge import _judge_via_llama_guard, uses_llama_guard_protocol
+
+
+@pytest.mark.parametrize("name,expected", [
+    ("llama-guard3", True),
+    ("llama-guard3:8b", True),
+    ("meta-llama/Llama-Guard-3-8B", True),
+    ("LLAMA-GUARD3", True),
+    ("llama3.2", False),
+    ("mistral", False),
+    ("gpt-oss", False),
+])
+def test_llama_guard_protocol_detection(name, expected):
+    assert uses_llama_guard_protocol(name) is expected
+
+
+def _guard_response(content, status=200):
+    return MockResponse({"message": {"content": content}}, status_code=status)
+
+
+def test_llama_guard_safe_verdict():
+    with mock.patch("core.semantic_judge.requests.post",
+                    return_value=_guard_response("safe")):
+        assert _judge_via_llama_guard("harmless") == "SAFE"
+
+
+def test_llama_guard_unsafe_verdict_with_category():
+    with mock.patch("core.semantic_judge.requests.post",
+                    return_value=_guard_response("unsafe\nS9")):
+        assert _judge_via_llama_guard("bomb instructions") == "DANGEROUS"
+
+
+def test_llama_guard_uses_chat_endpoint_with_bare_user_prompt():
+    """
+    Two correctness requirements in one: the chat endpoint (so the model's
+    own template positions the content correctly) and NO system instruction
+    prepended. The general path's instruction text contains 'violence,
+    illegal acts, hacking' — sent to Llama Guard it would classify OUR
+    instruction alongside the user's prompt.
+    """
+    captured = {}
+
+    def fake_post(url, json=None, timeout=None):
+        captured["url"] = url
+        captured["json"] = json
+        return _guard_response("safe")
+
+    with mock.patch("core.semantic_judge.requests.post", side_effect=fake_post):
+        _judge_via_llama_guard("my actual prompt")
+
+    assert captured["url"].endswith("/api/chat")
+    messages = captured["json"]["messages"]
+    assert len(messages) == 1
+    assert messages[0]["role"] == "user"
+    assert messages[0]["content"] == "my actual prompt"  # verbatim, unwrapped
+
+
+def test_llama_guard_unrecognised_output_fails_closed():
+    with mock.patch("core.semantic_judge.requests.post",
+                    return_value=_guard_response("I think this might be okay?")):
+        assert _judge_via_llama_guard("x") == "DANGEROUS"
+
+
+def test_llama_guard_non_200_fails_closed():
+    with mock.patch("core.semantic_judge.requests.post",
+                    return_value=_guard_response("safe", status=500)):
+        assert _judge_via_llama_guard("x") == "DANGEROUS"
+
+
+def test_semantic_judge_routes_guard_models_to_the_guard_path():
+    """The dispatch itself: a guard model must never reach the JSON parser."""
+    with mock.patch("core.semantic_judge.OLLAMA_MODEL", "llama-guard3"):
+        with mock.patch("core.semantic_judge._judge_via_llama_guard",
+                        return_value="SAFE") as guard_path:
+            with mock.patch("core.semantic_judge.requests.post") as json_path:
+                assert semantic_judge("anything") == "SAFE"
+                guard_path.assert_called_once()
+                json_path.assert_not_called()
+
+
+def test_semantic_judge_keeps_chat_models_on_the_json_path():
+    with mock.patch("core.semantic_judge.OLLAMA_MODEL", "llama3.2"):
+        with mock.patch("core.semantic_judge._judge_via_llama_guard") as guard_path:
+            with mock.patch("core.semantic_judge.requests.post",
+                            return_value=MockResponse({"response": '{"verdict": "SAFE"}'})):
+                assert semantic_judge("anything") == "SAFE"
+                guard_path.assert_not_called()
+
+
+def test_guard_path_exception_is_judge_offline_not_a_crash():
+    with mock.patch("core.semantic_judge.OLLAMA_MODEL", "llama-guard3"):
+        with mock.patch("core.semantic_judge._judge_via_llama_guard",
+                        side_effect=ConnectionError("refused")):
+            assert semantic_judge("anything") == "JUDGE_OFFLINE"

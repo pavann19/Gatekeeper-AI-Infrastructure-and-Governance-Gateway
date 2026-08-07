@@ -2,6 +2,9 @@ import requests
 import json
 from core.config import OLLAMA_API_URL, OLLAMA_MODEL
 from core.circuit_breaker import ollama_judge_breaker
+from core.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 def judge_available() -> tuple:
@@ -35,10 +38,93 @@ def judge_available() -> tuple:
         return False, f"judge unreachable at {OLLAMA_API_URL}: {type(e).__name__}: {e}"
 
 
+def uses_llama_guard_protocol(model_name: str) -> bool:
+    """
+    True when the configured judge model is a Llama Guard variant, which
+    speaks a fundamentally different protocol from a general chat model.
+
+    Detection is by name because that is what actually distinguishes them at
+    configuration time — `llama-guard3`, `llama-guard3:8b`,
+    `meta-llama/Llama-Guard-3-8B` all match, `llama3.2` and `mistral` do not.
+    """
+    return "guard" in model_name.lower()
+
+
+def _judge_via_llama_guard(prompt: str) -> str:
+    """
+    Judges using a Llama Guard model served by Ollama.
+
+    WHY THIS IS A SEPARATE PATH, not a prompt tweak. Llama Guard is a
+    fine-tuned safety classifier, not an instructable chat model: it emits
+    exactly `safe` or `unsafe\\nS<n>` and IGNORES any output-format
+    instruction you give it. Verified against the real model — asking it for
+    JSON returns `safe` regardless, so the general path's `json.loads()`
+    raises and fails closed to DANGEROUS on EVERY prompt, turning every
+    ambiguous request into HIGH. A judge that blocks everything is not a
+    working judge.
+
+    Two further differences that make this a protocol change rather than a
+    parser change:
+
+    1. It calls `/api/chat`, not `/api/generate`. Llama Guard's accuracy
+       depends on its own chat template placing the user content in a
+       specific slot. The general path prepends a system instruction that
+       itself contains the words "violence, illegal acts, hacking" — sent
+       through `/api/generate`, Llama Guard would be classifying OUR
+       INSTRUCTION TEXT alongside the user's prompt, which is both wrong and
+       likely to skew toward unsafe. `/api/chat` sends only the user prompt.
+
+    2. There is no AMBIGUOUS verdict. Llama Guard is binary. Where the
+       general chat judge can hedge (and `semantic_judge` maps that to
+       MEDIUM), this returns only SAFE or DANGEROUS. That is a real
+       behavioural difference for Stage 4, not a bug — a purpose-built
+       classifier committing to an answer is the point of using one.
+    """
+    # OLLAMA_API_URL ends in ".../api/generate"; the chat endpoint is
+    # ".../api/chat". Same derivation the availability probe uses.
+    base_url = "/".join(OLLAMA_API_URL.split("/")[:-1])
+    payload = {
+        "model": OLLAMA_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": False,
+    }
+    response = requests.post(f"{base_url}/chat", json=payload, timeout=60)
+
+    if response.status_code != 200:
+        ollama_judge_breaker.record_failure()
+        return "DANGEROUS"
+
+    raw = response.json().get("message", {}).get("content", "").strip()
+    verdict_line = raw.split("\n")[0].strip().lower()
+
+    if verdict_line == "safe":
+        ollama_judge_breaker.record_success()
+        return "SAFE"
+    if verdict_line == "unsafe":
+        ollama_judge_breaker.record_success()
+        # Hazard categories (S1..S13) are on the following line. Logged rather
+        # than returned because Stage 4's contract is a risk level, not a
+        # taxonomy — but the category is the single most useful thing in an
+        # audit record for explaining WHY something was blocked.
+        categories = raw.split("\n", 1)[1].strip() if "\n" in raw else ""
+        logger.info(f"Llama Guard verdict: unsafe {categories}".strip())
+        return "DANGEROUS"
+
+    # Backend answered, but not in a shape Llama Guard should ever produce.
+    # Fail closed, and do NOT count it against the breaker — the service is
+    # up, so tripping the breaker would suppress a working judge.
+    logger.error(f"Unrecognised Llama Guard output: {raw[:120]!r} — failing closed.")
+    return "DANGEROUS"
+
+
 def semantic_judge(prompt: str) -> str:
     """
-    Asks a local LLM (Mistral) to classify the prompt as SAFE or DANGEROUS.
+    Asks a local LLM to classify the prompt as SAFE or DANGEROUS.
     Used as a tie-breaker for 'Medium Risk' prompts.
+
+    Dispatches on the configured model: a Llama Guard variant speaks its own
+    protocol (see `_judge_via_llama_guard`), anything else is treated as an
+    instructable chat model and asked for JSON.
 
     Guarded by a circuit breaker (core/circuit_breaker.py): after repeated
     failures this returns JUDGE_OFFLINE immediately, without attempting the
@@ -47,6 +133,13 @@ def semantic_judge(prompt: str) -> str:
     """
     if ollama_judge_breaker.is_open():
         return "JUDGE_OFFLINE"
+
+    if uses_llama_guard_protocol(OLLAMA_MODEL):
+        try:
+            return _judge_via_llama_guard(prompt)
+        except Exception:
+            ollama_judge_breaker.record_failure()
+            return "JUDGE_OFFLINE"
 
     system_instruction = (
         "You are an AI Safety Filter. "
