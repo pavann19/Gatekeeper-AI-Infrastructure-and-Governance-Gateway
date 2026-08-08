@@ -61,6 +61,11 @@ _policy_loaded = False
 _pool = None
 _pool_lock = threading.Lock()
 
+# Guards the one-time sequential model warm-up that must precede any parallel
+# dispatch — see _warm_detectors for the import race this prevents.
+_detectors_warmed = False
+_warm_lock = threading.Lock()
+
 
 def _load_policy():
     global _policy, _policy_error, _policy_loaded
@@ -115,20 +120,72 @@ def _sigmoid(x):
     return 1.0 / (1.0 + math.exp(-x))
 
 
-def _apply_policy(feature_values: dict) -> float:
+def _apply_policy(feature_values: dict, policy=None) -> float:
     """
     feature_values: {detector_name: raw_score}, must cover every name in
     policy['feature_order']. Returns P(attack) in [0, 1].
+
+    `policy` defaults to the global policy. Per-class policies (artifact v2)
+    share the same feature_order but carry their own scaler and coefficients,
+    so they are applied through this same function with an explicit policy.
     """
-    z = _policy["intercept"]
+    pol = policy if policy is not None else _policy
+    z = pol["intercept"]
     for name, mean, scale, coef in zip(
-        _policy["feature_order"], _policy["scaler_mean"],
-        _policy["scaler_scale"], _policy["coefficients"],
+        _policy["feature_order"], pol["scaler_mean"],
+        pol["scaler_scale"], pol["coefficients"],
     ):
         raw = feature_values[name]
         standardized = (raw - mean) / scale if scale else 0.0
         z += coef * standardized
     return _sigmoid(z)
+
+
+def _select_per_class_verdict(feature_values: dict):
+    """
+    Scores the prompt under EVERY per-class policy and returns the most
+    severe result, or None when the artifact has no per-class section
+    (v1 artifacts, or per-class scoring disabled).
+
+    WHY PER-CLASS SCORES RATHER THAN PER-CLASS THRESHOLDS ON ONE SCORE: at
+    inference the attack class is unknown — determining it is the job being
+    done — so a per-class threshold is only meaningful against a per-class
+    score. Each class therefore gets its own policy (that class positive,
+    benign negative) and its own decision boundary, which is what letting
+    harmful_content be more sensitive without loosening injection/jailbreak
+    actually requires.
+
+    Selection is by (tier, ratio): the most severe tier wins, ties broken by
+    how far into its own band the score sits (`score / threshold_high`),
+    which normalises across classes whose thresholds differ. Returning the
+    TRIGGERING class's score and thresholds — rather than inventing a
+    combined score — is what lets core/risk.py's existing decision cascade,
+    including the ambiguous-band logic in `_in_upper_ambiguous_band`, work
+    completely unchanged.
+    """
+    per_class = _policy.get("per_class")
+    if not per_class:
+        return None
+
+    results = {}
+    for cls, pol in per_class.items():
+        score = _apply_policy(feature_values, pol)
+        thr_high = pol["threshold_high"]
+        thr_med = pol["threshold_medium"]
+        if score >= thr_high:
+            tier = 2
+        elif score >= thr_med:
+            tier = 1
+        else:
+            tier = 0
+        results[cls] = {
+            "score": score, "tier": tier,
+            "ratio": (score / thr_high) if thr_high else 0.0,
+            "threshold_high": thr_high, "threshold_medium": thr_med,
+        }
+
+    winner = max(results, key=lambda c: (results[c]["tier"], results[c]["ratio"]))
+    return winner, results
 
 
 def _score_one_detector(name, prompt):
@@ -172,15 +229,59 @@ def _get_pool(n_workers):
     return _pool
 
 
+def _warm_detectors(names):
+    """
+    Forces every detector's lazy `_load()` to completion SEQUENTIALLY, in the
+    calling thread, before any parallel dispatch.
+
+    WHY THIS IS REQUIRED, not defensive padding. Detector `_load()` runs
+    `from transformers import AutoModelForSequenceClassification` on first
+    use. transformers 5.x resolves that through a lazy module loader, and
+    three worker threads hitting it simultaneously on a COLD module race:
+    the real failure observed was `ImportError: cannot import name
+    'AutoModelForSequenceClassification' from 'transformers'` — from a
+    package where that symbol plainly exists and imports fine on its own.
+    The whole fusion then reported unavailable and fell back to anchors-only.
+
+    Each detector's own `_load()` is lock-guarded, but those are per-detector
+    locks; they cannot serialise a race inside the shared `transformers`
+    module machinery that all three enter at once.
+
+    Loading is a one-time cold-start cost, so serialising it gives up nothing:
+    the repeated per-request work is inference, and that stays parallel. This
+    is also why every mocked unit test passed — only a real cold start with
+    real models reaches the import at all.
+    """
+    global _detectors_warmed
+    if _detectors_warmed:
+        return
+    with _warm_lock:
+        if _detectors_warmed:
+            return
+        from core.detectors import get_detector
+        for name in names:
+            try:
+                get_detector(name).available()   # triggers _load(), one at a time
+            except Exception as e:
+                # Don't mark warmed — a transient failure should be retried on
+                # the next request rather than cached as permanent. The real
+                # per-detector error surfaces through _score_one_detector.
+                logger.warning(f"Warm-up of detector '{name}' failed: {type(e).__name__}: {e}")
+                return
+        _detectors_warmed = True
+
+
 def _score_detectors_parallel(names, prompt):
     """
     Runs the detectors concurrently, returning results in DECLARED order.
 
-    Thread safety: each detector owns a separate model object, so no model
-    state is shared across threads, and each detector's lazy `_load()` is
-    already lock-guarded. Inference is a forward pass under `torch.no_grad()`
-    with the model in eval mode — no parameter mutation, nothing to race on.
+    Thread safety: models are warmed sequentially first (see
+    `_warm_detectors`), after which each detector owns a separate, fully
+    loaded model object — no shared state, and inference is a forward pass
+    under `torch.no_grad()` in eval mode, so there is no parameter mutation
+    to race on.
     """
+    _warm_detectors(names)
     pool = _get_pool(len(names))
     futures = [pool.submit(_score_one_detector, n, prompt) for n in names]
     return [f.result() for f in futures]
@@ -247,6 +348,29 @@ def fused_threat_score(prompt: str, anchor_score: float) -> dict:
                 "detail": f"no score computed for required feature(s): {missing}",
                 "detector_scores": detector_scores}
 
+    per_class_result = (
+        _select_per_class_verdict(feature_values)
+        if settings.FUSION_PER_CLASS else None
+    )
+
+    if per_class_result is not None:
+        winner, results = per_class_result
+        w = results[winner]
+        # `score` and the thresholds are the TRIGGERING class's, deliberately:
+        # core/risk.py compares score against these same two thresholds, so
+        # returning a matched triple keeps its decision cascade — and the
+        # ambiguous-band logic — correct with no changes there at all.
+        return {
+            "available": True,
+            "score": w["score"],
+            "threshold_high": w["threshold_high"],
+            "threshold_medium": w["threshold_medium"],
+            "detail": f"fusion applied (per-class, triggered by {winner})",
+            "detector_scores": detector_scores,
+            "triggering_class": winner,
+            "class_scores": {c: r["score"] for c, r in results.items()},
+        }
+
     probability = _apply_policy(feature_values)
     return {
         "available": True,
@@ -255,4 +379,6 @@ def fused_threat_score(prompt: str, anchor_score: float) -> dict:
         "threshold_medium": _policy["threshold_medium"],
         "detail": "fusion applied",
         "detector_scores": detector_scores,
+        "triggering_class": None,
+        "class_scores": {},
     }

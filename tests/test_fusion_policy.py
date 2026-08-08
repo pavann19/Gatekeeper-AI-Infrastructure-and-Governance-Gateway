@@ -344,3 +344,133 @@ def test_parallel_path_reports_all_successful_scores_on_failure(artifact_file, m
     assert result["detector_scores"]["protectai_injection"] == 0.4
     assert result["detector_scores"]["toxic_bert"] == 0.1  # ran despite the earlier failure
     assert "madhurjindal_jailbreak" not in result["detector_scores"]
+
+
+# --- per-class policies (artifact v2) ---------------------------------------
+#
+# A per-class threshold is only meaningful against a per-class SCORE, because
+# at inference the attack class is unknown. So each class gets its own policy
+# and its own boundary, and the most severe verdict wins. The external
+# contract is unchanged on purpose: `score`/`threshold_high`/`threshold_medium`
+# are the TRIGGERING class's, so core/risk.py's decision cascade needs no
+# changes at all.
+
+PER_CLASS_ARTIFACT = {
+    **ARTIFACT,
+    "version": 2,
+    "per_class": {
+        # harmful_content deliberately the most sensitive (lowest thresholds)
+        "harmful_content": {
+            "scaler_mean": [0.2, 0.1, 0.1, 0.05],
+            "scaler_scale": [0.25, 0.2, 0.2, 0.1],
+            "coefficients": [0.2, 0.2, 0.2, 3.0],   # keys off toxic_bert
+            "intercept": -1.0,
+            "threshold_high": 0.16,
+            "threshold_medium": 0.07,
+            "n_positive": 254,
+        },
+        "prompt_injection": {
+            "scaler_mean": [0.2, 0.1, 0.1, 0.05],
+            "scaler_scale": [0.25, 0.2, 0.2, 0.1],
+            "coefficients": [0.5, 3.0, 0.2, 0.1],   # keys off protectai
+            "intercept": -1.0,
+            "threshold_high": 0.15,
+            "threshold_medium": 0.04,
+            "n_positive": 979,
+        },
+    },
+}
+
+
+@pytest.fixture
+def per_class_artifact_file(tmp_path, monkeypatch):
+    path = tmp_path / "fusion_policy.json"
+    path.write_text(json.dumps(PER_CLASS_ARTIFACT), encoding="utf-8")
+    monkeypatch.setattr(fusion_mod, "ARTIFACT_FILE", str(path))
+    monkeypatch.setattr(fusion_mod.settings, "FUSION_PER_CLASS", True)
+    return path
+
+
+def test_per_class_reports_the_triggering_class(per_class_artifact_file, monkeypatch):
+    # High toxicity, low injection -> harmful_content should win.
+    _patch_detectors(monkeypatch, {
+        "protectai_injection": 0.0, "madhurjindal_jailbreak": 0.0, "toxic_bert": 1.0,
+    })
+    result = fusion_mod.fused_threat_score("toxic text", anchor_score=0.1)
+
+    assert result["available"] is True
+    assert result["triggering_class"] == "harmful_content"
+    assert set(result["class_scores"]) == {"harmful_content", "prompt_injection"}
+
+
+def test_injection_signal_selects_the_injection_policy(per_class_artifact_file, monkeypatch):
+    _patch_detectors(monkeypatch, {
+        "protectai_injection": 1.0, "madhurjindal_jailbreak": 0.0, "toxic_bert": 0.0,
+    })
+    result = fusion_mod.fused_threat_score("injection text", anchor_score=0.1)
+    assert result["triggering_class"] == "prompt_injection"
+
+
+def test_returned_thresholds_belong_to_the_triggering_class(per_class_artifact_file, monkeypatch):
+    """
+    THE CONTRACT core/risk.py DEPENDS ON: score and thresholds must be a
+    matched triple from one policy. Mixing one class's score with another's
+    thresholds — or with the global ones — would silently corrupt every
+    downstream comparison, including the ambiguous-band logic.
+    """
+    _patch_detectors(monkeypatch, {
+        "protectai_injection": 0.0, "madhurjindal_jailbreak": 0.0, "toxic_bert": 1.0,
+    })
+    result = fusion_mod.fused_threat_score("toxic text", anchor_score=0.1)
+
+    expected = PER_CLASS_ARTIFACT["per_class"]["harmful_content"]
+    assert result["threshold_high"] == expected["threshold_high"]
+    assert result["threshold_medium"] == expected["threshold_medium"]
+    assert result["score"] == result["class_scores"]["harmful_content"]
+
+
+def test_most_severe_tier_wins_not_merely_highest_score(per_class_artifact_file, monkeypatch):
+    """
+    Selection is by tier first, ratio second. A class sitting above its own
+    HIGH threshold must beat one with a numerically larger score that is
+    still only in its MEDIUM band — thresholds differ per class, so raw
+    scores are not comparable across them.
+    """
+    _patch_detectors(monkeypatch, {
+        "protectai_injection": 0.35, "madhurjindal_jailbreak": 0.0, "toxic_bert": 0.75,
+    })
+    result = fusion_mod.fused_threat_score("mixed signal", anchor_score=0.2)
+
+    winner = result["triggering_class"]
+    pol = PER_CLASS_ARTIFACT["per_class"][winner]
+    win_tier = 2 if result["score"] >= pol["threshold_high"] else (
+        1 if result["score"] >= pol["threshold_medium"] else 0)
+    for cls, score in result["class_scores"].items():
+        p = PER_CLASS_ARTIFACT["per_class"][cls]
+        tier = 2 if score >= p["threshold_high"] else (1 if score >= p["threshold_medium"] else 0)
+        assert win_tier >= tier
+
+
+def test_per_class_can_be_disabled_falling_back_to_global(per_class_artifact_file, monkeypatch):
+    monkeypatch.setattr(fusion_mod.settings, "FUSION_PER_CLASS", False)
+    _patch_detectors(monkeypatch, {
+        "protectai_injection": 0.9, "madhurjindal_jailbreak": 0.8, "toxic_bert": 0.1,
+    })
+    result = fusion_mod.fused_threat_score("text", anchor_score=0.7)
+
+    assert result["triggering_class"] is None
+    assert result["threshold_high"] == ARTIFACT["threshold_high"]  # global
+
+
+def test_v1_artifact_without_per_class_still_works(artifact_file, monkeypatch):
+    """Backward compatibility: a v1 artifact must load and behave exactly as
+    before, with per-class scoring simply inactive."""
+    monkeypatch.setattr(fusion_mod.settings, "FUSION_PER_CLASS", True)
+    _patch_detectors(monkeypatch, {
+        "protectai_injection": 0.9, "madhurjindal_jailbreak": 0.8, "toxic_bert": 0.1,
+    })
+    result = fusion_mod.fused_threat_score("text", anchor_score=0.7)
+
+    assert result["available"] is True
+    assert result["triggering_class"] is None
+    assert result["threshold_high"] == ARTIFACT["threshold_high"]
