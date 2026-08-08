@@ -56,6 +56,17 @@ class Settings(BaseSettings):
     # measurement on a given machine.
     FUSION_PARALLEL: bool = True
 
+    # Score each prompt under a per-attack-class fusion policy rather than a
+    # single global one, taking the most severe verdict. Measured out-of-fold
+    # at matched union FPR (scripts/analyze_per_class_thresholds.py):
+    # harmful_content recall 28.7% -> 31.5%, overall 82.8% -> 83.3%. A real
+    # but modest gain — it does NOT solve harmful-content detection, which
+    # needs a better instrument rather than better thresholds. Costs three
+    # dot products over features already computed, so runtime impact is
+    # negligible. Falls back to the global policy automatically when the
+    # artifact has no per_class section (v1 artifacts).
+    FUSION_PER_CLASS: bool = True
+
     # Domain (topicality) guardrail posture.
     #   "off"       — do not evaluate topicality at all (default).
     #   "advisory"  — report topicality in the response; does not affect risk.

@@ -72,6 +72,16 @@ LIVE_FEATURES = ["anchors", "protectai_injection", "madhurjindal_jailbreak", "to
 HIGH_FPR_BUDGET = 0.05
 MEDIUM_FPR_BUDGET = 0.20
 
+# Per-class budgets are TIGHTER than the global ones on purpose. Three
+# policies each firing at 5% would produce a union false-positive rate near
+# 15%; 2.24% is the shared per-class budget that
+# scripts/analyze_per_class_thresholds.py binary-searched to make the union
+# land on the global policy's 5%, which is the only basis on which the two
+# arms can be honestly compared. The MEDIUM budget is scaled by the same
+# ratio (2.24/5) to keep the two tiers proportionate.
+PER_CLASS_HIGH_FPR_BUDGET = 0.0224
+PER_CLASS_MEDIUM_FPR_BUDGET = 0.0895
+
 
 def load_suite():
     rows = []
@@ -126,8 +136,51 @@ def main():
     threshold_high = threshold_at_fpr(list(probs), y, budget=HIGH_FPR_BUDGET)
     threshold_medium = threshold_at_fpr(list(probs), y, budget=MEDIUM_FPR_BUDGET)
 
+    # ---- PER-CLASS POLICIES ----
+    # One policy per attack class (that class positive, benign negative), so
+    # each gets its own decision boundary. This is what "harmful_content
+    # should be more sensitive without loosening injection/jailbreak"
+    # actually requires: a per-class threshold is only meaningful against a
+    # per-class SCORE, since at inference the class is unknown — determining
+    # it is the job being done.
+    #
+    # Budgets are per-class, so three policies each at 5% would give a UNION
+    # false-positive rate approaching 15%, not 5%. PER_CLASS_*_FPR_BUDGET are
+    # therefore set to the shared budget that
+    # scripts/analyze_per_class_thresholds.py binary-searched to make the
+    # union match the global policy's 5% — measured at equal FPR, per-class
+    # improved harmful_content recall 28.7% -> 31.5% out-of-fold, with
+    # overall recall not regressing. Anything else would be comparing a
+    # looser operating point and calling the difference an improvement.
+    classes = sorted({r["attack_class"] for r in usable if r["label"] == 1})
+    per_class = {}
+    for cls in classes:
+        idx = [i for i, r in enumerate(usable)
+               if r["label"] == 0 or r["attack_class"] == cls]
+        Xc = [X[i] for i in idx]
+        yc = [1 if usable[i]["attack_class"] == cls else 0 for i in idx]
+
+        cls_scaler = StandardScaler()
+        Xc_scaled = cls_scaler.fit_transform(Xc)
+        cls_model = LogisticRegression(max_iter=2000, C=1.0)
+        cls_model.fit(Xc_scaled, yc)
+
+        cls_probs = cls_model.predict_proba(Xc_scaled)[:, 1]
+        per_class[cls] = {
+            "scaler_mean": cls_scaler.mean_.tolist(),
+            "scaler_scale": cls_scaler.scale_.tolist(),
+            "coefficients": cls_model.coef_[0].tolist(),
+            "intercept": float(cls_model.intercept_[0]),
+            "threshold_high": float(threshold_at_fpr(list(cls_probs), yc, budget=PER_CLASS_HIGH_FPR_BUDGET)),
+            "threshold_medium": float(threshold_at_fpr(list(cls_probs), yc, budget=PER_CLASS_MEDIUM_FPR_BUDGET)),
+            "n_positive": int(sum(yc)),
+        }
+
     artifact = {
-        "version": 1,
+        # v2 adds `per_class`. The top-level global policy fields are kept
+        # verbatim so an older core/fusion.py, or a deployment that disables
+        # per-class scoring, still loads and behaves exactly as before.
+        "version": 2,
         "trained_at": datetime.now(timezone.utc).isoformat(),
         "feature_order": LIVE_FEATURES,
         "scaler_mean": scaler.mean_.tolist(),
@@ -138,6 +191,9 @@ def main():
         "threshold_medium": float(threshold_medium),
         "fpr_budget_high": HIGH_FPR_BUDGET,
         "fpr_budget_medium": MEDIUM_FPR_BUDGET,
+        "per_class": per_class,
+        "per_class_fpr_budget_high": PER_CLASS_HIGH_FPR_BUDGET,
+        "per_class_fpr_budget_medium": PER_CLASS_MEDIUM_FPR_BUDGET,
         "training": {
             "n_rows": len(usable),
             "n_attack": int(sum(y)),

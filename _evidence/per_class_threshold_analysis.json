@@ -1,0 +1,29 @@
+{
+  "fpr_budget": 0.05,
+  "global": {
+    "threshold": 0.27436277284031196,
+    "fpr": 0.050119808306709264,
+    "recall": {
+      "overall": 0.828051948051948,
+      "prompt_injection": 0.8927477017364658,
+      "jailbreak": 0.934971098265896,
+      "harmful_content": 0.2874015748031496
+    }
+  },
+  "per_class": {
+    "shared_alpha": 0.02236421725237961,
+    "fpr": 0.04992012779552716,
+    "thresholds": {
+      "prompt_injection": 0.1467717628072301,
+      "jailbreak": 0.2551371960518937,
+      "harmful_content": 0.15593528083001776
+    },
+    "recall": {
+      "overall": 0.8327272727272728,
+      "prompt_injection": 0.8947906026557712,
+      "jailbreak": 0.934971098265896,
+      "harmful_content": 0.31496062992125984
+    }
+  },
+  "verdict": "per-class WINS on harmful_content without losing overall"
+}
