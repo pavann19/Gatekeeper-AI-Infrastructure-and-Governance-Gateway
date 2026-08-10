@@ -1446,6 +1446,102 @@ idle-timeout unloading.
 
 ---
 
+## 1q. Closing §3.4: rate limiting, bounded execution, and request caps (2026-08-10)
+
+Two of the four items §3.4 listed turned out to be **already fixed** — CORS
+stopped pairing a wildcard origin with credentials when auth landed (§3.1),
+and `AssessRequest.prompt` already carried a 50,000-character cap. The
+assessment was stale on both, and is corrected above. What follows is the
+work that was genuinely still open.
+
+### Rate limiting, and the part of it that is a security decision
+
+`core/rate_limit.py` adds a token bucket — two floats per caller, permitting
+a configured burst while constraining the sustained rate. A sliding-window
+log would be more accurate, but costs O(requests) memory per caller, which is
+itself the resource-exhaustion vector the control exists to close.
+
+The non-obvious decision is *whose* bucket. Authenticated callers are keyed
+by `key_id`, resolved server-side from a verified credential and therefore
+unforgeable. Anonymous callers have no such identity, and both obvious
+options fail: one shared anonymous bucket is a self-inflicted denial of
+service (a single abuser locks out every anonymous caller), while keying on a
+client-supplied header lets anyone mint unlimited identities by rotating it.
+
+Anonymous traffic is therefore keyed by transport peer address, with
+`X-Forwarded-For` consulted **only** when explicitly trusted via config —
+off by default, because trusting it on a directly-exposed service hands
+every caller a complete bypass. When enabled, the **rightmost** entry is
+used, not the leftmost: with one trusted proxy in front, the rightmost value
+is what that proxy actually observed, while the leftmost is whatever the
+client claimed. `test_forwarded_for_is_ignored_unless_explicitly_trusted`
+exercises exactly this bypass attempt.
+
+### Bounded execution, and why the timeout returns 503 rather than BLOCK
+
+`asyncio.to_thread` uses the default executor, sized `min(32, cpu_count + 4)`.
+That is actively harmful here: §1m already measured the CPU as oversubscribed
+at **three** concurrent models, because PyTorch parallelises within each
+forward pass. Sixteen concurrent assessments would thrash rather than serve
+sixteen users. A dedicated pool of `ASSESS_MAX_CONCURRENCY` (default 4)
+converts overload into a queue, and `ASSESS_TIMEOUT_SECONDS` bounds the queue.
+
+On expiry the request returns **503, not a synthesised BLOCK verdict.** This
+is deliberate and it is the opposite of what this project's fail-closed
+instinct would suggest. A timeout is an availability event, not a security
+finding; writing a BLOCK into the audit log would record a verdict that no
+analysis produced, which is precisely the failure mode §2 warns about — where
+infrastructure failure masquerades as detection signal, and the evaluation
+record quietly stops meaning anything. The integration contract is instead
+"any non-200 means do not proceed", which keeps the caller fail-closed
+without corrupting the record of *why*.
+
+**Honest limitation, stated in the code:** Python cannot cancel a running
+thread. The timeout bounds the *client's* wait, not the work — a stuck
+assessment runs to completion. What bounds the work is the pool size, which
+caps a stuck assessment's cost at one of N workers rather than letting it
+multiply.
+
+### A side door that made the whole control optional
+
+`/api/v1/assess_output` had no authentication, no rate limiting, and no
+length cap on `response_text`, while running the same expensive machinery.
+Every control on `/assess` was therefore bypassable by using the other
+endpoint. It now resolves a principal, enforces `AUTH_MODE`, takes the same
+rate limit, and caps its input at the same 50,000 characters. Worth noting
+that this also repairs a documentation claim: `AUTH_MODE="required"` is
+described as meaning every request is attributed, and one open endpoint made
+that false.
+
+### Verified
+
+29 new tests (264 total, all passing). Sensitivity was confirmed rather than
+assumed, by removing each control and checking the tests actually go red:
+
+| Behaviour removed | Result |
+|---|---|
+| `_enforce_rate_limit` no-oped | 6 tests fail — every rate-limit assertion, including the output-endpoint side door |
+| Deadline dropped from `_run_bounded` | `test_slow_assessment_returns_503_not_a_fabricated_verdict` fails |
+| `RateLimiter`'s lock removed | 20 racing threads get **19** tokens from a 5-token bucket instead of 5 |
+
+That last one is the reason the concurrency test exists: an unlocked
+read-modify-write on the token count does not fail loudly, it silently stops
+limiting under exactly the concurrent load the limiter was installed for.
+
+### What this does not close
+
+Process-local, like the circuit breakers (§1k) — N replicas enforce N times
+the configured rate, and the natural fix is the Redis instance
+`core/cache_backend.py` already introduces. The bucket registry is LRU-capped
+so identity rotation cannot exhaust memory, which means a caller cycling
+through more than `RATE_LIMIT_MAX_TRACKED` identities can evict their own
+bucket and reset their budget; bounded memory was judged the more important
+property, since exhaustion takes down every tenant while evasion degrades one
+limit. Per-tenant limits, as distinct from per-key, need §3.2's tenancy work
+first.
+
+---
+
 ## 2. Second-order defect — fail-closed is masking evaluation signal
 
 `judge_arbitration` returns `HIGH` on `JUDGE_OFFLINE`. This is correct security posture and wrong evaluation methodology. If Ollama was not running during the benchmark, every ambiguous prompt was scored `HIGH` for infrastructure reasons, and the published metrics measure the availability of a local LLM rather than the quality of the classifier.
@@ -1502,11 +1598,13 @@ Every policy file path is a module-level constant (`POLICY_FILE = "policies.json
 
 **Fixes:** Redis (or `IndexIDMap` with incremental add + periodic compaction) for the cache; audit events to stdout as structured JSON for a log shipper, with an optional hash-chain for tamper evidence — the latter is a genuinely compelling compliance story for the report. Add `semantic_cache.json`, `audit.jsonl`, and `debug-*.log` to `.gitignore` immediately.
 
-### 3.4 No rate limiting, no request size limits, no timeouts on the assess path
+### 3.4 No rate limiting, no request size limits, no timeouts on the assess path — **FIXED 2026-08-10**
 
 `CORSMiddleware(allow_origins=["*"], allow_credentials=True)` is both a security problem and invalid per the CORS spec (wildcard origin with credentials is rejected by browsers). There is no cap on `prompt` length — a multi-megabyte prompt will be embedded and will pin a thread from the `asyncio.to_thread` pool.
 
 **Fixes:** `max_length` on the Pydantic field, per-key rate limiting, explicit CORS allowlist from config, and a bounded thread pool with a timeout on `assess_risk`.
+
+All four are now in place — see §1q for the implementation and the design decisions that were not obvious. CORS and the prompt cap were closed earlier; rate limiting, the bounded pool, the timeout, and a second uncapped field on the output endpoint were closed on 2026-08-10.
 
 ### 3.5 Observability is print statements and a log file
 

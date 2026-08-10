@@ -116,6 +116,80 @@ class Settings(BaseSettings):
     # are only enabled when this is NOT a wildcard.
     CORS_ORIGINS: str = "*"
 
+    # --- Rate limiting (core/rate_limit.py) ---
+    #
+    # Authenticated callers are bucketed by their verified key_id; anonymous
+    # callers by transport peer address. Anonymous gets a much smaller
+    # allowance because it is unattributable, not because it is untrusted:
+    # abuse from an anonymous caller cannot be traced to a revocable key.
+    #
+    # The defaults assume the measured cold-path cost of an assessment
+    # (multi-second p95 — §1p). 120/min authenticated is roughly one request
+    # every 500ms sustained, which a legitimate integration will not exceed
+    # while a retry storm will.
+    RATE_LIMIT_ENABLED: bool = True
+    RATE_LIMIT_AUTHENTICATED_RPM: float = 120.0
+    RATE_LIMIT_ANONYMOUS_RPM: float = 20.0
+
+    # Burst window. Capacity = rate-per-second x this, so a 120/min key may
+    # arrive with 20 requests at once and still be within budget, provided its
+    # SUSTAINED rate stays under the limit. Bursts are normal client
+    # behaviour; sustained overload is the thing worth rejecting.
+    RATE_LIMIT_BURST_SECONDS: float = 10.0
+
+    # Upper bound on distinct callers tracked at once. Prevents identity
+    # rotation from exhausting memory; see the declared tradeoff in
+    # core/rate_limit.py's module docstring.
+    RATE_LIMIT_MAX_TRACKED: int = 10_000
+
+    # Whether to believe X-Forwarded-For when identifying anonymous callers.
+    # OFF by default and it must stay off unless a trusted proxy sits in
+    # front: on a directly-exposed service, trusting this header lets any
+    # caller mint unlimited identities and bypass the limit entirely.
+    RATE_LIMIT_TRUST_FORWARDED_FOR: bool = False
+
+    # --- Assessment execution bounds (api/main.py) ---
+    #
+    # asyncio.to_thread uses the default executor, which sizes itself to
+    # min(32, cpu_count + 4). That is badly wrong here: each concurrent
+    # assessment runs three transformer detectors, and PyTorch already
+    # parallelises WITHIN each forward pass (§1m measured oversubscription at
+    # only 3 concurrent models). Sixteen concurrent assessments would thrash
+    # the CPU into uselessness rather than serving sixteen users. A small
+    # bounded pool converts overload into queueing, which the timeout below
+    # then bounds.
+    ASSESS_MAX_CONCURRENCY: int = 4
+
+    # Ceiling on how long a caller waits for an assessment, including time
+    # spent queued for a worker. On expiry the request fails with 503 rather
+    # than a fabricated verdict — see the rationale at the call site.
+    ASSESS_TIMEOUT_SECONDS: float = 30.0
+
+    @field_validator("RATE_LIMIT_AUTHENTICATED_RPM", "RATE_LIMIT_ANONYMOUS_RPM")
+    @classmethod
+    def _validate_rpm(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError(
+                "Rate limits must be positive. To disable limiting, set "
+                "RATE_LIMIT_ENABLED=false rather than using a zero rate — an "
+                "explicit off switch is far harder to misread than a 0."
+            )
+        return v
+
+    @field_validator("ASSESS_MAX_CONCURRENCY")
+    @classmethod
+    def _validate_concurrency(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("ASSESS_MAX_CONCURRENCY must be at least 1.")
+        return v
+
+    @field_validator("ASSESS_TIMEOUT_SECONDS")
+    @classmethod
+    def _validate_timeout(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError("ASSESS_TIMEOUT_SECONDS must be positive.")
+        return v
+
     @field_validator("AUTH_MODE")
     @classmethod
     def _validate_auth_mode(cls, v: str) -> str:
