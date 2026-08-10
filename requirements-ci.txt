@@ -29,3 +29,8 @@ redis>=5.0.0
 # it fits in memory. Declaring it explicitly is a correctness fix, not just a
 # CI convenience.
 psutil>=5.9.0
+# prometheus-client is imported by core/metrics.py, which api/main.py imports
+# unconditionally — so its absence is a collection-time ImportError for every
+# test module that touches the API, not a skipped feature. It must be in BOTH
+# requirement files for the same reason psutil above had to be.
+prometheus-client>=0.20.0
