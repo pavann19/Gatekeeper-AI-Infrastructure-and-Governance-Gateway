@@ -2,8 +2,12 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
 import time
 import asyncio
 import functools
+import re
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from fastapi.middleware.cors import CORSMiddleware
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from core import metrics
 from api.schemas import AssessRequest, AssessResponse, AssessOutputRequest, AssessOutputResponse
 from core.auth import auth_required, resolve_principal
 from core.privacy import redact_pii
@@ -73,8 +77,54 @@ async def _run_bounded(func, *args):
     size above — a stuck assessment costs one of N workers and cannot multiply.
     """
     loop = asyncio.get_running_loop()
-    future = loop.run_in_executor(_assess_pool, functools.partial(func, *args))
-    return await asyncio.wait_for(future, timeout=settings.ASSESS_TIMEOUT_SECONDS)
+    # Incremented around the whole call, queueing included: the useful
+    # question is "how many callers are waiting on this pool", not "how many
+    # threads are busy". The former shows saturation before the timeout does.
+    metrics.assessments_in_flight.inc()
+    try:
+        future = loop.run_in_executor(_assess_pool, functools.partial(func, *args))
+        return await asyncio.wait_for(future, timeout=settings.ASSESS_TIMEOUT_SECONDS)
+    finally:
+        metrics.assessments_in_flight.dec()
+
+
+_REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]+$")
+
+
+def _resolve_request_id(request: Request) -> str:
+    """
+    Honours an inbound correlation ID, or mints one.
+
+    An upstream service's ID is accepted so a trace can span systems — but it
+    is caller-supplied and it lands in the audit log, so it is validated
+    first. An unvalidated value here would be a log-injection primitive:
+    newlines and control characters could forge additional audit records in a
+    JSONL file that downstream tooling parses line by line. Anything failing
+    the charset or length check is silently replaced rather than rejected,
+    since a malformed trace header is not a reason to fail a security
+    assessment.
+    """
+    supplied = request.headers.get(settings.REQUEST_ID_HEADER, "").strip()
+    if (
+        supplied
+        and len(supplied) <= settings.REQUEST_ID_MAX_LENGTH
+        and _REQUEST_ID_PATTERN.match(supplied)
+    ):
+        return supplied
+    return uuid.uuid4().hex
+
+
+def _route_template(request: Request) -> str:
+    """
+    The matched route's path template, for use as a metric label.
+
+    NEVER the raw path. Labelling by raw path lets any caller create unlimited
+    time series by requesting random URLs, which is a memory-exhaustion vector
+    against the monitoring system rather than a reporting inconvenience.
+    Unmatched requests collapse into one bucket.
+    """
+    route = request.scope.get("route")
+    return getattr(route, "path", None) or "unmatched"
 
 
 def _client_address(request: Request) -> str:
@@ -124,6 +174,9 @@ def _enforce_rate_limit(principal, request: Request) -> None:
         # Log the identity, never the prompt: a rate-limit event is an
         # operational signal and must not become a second copy of user content.
         logger.warning(f"Rate limit exceeded for {identity} (limit {rpm}/min).")
+        metrics.rate_limited_total.labels(
+            authenticated=str(principal.authenticated).lower()
+        ).inc()
         raise HTTPException(
             status_code=429,
             detail=f"Rate limit exceeded. Limit is {rpm:g} requests per minute.",
@@ -131,14 +184,108 @@ def _enforce_rate_limit(principal, request: Request) -> None:
         )
 
 
+@app.on_event("startup")
+async def warm_models() -> None:
+    """
+    Loads the models before the first request rather than during it.
+
+    WHY THIS IS A CORRECTNESS FIX, not a performance tweak: cold loading of
+    the embedding model plus the three fusion detectors measured ~35s on the
+    reference machine, which exceeds ASSESS_TIMEOUT_SECONDS. Lazily loaded,
+    the first request after every deploy would therefore be guaranteed to hit
+    the deadline and return 503 — and so would every request queued behind it.
+    Introducing a timeout without this would have converted a slow first
+    request into a broken one.
+
+    Failures are logged, not raised. A model that cannot load is a real
+    problem, but the existing pipeline already degrades safely when a detector
+    is unavailable (core/fusion.py never imputes a missing score), and /health
+    already reports per-dependency status. Refusing to boot would turn a
+    degraded gateway into no gateway.
+    """
+    if not settings.WARM_MODELS_ON_STARTUP:
+        logger.info("Model warm-up disabled; models will load on first request.")
+        return
+
+    def _warm():
+        from core.embeddings import _get_model
+        from core.fusion import warm_up
+        from core.threat_centroid import _get_malicious_centroid
+
+        _get_model()                 # the sentence encoder, used by every stage
+        _get_malicious_centroid()    # anchor centroid; embeds 15 anchors on
+                                     # first use, which measured ~7s of the
+                                     # first request even after the detectors
+                                     # were already warm
+        return warm_up()             # policy + the live fusion detectors
+
+    started = time.perf_counter()
+    try:
+        warmed, detail = await asyncio.get_running_loop().run_in_executor(
+            _assess_pool, _warm
+        )
+        elapsed = time.perf_counter() - started
+        if warmed:
+            logger.info(f"Model warm-up complete in {elapsed:.1f}s — {detail}")
+        else:
+            logger.warning(f"Model warm-up incomplete after {elapsed:.1f}s — {detail}")
+    except Exception:
+        logger.exception("Model warm-up failed; models will load on first request.")
+
+
 @app.middleware("http")
 async def add_process_time_header(request: Request, call_next):
     start_time = time.perf_counter()
+
+    # Resolve the correlation ID BEFORE handling, so the handler and the audit
+    # record it writes can both see it.
+    request_id = _resolve_request_id(request)
+    request.state.request_id = request_id
+
     response = await call_next(request)
     process_time = time.perf_counter() - start_time
-    # Add timing header and make it accessible
+
     response.headers["X-Process-Time"] = str(process_time)
+    # Echo the ID so the caller can correlate its own logs with ours, and so a
+    # client that did not send one still learns what to quote in a bug report.
+    response.headers[settings.REQUEST_ID_HEADER] = request_id
+
+    if settings.METRICS_ENABLED:
+        metrics.request_duration_seconds.labels(
+            endpoint=_route_template(request),
+            method=request.method,
+            status=str(response.status_code),
+        ).observe(process_time)
+
     return response
+
+
+@app.get(settings.METRICS_PATH, include_in_schema=False)
+def metrics_endpoint(request: Request):
+    """
+    Prometheus exposition.
+
+    Deliberately excluded from the OpenAPI schema: it is an operational
+    surface, not part of the API contract, and advertising it in public docs
+    invites scraping by things that are not the monitoring system.
+    """
+    if not settings.METRICS_ENABLED:
+        raise HTTPException(status_code=404, detail="Metrics are disabled.")
+
+    if settings.METRICS_REQUIRE_AUTH:
+        principal = resolve_principal(authorization=request.headers.get("Authorization"))
+        if not principal.authenticated:
+            raise HTTPException(
+                status_code=401,
+                detail="Metrics require authentication.",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+    # Sampled at scrape time rather than tracked on transition — see the
+    # rationale in core/metrics.py.
+    metrics.refresh_circuit_breaker_gauges()
+
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 @app.post("/api/v1/assess", response_model=AssessResponse)
 async def assess_prompt(req: AssessRequest, request: Request, background_tasks: BackgroundTasks):
@@ -193,8 +340,9 @@ async def assess_prompt(req: AssessRequest, request: Request, background_tasks: 
         # caller fail-closed without corrupting the record of why.
         logger.error(
             f"Assessment timed out after {settings.ASSESS_TIMEOUT_SECONDS}s "
-            f"| key_id={principal.key_id}"
+            f"| key_id={principal.key_id} request_id={request.state.request_id}"
         )
+        metrics.assessment_timeouts_total.labels(endpoint="/api/v1/assess").inc()
         raise HTTPException(
             status_code=503,
             detail=(
@@ -211,9 +359,20 @@ async def assess_prompt(req: AssessRequest, request: Request, background_tasks: 
     # Update details with reason and the identity the decision was made under.
     details["policy_reason"] = reason
     details["principal"] = principal.to_audit()
+    details["request_id"] = request.state.request_id
 
     # 4. Audit Logging
     log_event(principal.capability, clean_query, risk_level, decision, details)
+
+    # 5. Metrics. After the audit write, deliberately: the audit record is the
+    #    compliance artefact and must not be at risk from an instrumentation
+    #    bug. Wrapped for the same reason — observability must never be able to
+    #    fail a request that was otherwise assessed and decided successfully.
+    if settings.METRICS_ENABLED:
+        try:
+            metrics.record_assessment(decision, risk_level, details, principal.tenant)
+        except Exception:
+            logger.exception("Failed to record assessment metrics; serving anyway.")
 
     # Calculate process time explicitly for the response body (if needed by client directly)
     # The header is already set by middleware, but this makes it visible in the JSON
@@ -263,8 +422,10 @@ async def assess_output_endpoint(req: AssessOutputRequest, request: Request):
     except asyncio.TimeoutError:
         logger.error(
             f"Output assessment timed out after "
-            f"{settings.ASSESS_TIMEOUT_SECONDS}s | key_id={principal.key_id}"
+            f"{settings.ASSESS_TIMEOUT_SECONDS}s | key_id={principal.key_id} "
+            f"request_id={request.state.request_id}"
         )
+        metrics.assessment_timeouts_total.labels(endpoint="/api/v1/assess_output").inc()
         raise HTTPException(
             status_code=503,
             detail=(
