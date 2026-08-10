@@ -51,7 +51,21 @@ class AssessResponse(BaseModel):
     process_time_ms: float = Field(default=0.0, description="Server-side processing latency in milliseconds.")
 
 class AssessOutputRequest(BaseModel):
-    response_text: str = Field(..., description="The generated LLM response to analyze.")
+    # Bounded for the same reason AssessRequest.prompt is: this text is
+    # embedded and run through the output guardrails, so an unbounded field
+    # lets one caller pin a worker from the (deliberately small) assessment
+    # pool for as long as it takes to process a multi-megabyte body. The cap
+    # matches AssessRequest deliberately — a response is assessed by the same
+    # machinery as a prompt, so a limit either side could tolerate but the
+    # other could not would just move the problem.
+    response_text: str = Field(
+        ...,
+        min_length=1,
+        max_length=50_000,
+        description="The generated LLM response to analyze.",
+    )
+
+    model_config = {"extra": "forbid"}
 
 class AssessOutputResponse(BaseModel):
     decision: str = Field(..., description="ALLOW or BLOCK")

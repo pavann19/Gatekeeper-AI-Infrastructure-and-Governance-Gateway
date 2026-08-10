@@ -8,6 +8,21 @@ otherwise leak between tests and cause order-dependent failures.
 import pytest
 
 from core.circuit_breaker import llama_guard_breaker, ollama_judge_breaker
+from core.rate_limit import assess_rate_limiter
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limiter():
+    """
+    Same reasoning as the breakers below: core/rate_limit.py's limiter is a
+    process-wide singleton by design, so tokens spent by one test would
+    otherwise still be missing in the next. A test suite that makes enough API
+    calls would start seeing spurious 429s in whichever test happened to run
+    last — an order-dependent failure that is miserable to diagnose.
+    """
+    assess_rate_limiter.reset()
+    yield
+    assess_rate_limiter.reset()
 
 
 @pytest.fixture(autouse=True)
