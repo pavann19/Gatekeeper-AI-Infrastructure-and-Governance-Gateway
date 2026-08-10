@@ -165,6 +165,37 @@ class Settings(BaseSettings):
     # than a fabricated verdict — see the rationale at the call site.
     ASSESS_TIMEOUT_SECONDS: float = 30.0
 
+    # Load every model during startup instead of on the first request.
+    #
+    # This is NOT an optimisation, it is a correctness fix for the timeout
+    # above. Cold model loading measured ~35s on the reference machine
+    # (§1p's benchmark spent 34.6s on its first item), which is longer than
+    # ASSESS_TIMEOUT_SECONDS — so with lazy loading the FIRST request after
+    # every deploy is guaranteed to 503, and so is every request that arrives
+    # while it is still loading. Warming up front moves that cost to boot,
+    # where an orchestrator's readiness probe is designed to wait for it.
+    WARM_MODELS_ON_STARTUP: bool = True
+
+    # --- Observability (core/metrics.py) ---
+    #
+    # The Prometheus exposition endpoint. Metrics leak operational detail —
+    # traffic volume, block rates, which tenants are active — so in a real
+    # deployment this should be reachable only from the monitoring network.
+    # METRICS_REQUIRE_AUTH exists for deployments that cannot segment the
+    # network and would rather require a key; it defaults off because
+    # requiring one breaks a default Prometheus scrape config, and a control
+    # that silently stops your monitoring is worse than the exposure.
+    METRICS_ENABLED: bool = True
+    METRICS_PATH: str = "/metrics"
+    METRICS_REQUIRE_AUTH: bool = False
+
+    # Correlation IDs. An inbound X-Request-ID is honoured so a trace can span
+    # services, but it is caller-supplied data: it is length- and
+    # charset-checked before use, because it lands in the audit log and an
+    # unvalidated value is a log-injection primitive.
+    REQUEST_ID_HEADER: str = "X-Request-ID"
+    REQUEST_ID_MAX_LENGTH: int = 64
+
     @field_validator("RATE_LIMIT_AUTHENTICATED_RPM", "RATE_LIMIT_ANONYMOUS_RPM")
     @classmethod
     def _validate_rpm(cls, v: float) -> float:

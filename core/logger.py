@@ -38,7 +38,14 @@ def log_event(capability, prompt, risk, decision, metadata=None):
 
     log_entry = {
         "timestamp": timestamp,
-        "capability": capability,   
+        # Correlation ID, propagated from ingress (api/main.py) so an audit
+        # record can be tied back to the HTTP request, its access-log line and
+        # any downstream call that carried the same header. Without it, the
+        # only join key between a governance decision and the request that
+        # caused it is a timestamp, which stops being unique under any real
+        # concurrency.
+        "request_id": metadata.get("request_id", "unset"),
+        "capability": capability,
         "risk": risk,
         "decision": decision,
         "prompt_hash": prompt_hash,

@@ -1542,6 +1542,104 @@ first.
 
 ---
 
+## 1r. Closing §3.5: Prometheus metrics, correlation IDs, and a cold-start defect they exposed (2026-08-11)
+
+`collect_semantic_signals` has been measuring `meta_intent_ms`,
+`faiss_threat_search_ms`, `domain_alignment_ms` and `fusion_ms` all along and
+discarding them into a response body nothing aggregates. The measurement
+existed; only the exporter was missing. `core/metrics.py` adds it, plus
+counters for outcomes, tenants, 429s, timeouts and judge invocations, an
+in-flight gauge, and circuit-breaker state.
+
+### Cardinality was the whole design problem
+
+Prometheus stores one time series per distinct label combination, so a label
+fed from unbounded input is not a reporting bug — it is a memory-exhaustion
+vector against the monitoring system. Three guards, each at a place where
+unbounded values could realistically get in:
+
+- **`source` is checked against a closed set.** It is a bounded set of 22
+  literals in `core/risk.py` today, but a test
+  (`test_every_source_risk_py_can_emit_is_known`) greps the source file and
+  fails if a new verdict source appears that the exporter has not been told
+  about. Unrecognised values collapse to `other` and increment
+  `gatekeeper_metrics_unknown_source_total`, so the degradation is visible
+  rather than silent.
+- **`endpoint` uses the matched route template, never the raw path.**
+  Labelling by raw path would let anyone mint unlimited series by requesting
+  random URLs; unmatched requests share one bucket.
+- **`tenant` is confined to its own low-dimensional counter** rather than
+  multiplied across every other dimension.
+
+### The scrape must not change what it measures
+
+`CircuitBreaker.is_open()` has a side effect: a cooled-down breaker
+transitions into its half-open probe when asked. An exporter calling it would
+mean every Prometheus scrape silently consumes probe attempts and alters
+failover timing. `refresh_circuit_breaker_gauges` therefore reads
+`_opened_at` directly under the breaker's lock, and
+`test_scraping_does_not_mutate_circuit_breaker_state` fails if that is ever
+changed back.
+
+### Correlation IDs, and the injection they would otherwise enable
+
+An inbound `X-Request-ID` is honoured so a trace can span services, echoed on
+the response, and written into every audit record — without it, the only join
+key between a governance decision and the request that caused it is a
+timestamp, which stops being unique under concurrency.
+
+It is also caller-supplied data that lands in a JSONL audit log parsed line by
+line, which makes an unvalidated value a log-forgery primitive: a newline lets
+a caller append fabricated audit records. IDs are charset- and length-checked
+and silently replaced when malformed, since a bad trace header is not a reason
+to fail a security assessment.
+
+### The defect this work exposed in §1q's own timeout
+
+Smoke-testing the exporter produced a **503 on the very first request**. Cold
+loading of the encoder, the anchor centroid and the three fusion detectors
+measured ~43s — longer than the 30s deadline §1q had just introduced. Lazily
+loaded, the first request after every deploy was therefore guaranteed to time
+out, along with everything queued behind it. **§1q made cold start worse, and
+no test caught it** because every API test mocks `assess_risk` and so never
+loads a model.
+
+Fixed with a startup warm-up (`core/fusion.py::warm_up` plus the encoder and
+threat centroid), which moves the cost to boot where an orchestrator's
+readiness probe is designed to wait for it:
+
+| | Before warm-up | After |
+|---|---|---|
+| Startup | instant | 48s |
+| First request | **503 at the 30s deadline** | 200 in 3.0s |
+| Steady state | 0.28s | 0.28s |
+
+The remaining 3.0s on the first request is other lazily-initialised state; it
+is under the deadline, so it is a latency wart rather than a correctness
+problem, and is left measured rather than chased.
+
+### Verified
+
+28 new tests (292 total). Sensitivity confirmed by breaking each behaviour:
+
+| Behaviour removed | Result |
+|---|---|
+| ms → seconds conversion dropped | `test_stage_timings_are_exported_as_seconds` fails (would have reported every latency 1000x too large) |
+| Raw path used as the `endpoint` label | `test_unmatched_paths_share_one_series` fails |
+| Inbound request ID trusted unvalidated | all 5 `test_malformed_request_ids_are_replaced_not_trusted` cases fail |
+| Exporter uses `is_open()` | `test_scraping_does_not_mutate_circuit_breaker_state` fails |
+
+### What this does not close
+
+Per-process counters, like the breakers (§1k) and the limiter (§1q). Under a
+multi-worker server each worker exposes its own values; correct multi-worker
+operation needs `prometheus_client`'s multiprocess mode via a shared
+`PROMETHEUS_MULTIPROC_DIR`. There is also no tracing — correlation IDs make
+requests joinable across logs, which is not the same as spans with timing,
+and OpenTelemetry would be the next step rather than an extension of this.
+
+---
+
 ## 2. Second-order defect — fail-closed is masking evaluation signal
 
 `judge_arbitration` returns `HIGH` on `JUDGE_OFFLINE`. This is correct security posture and wrong evaluation methodology. If Ollama was not running during the benchmark, every ambiguous prompt was scored `HIGH` for infrastructure reasons, and the published metrics measure the availability of a local LLM rather than the quality of the classifier.
@@ -1606,11 +1704,13 @@ Every policy file path is a module-level constant (`POLICY_FILE = "policies.json
 
 All four are now in place — see §1q for the implementation and the design decisions that were not obvious. CORS and the prompt cap were closed earlier; rate limiting, the bounded pool, the timeout, and a second uncapped field on the output endpoint were closed on 2026-08-10.
 
-### 3.5 Observability is print statements and a log file
+### 3.5 Observability is print statements and a log file — **FIXED 2026-08-11**
 
 There is no `/metrics` endpoint, no request IDs, no tracing, no per-stage latency histograms exported anywhere — despite `collect_semantic_signals` already **measuring** per-stage latency and throwing it away into the response body. That instrumentation is 90% of the way to a Prometheus exporter.
 
 **Fix:** `prometheus-client`, counters by `decision`/`source`/`tenant`, histograms for the per-stage timings you already collect, and a correlation ID propagated from ingress into the audit log. Cheap to add, and a dashboard screenshot is strong report material.
+
+All of it is now in place — see §1r, which also records a cold-start defect this work exposed in §1q's own timeout.
 
 ---
 

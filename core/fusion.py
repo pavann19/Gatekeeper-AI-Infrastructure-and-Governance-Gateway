@@ -271,6 +271,33 @@ def _warm_detectors(names):
         _detectors_warmed = True
 
 
+def warm_up():
+    """
+    Loads the policy and every live detector, so the first real request does
+    not pay for it.
+
+    Exists as a public entry point because a caller that wants warm-up should
+    not have to know which detectors the current policy artifact happens to
+    declare, nor reach into module privates to find out. api/main.py's startup
+    hook is the intended caller: cold loading measured ~35s, which exceeds the
+    request deadline, so without this the first request after a deploy is
+    guaranteed to time out.
+
+    Returns (warmed: bool, detail: str). Never raises — a gateway that cannot
+    warm up should still start and report itself degraded via /health, since
+    the pipeline already handles unavailable detectors safely.
+    """
+    ok, detail = policy_available()
+    if not ok:
+        return False, f"policy unavailable, nothing warmed: {detail}"
+
+    names = [n for n in LIVE_MODEL_DETECTORS if n in _policy["feature_order"]]
+    _warm_detectors(names)
+    if _detectors_warmed:
+        return True, f"warmed {len(names)} detector(s): {', '.join(names)}"
+    return False, "one or more detectors failed to warm; will retry on request"
+
+
 def _score_detectors_parallel(names, prompt):
     """
     Runs the detectors concurrently, returning results in DECLARED order.
