@@ -1297,6 +1297,155 @@ clear next step.
 
 ---
 
+## 1o. Per-class fusion thresholds, and a concurrency bug they exposed (2026-08-07)
+
+### The design problem: a per-class threshold needs a per-class score
+
+"Give `harmful_content` its own, more sensitive threshold" is not directly
+implementable against the single global fusion score, because the attack
+class is unknown at inference time — determining it *is* the job being done.
+The actual proposal is: fit one logistic-regression policy per attack class
+(that class positive, benign negative), score every prompt under all of
+them, and take the most severe verdict
+(`core/fusion.py::_select_per_class_verdict`). Each class then gets its own
+decision boundary instead of sharing one compromise boundary tuned mostly by
+whichever class has the most training rows.
+
+### The cost that had to be measured, not assumed
+
+Three independent per-class detectors each firing at a 5% FPR budget do not
+give a 5% *combined* budget — the union can approach 15%. Comparing
+per-class recall at "5% each" against the global policy's 5% total would be
+comparing a looser operating point and calling the difference an
+improvement. `scripts/analyze_per_class_thresholds.py` binary-searches a
+single shared per-class budget until the union false-positive rate matches
+the global policy's, out-of-fold (`StratifiedKFold`, 5 splits), so both arms
+are compared at genuinely the same FPR:
+
+| | FPR | Overall recall | prompt_injection | jailbreak | harmful_content |
+|---|---|---|---|---|---|
+| Global (single policy) | 5.01% | 82.81% | 89.27% | 93.50% | 28.74% |
+| Per-class (shared budget 2.24%) | 4.99% | 83.27% | 89.48% | 93.50% | **31.50%** |
+
+A real but modest gain, concentrated entirely in `harmful_content`
+(+2.8 points), with the other two classes essentially unchanged. Wired into
+`models/fusion_policy.json` as a `per_class` section (schema version bumped
+1 → 2) and gated by `FUSION_PER_CLASS` so a deployment can fall back to the
+global policy with a config flag, no redeploy.
+
+**Declared limitation:** 31.5% recall on `harmful_content` is still poor in
+absolute terms. A live check during verification found an explicit
+pipe-bomb-construction prompt scoring 0.075 against a 0.077 threshold —
+classified LOW. This needs a better instrument (a detector actually trained
+to recognise harmful-content requests), not further threshold tuning; the
+per-class mechanism narrows the gap, it does not close it.
+
+### A concurrency bug this work exposed, introduced by §1m's own change
+
+Live-verifying per-class scoring against real models (not the mocked
+detectors every existing test uses) surfaced
+`ImportError: cannot import name 'AutoModelForSequenceClassification' from
+'transformers'` on a cold process — despite that symbol demonstrably
+existing (`hasattr` confirmed True on the exact installed version).
+Disabling `FUSION_PARALLEL` made the error disappear, isolating the cause:
+three worker threads triggering `transformers` 5.x's lazy-loading first
+import simultaneously corrupted each other's module resolution. This was a
+latent bug in §1m's own parallelization, invisible to the entire test suite
+because every test mocks the detectors — only a real cold start against real
+models ever reaches the import at all.
+
+Fixed by forcing a single-threaded warm-up of every detector
+(`core/fusion.py::_warm_detectors`) before any `ThreadPoolExecutor` dispatch
+is attempted, guarded by a one-time flag so warm-up cost is paid once per
+process, not once per request. Verified by repeating the identical cold-start
+reproduction with the fix in place: all three detectors loaded successfully
+and per-class fusion produced correct results.
+
+### Verified
+
+`tests/test_fusion_policy.py` gained per-class coverage
+(`test_per_class_reports_the_triggering_class`,
+`test_most_severe_tier_wins_not_merely_highest_score`,
+`test_v1_artifact_without_per_class_still_works` for backward compatibility)
+and parallel-path coverage that asserts sequential and parallel scoring
+produce byte-identical results, including under detector failure. Confirmed
+each new test is sensitive — not vacuous — by simulating the old/missing
+behaviour via `mock.patch` and checking the test fails.
+
+---
+
+## 1p. Testing §1n's prediction: does a purpose-built judge change the picture? (2026-08-08)
+
+§1n predicted that a purpose-built arbiter's SAFE verdicts in the ambiguous
+band should be more trustworthy than a general chat model's, which would
+show up as recall holding steady while FPR still improves — rather than the
+recall/FPR co-drop measured against the `llama3.2` fallback. With Llama
+Guard wired in (§1j / `core/semantic_judge.py::_judge_via_llama_guard`) and
+the `threat_present` fix (§1n) both live, this section runs that test.
+
+### Two runs, because the first was memory-degraded
+
+The first attempt ran with the system under severe memory pressure (free
+RAM fell to ~0.45–0.6GB of 12GB during the run). One `/api/chat` call to
+Ollama stalled for 13m21s and returned HTTP 500 — not a crash, but Windows
+paging/thrashing at that memory level — which the circuit breaker correctly
+treated as a backend failure and failed closed
+(`judge_failure_fail_closed`, 1 occurrence). Freeing RAM (idle processes
+released it; no manual killing was needed — see below) and re-running
+produced a clean pass with zero judge failures, confirming the first run's
+minor recall deficit was attributable to that single fail-closed case rather
+than to Llama Guard's behaviour:
+
+| | Recall (Op.) | Precision (Op.) | F1 (Op.) | FPR (Op.) | Recall (Strict) | F1 (Strict) | FPR (Strict) | Judge failures |
+|---|---|---|---|---|---|---|---|---|
+| llama3.2 baseline (§1n) | 57.14% | 84.06% | 0.680 | 6.41% | 53.20% | — | 4.08% | — |
+| Llama Guard, run 1 (memory-degraded) | 55.17% | 84.21% | 0.667 | 6.12% | 51.72% | 0.652 | 4.08% | 1 |
+| **Llama Guard, run 2 (clean)** | 55.67% | 84.33% | 0.671 | 6.12% | 53.20% | 0.665 | 4.08% | 0 |
+
+Removing the one fail-closed case recovered Strict recall exactly back to
+the baseline's 53.20% and improved Strict F1 to 0.665 — the clean run is the
+one to read.
+
+### Honest verdict: the prediction is not confirmed
+
+Operational recall (55.67%) and F1 (0.671) still land slightly below the
+`llama3.2` baseline (57.14% / 0.680), while Operational FPR is marginally
+better (6.12% vs 6.41%). `Decision sources` confirms the swap itself is
+working as designed —
+`llama_guard_override`: 17, `llama_guard_override_restricted`: 12,
+`llama_guard_arbitration`: 7 all fire correctly — but the net effect on
+accuracy is, at best, a wash rather than the clear win §1n's prediction
+called for. The most likely explanation is architectural, not incidental:
+Llama Guard has no AMBIGUOUS verdict
+(`core/semantic_judge.py::_judge_via_llama_guard`, docstring point 2) —
+it only ever returns SAFE or DANGEROUS, so it cannot hedge the way
+`llama3.2`'s three-way verdict could. That removes a degree of freedom the
+general chat model had, in exchange for (in principle) more reliable
+binary calls; on this 36-prompt judge-invocation sample, the trade nets out
+close to even.
+
+**Declared limitation:** 36 judge-invoked prompts is a small sample — the
+difference between 55.67% and 57.14% recall is one or two prompts. This
+result should be read as "no clear win demonstrated," not "purpose-built
+judges don't help here." A larger ambiguous-zone sample, or testing against
+attack classes more squarely inside Llama Guard's trained hazard taxonomy,
+would be needed to settle it either way.
+
+### Freeing RAM without killing anything necessary
+
+No processes were killed to free memory between the two runs. RAM pressure
+resolved on its own once the first benchmark process exited (releasing its
+three in-process transformer models) and Ollama unloaded `llama-guard3`
+after going idle — free RAM recovered from ~0.5GB to 7.35GB with no
+intervention. This is worth noting as an operational fact: this benchmark's
+peak memory footprint (three local transformer detectors + an 8B GGUF model
+served by Ollama, concurrently) is close to this machine's ceiling, and a
+production deployment sizing for concurrent request handling under the same
+architecture would need to budget for it explicitly rather than relying on
+idle-timeout unloading.
+
+---
+
 ## 2. Second-order defect — fail-closed is masking evaluation signal
 
 `judge_arbitration` returns `HIGH` on `JUDGE_OFFLINE`. This is correct security posture and wrong evaluation methodology. If Ollama was not running during the benchmark, every ambiguous prompt was scored `HIGH` for infrastructure reasons, and the published metrics measure the availability of a local LLM rather than the quality of the classifier.
