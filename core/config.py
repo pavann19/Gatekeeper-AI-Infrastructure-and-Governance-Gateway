@@ -67,6 +67,28 @@ class Settings(BaseSettings):
     # artifact has no per_class section (v1 artifacts).
     FUSION_PER_CLASS: bool = True
 
+    # May a judge's SAFE verdict fully clear a prompt the deterministic layer
+    # already flagged?
+    #
+    # FALSE (default) means no: the arbiter can confirm danger (HIGH) or
+    # reduce to MEDIUM, but never returns a flagged prompt to LOW. This is the
+    # "deterministic arbiter" posture — the LLM advises, the policy decides.
+    #
+    # This is a MEASURED default, not a philosophical one. On the 546-prompt
+    # deepset benchmark the judge used its clear-authority 17 times: it cleared
+    # 13 genuine attacks and 4 genuine benign prompts — a 3.25:1 losing trade.
+    # Removing that authority moves recall 55.67% -> 62.07% and F1 0.671 ->
+    # 0.712, for +1.17pp FPR (6.12% -> 7.29%).
+    #
+    # Historical note, because the code here is easy to misread: an earlier
+    # `threat_present` tautology (§1n) made this cap unconditional by accident.
+    # Fixing the tautology was correct — the expression really was always True
+    # — but it silently handed the judge clear-authority and cost ~6 points of
+    # recall. The cap is now an explicit, measured policy rather than an
+    # accident, and `_in_upper_ambiguous_band` still governs which of the two
+    # override sources is recorded for audit.
+    JUDGE_MAY_CLEAR_TO_LOW: bool = False
+
     # Domain (topicality) guardrail posture.
     #   "off"       — do not evaluate topicality at all (default).
     #   "advisory"  — report topicality in the response; does not affect risk.

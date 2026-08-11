@@ -475,12 +475,18 @@ def llama_guard_arbitration(prompt: str, threat_present: bool = False):
     # band specifically (see _in_upper_ambiguous_band), not merely that this
     # function was reached at all. Only there does "safe" cap at MEDIUM
     # rather than fully clearing the request.
-    if threat_present:
+    if threat_present or not settings.JUDGE_MAY_CLEAR_TO_LOW:
         logger.warning(
             "⚠️ JUDGE RESTRICTION: Llama Guard SAFE verdict overridden to "
-            "MEDIUM (threat signal present)."
+            "MEDIUM (deterministic layer flagged this prompt)."
         )
-        return "MEDIUM", "llama_guard_override_restricted"
+        # Two distinct sources, deliberately, even though both cap at MEDIUM:
+        # the audit record should distinguish "the score was high enough that
+        # we would have restricted regardless" from "policy denied the arbiter
+        # clear-authority". They answer different questions after an incident.
+        source = ("llama_guard_override_restricted" if threat_present
+                  else "llama_guard_override_capped")
+        return "MEDIUM", source
     return "LOW", "llama_guard_override"
 
 
@@ -568,9 +574,11 @@ def judge_arbitration(prompt: str, threat_present: bool = False) -> tuple:
     if judge_verdict == "DANGEROUS":
         return "HIGH", "semantic_judge"
     elif judge_verdict == "SAFE":
-        if threat_present:
-            logger.warning("⚠️ JUDGE RESTRICTION: SAFE verdict overridden to MEDIUM (threat signal present).")
-            return "MEDIUM", "semantic_judge_override_restricted"
+        if threat_present or not settings.JUDGE_MAY_CLEAR_TO_LOW:
+            logger.warning("⚠️ JUDGE RESTRICTION: SAFE verdict overridden to MEDIUM (deterministic layer flagged this prompt).")
+            source = ("semantic_judge_override_restricted" if threat_present
+                      else "semantic_judge_override_capped")
+            return "MEDIUM", source
         return "LOW", "semantic_judge_override"
     elif judge_verdict == "AMBIGUOUS":
         return "MEDIUM", "semantic_judge_ambiguous"

@@ -24,6 +24,10 @@ import pytest
 from core import risk as risk_mod
 from core.risk import _in_upper_ambiguous_band
 
+# Captured at import, before any fixture monkeypatches it away, so tests that
+# need the REAL arbitration path can restore it.
+_REAL_LLAMA_GUARD_ARBITRATION = risk_mod.llama_guard_arbitration
+
 
 # --- _in_upper_ambiguous_band: the helper in isolation -----------------------
 
@@ -75,13 +79,17 @@ def drive_to_stage4(monkeypatch):
     return _set
 
 
-def test_safe_verdict_in_lower_half_now_clears_to_low(monkeypatch, drive_to_stage4):
+def test_safe_verdict_in_lower_half_clears_to_low_only_when_permitted(monkeypatch, drive_to_stage4):
     """
-    THE FIX, PROVEN: before this change, EVERY ambiguous-zone SAFE verdict was
-    capped at MEDIUM, with no way for any prompt to reach LOW via the judge.
-    A mild case (just past threshold_medium) with a genuinely SAFE verdict
-    must now be able to fully clear.
+    The band-split still works — but ONLY when the arbiter is explicitly
+    granted clear-authority via JUDGE_MAY_CLEAR_TO_LOW.
+
+    This test used to assert LOW unconditionally, because when the band-split
+    landed (§1n) clearing was the new default. Measurement later reversed that
+    default: see test_default_denies_the_arbiter_clear_authority below for the
+    3.25:1 losing trade that drove the change.
     """
+    monkeypatch.setattr(risk_mod.settings, "JUDGE_MAY_CLEAR_TO_LOW", True)
     drive_to_stage4(score=0.11, threshold_medium=0.10, threshold_high=0.30)  # lower half
     monkeypatch.setattr(risk_mod, "semantic_judge", lambda p: "SAFE")
 
@@ -89,6 +97,73 @@ def test_safe_verdict_in_lower_half_now_clears_to_low(monkeypatch, drive_to_stag
 
     assert risk == "LOW"
     assert details["source"] == "semantic_judge_override"
+
+
+def test_default_denies_the_arbiter_clear_authority(monkeypatch, drive_to_stage4):
+    """
+    THE DETERMINISTIC-ARBITER PROPERTY: with default config, an LLM's SAFE
+    verdict cannot return a prompt the deterministic layer flagged to LOW.
+
+    Measured justification, not preference. On the 546-prompt deepset
+    benchmark the judge exercised clear-authority 17 times: 13 genuine attacks
+    cleared, 4 genuine benign cleared — 3.25 true positives destroyed per
+    false positive saved. Denying it moves recall 55.67% -> 62.07% and F1
+    0.671 -> 0.712 for +1.17pp FPR.
+    """
+    drive_to_stage4(score=0.11, threshold_medium=0.10, threshold_high=0.30)  # lower half
+    monkeypatch.setattr(risk_mod, "semantic_judge", lambda p: "SAFE")
+
+    risk, details = risk_mod.assess_risk("mild ambiguous prompt")
+
+    assert risk == "MEDIUM", "a SAFE verdict must not clear a flagged prompt by default"
+    # Distinct from *_restricted so an audit can tell "score was high anyway"
+    # apart from "policy denied the arbiter clear-authority".
+    assert details["source"] == "semantic_judge_override_capped"
+
+
+@pytest.fixture
+def llama_guard_says_safe(monkeypatch):
+    """
+    Makes the REAL llama_guard_arbitration run, with only the multi-GB model
+    replaced by a stub verdict. Stubbing the function itself would test
+    nothing — the branch under test lives inside it.
+    """
+    stub = mock.Mock()
+    stub.available.return_value = (True, "stubbed")
+    stub.classify.return_value = {"verdict": "safe", "categories": ""}
+    monkeypatch.setattr("core.detectors.get_detector", lambda name: stub)
+    from core.circuit_breaker import llama_guard_breaker
+    llama_guard_breaker.reset()
+    return stub
+
+
+def test_llama_guard_safe_is_also_capped_by_default(monkeypatch, drive_to_stage4,
+                                                    llama_guard_says_safe):
+    """The cap is a property of the arbitration stage, not of one backend."""
+    drive_to_stage4(score=0.11, threshold_medium=0.10, threshold_high=0.30)
+    # Undo the fixture's blanket disabling of Llama Guard so the real
+    # arbitration path runs against the stubbed detector.
+    monkeypatch.setattr(risk_mod, "llama_guard_arbitration",
+                        _REAL_LLAMA_GUARD_ARBITRATION)
+
+    risk, details = risk_mod.assess_risk("mild ambiguous prompt")
+
+    assert risk == "MEDIUM"
+    assert details["source"] == "llama_guard_override_capped"
+
+
+def test_llama_guard_safe_clears_when_permitted(monkeypatch, drive_to_stage4,
+                                                llama_guard_says_safe):
+    """Same backend, opposite policy — proves the gate is what decides."""
+    monkeypatch.setattr(risk_mod.settings, "JUDGE_MAY_CLEAR_TO_LOW", True)
+    drive_to_stage4(score=0.11, threshold_medium=0.10, threshold_high=0.30)
+    monkeypatch.setattr(risk_mod, "llama_guard_arbitration",
+                        _REAL_LLAMA_GUARD_ARBITRATION)
+
+    risk, details = risk_mod.assess_risk("mild ambiguous prompt")
+
+    assert risk == "LOW"
+    assert details["source"] == "llama_guard_override"
 
 
 def test_safe_verdict_in_upper_half_still_restricted_to_medium(monkeypatch, drive_to_stage4):
@@ -136,6 +211,9 @@ def test_anchors_only_fallback_path_gets_the_same_fix(monkeypatch):
     monkeypatch.setattr(risk_mod, "save_cache_entry", lambda *a, **k: None)
     monkeypatch.setattr(risk_mod, "hard_ban_triggered", lambda p: (False, None))
     monkeypatch.setattr(risk_mod, "llama_guard_arbitration", lambda *a, **k: None)
+    # Clear-authority granted: this test is about the BAND SPLIT working on the
+    # anchors-only path, which is only observable when clearing is permitted.
+    monkeypatch.setattr(risk_mod.settings, "JUDGE_MAY_CLEAR_TO_LOW", True)
     monkeypatch.setattr(risk_mod, "SEMANTIC_THRESHOLD_MEDIUM", 0.10)
     monkeypatch.setattr(risk_mod, "SEMANTIC_THRESHOLD_HIGH", 0.30)
     monkeypatch.setattr(risk_mod, "collect_semantic_signals", lambda p, v: {
@@ -157,6 +235,7 @@ def test_pre_fix_behaviour_would_have_failed_this_test(monkeypatch, drive_to_sta
     inline shows it always evaluates True for any score that reached Stage 4,
     proving the fix changed real behaviour rather than being a no-op refactor.
     """
+    monkeypatch.setattr(risk_mod.settings, "JUDGE_MAY_CLEAR_TO_LOW", True)
     drive_to_stage4(score=0.11, threshold_medium=0.10, threshold_high=0.30)
     old_threat_present = 0.11 >= 0.10  # the removed computation, literally
     assert old_threat_present is True  # tautological, as the bug's name says
