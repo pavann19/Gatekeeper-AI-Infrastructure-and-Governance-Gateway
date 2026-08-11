@@ -66,7 +66,7 @@ The system employs robust error handling and degradation strategies.
 
 ---
 
-## 4. Future Roadmap
+## 5. Future Roadmap
 Future iterations could focus on:
 * **Distributed State**: Migrating the in-memory LRU cache to Redis with RediSearch.
 * **Streaming Architectures**: Implementing proxying for `StreamingResponse` objects, allowing real-time token redaction without buffering the entire LLM response.

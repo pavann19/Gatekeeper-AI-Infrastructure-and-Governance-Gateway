@@ -4,7 +4,6 @@ from core.semantic_judge import output_judge
 from core.logger import get_logger
 from core.embeddings import get_embedding, cosine_similarity
 from core.vector_store import educational_store
-import asyncio
 
 logger = get_logger(__name__)
 

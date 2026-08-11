@@ -8,7 +8,6 @@ import threading
 from core.config import CACHE_SIMILARITY_THRESHOLD
 from core.cache_backend import build_exact_cache_backend
 from core.logger import get_logger
-from core.embeddings import cosine_similarity
 import numpy as np
 
 logger = get_logger(__name__)

@@ -82,7 +82,7 @@ def _ensure_faiss_initialized():
         _faiss_initialized = True
 
 # --- 2. SYMBOLIC RULES (from centralized policy loader) ---
-from core.policy_loader import get_jailbreak_patterns, get_hard_ban_keywords
+from core.policy_loader import get_jailbreak_patterns, get_hard_ban_keywords  # noqa: E402
 
 JAILBREAK_PATTERNS = get_jailbreak_patterns()
 HARD_BAN_KEYWORDS = get_hard_ban_keywords()
@@ -621,7 +621,7 @@ def assess_risk(prompt: str, background_scheduler=None) -> tuple:
 
         # SAFETY: Never downgrade a HIGH-risk cached decision
         if cached_risk == "HIGH":
-            logger.info(f"⚡ CACHE HIT (LOCKED HIGH) — cached HIGH cannot be downgraded.")
+            logger.info("⚡ CACHE HIT (LOCKED HIGH) — cached HIGH cannot be downgraded.")
             return "HIGH", {"semantic_score": cached_score, "source": "cache_locked_high",
                             "educational_context": False, "domain_score": None,
                             "topicality": "UNKNOWN",

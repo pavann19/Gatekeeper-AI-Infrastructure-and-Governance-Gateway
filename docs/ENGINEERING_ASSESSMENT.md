@@ -1720,20 +1720,75 @@ Ranked, quick wins first. Several of these are visible in the first thirty secon
 
 | # | Issue | Location | Action |
 |---|---|---|---|
-| 1 | Debug logging harness shipped in production code | `core/risk.py:19-35`, six `_agent_dbg_log` call sites | Delete entirely. This is agent scaffolding and it writes to `debug-5c1a66.log` on every request. |
-| 2 | 125 MB of build artefacts and a Next.js `node_modules` committed | `archive/experimental/gatekeeper-frontend/.next/`, `node_modules/` | Delete `archive/` from the working tree; it is 90% of the repo's file count. |
-| 3 | 9.3 MB cache + 20 KB audit log + `debug-5c1a66.log` committed | repo root | `.gitignore` + `git rm --cached` |
-| 4 | Loose scripts in repo root | `fix_repo.py`, `find_sentinal.py`, `repro_f1_bug.py`, `smoke_test_assess_risk.py`, `evaluate_final.py` | Move to `scripts/` or delete |
-| 5 | A failing test committed on `main` | `tests/test_api.py:23` | `assert response.json() == {"status": "healthy"}` cannot pass — `/health` returns a `checks` dict. Assert on `data["status"] in {...}` instead. |
-| 6 | Duplicate `## 4.` section headings | `Technical_Report.md:62,69` | Renumber |
-| 7 | Backwards-compat constant re-exports defeat the settings object | `core/config.py:36-52` | Module-level `SEMANTIC_THRESHOLD_HIGH = settings.X` snapshots at import, so env overrides and per-tenant config can never take effect. Import `settings` directly at call sites. |
-| 8 | `core/policy.py` prints to stdout, uses a global, loads at import | whole file | Use the logger; make loading explicit and injectable |
-| 9 | No linting, formatting, or type checking in CI | `.github/workflows/ci.yml` | Add `ruff`, `black --check`, `mypy` on `core/` |
-| 10 | No coverage measurement or gate | CI | `pytest --cov=core --cov-fail-under=70` |
-| 11 | Two parallel benchmark implementations that disagree | `tests/benchmark.py`, `tests/eval_harness.py`, `benchmarks/evaluate_accuracy.py`, `evaluate_final.py` | Consolidate to one harness. Four evaluation scripts is a credibility problem in a report. |
-| 12 | `core/privacy.py` skips NER whenever regex matches | `privacy.py:56-60` | The comment admits it: an email + an unredacted name means the name leaks. For a *privacy* product this is the wrong trade. Run both; the NER cost is ~10 ms with the pipes already disabled. |
-| 13 | Bare `except Exception` returning a sentinel string | `semantic_judge.py:50` | `JUDGE_OFFLINE` conflates timeout, connection refused, and JSON errors. Distinguish them — retry logic and metrics both need it. |
-| 14 | No test isolation from real models | `tests/` | `test_privacy` and `test_api::test_health_check` load spaCy and TensorFlow; the suite takes 112 s. Fixtures + mocks. |
+| # | Issue | Status |
+|---|---|---|
+| 1 | Debug logging harness shipped in production code | **Already resolved** — no `_agent_dbg_log` in `core/risk.py`; gone by the time of this pass. |
+| 2 | 125 MB of build artefacts and a Next.js `node_modules` committed | **Already resolved** — `archive/` is untracked and `.gitignore`'d (`git ls-files archive/` returns nothing). |
+| 3 | 9.3 MB cache + audit log + `debug-*.log` committed | **Already resolved** — none are tracked; `.gitignore` covers `semantic_cache*.json`, `audit.jsonl`, `debug-*.log`. |
+| 4 | Loose scripts in repo root | **FIXED 2026-08-11** — see below. |
+| 5 | A failing test committed on `main` | **Already resolved** — `tests/test_api.py::test_health_check` asserts against the real `checks` dict shape. |
+| 6 | Duplicate `## 4.` section headings | **FIXED 2026-08-11** — `Technical_Report.md`'s second one renumbered to `## 5.` |
+| 7 | Backwards-compat constant re-exports defeat the settings object | Open. `core/config.py`'s module-level `SEMANTIC_THRESHOLD_HIGH = settings.X` still snapshots at import; several modules still import the old-style constants rather than `settings` directly. Left open — fixing it means auditing every call site, not a hygiene-pass change. |
+| 8 | `core/policy.py` prints to stdout, uses a global, loads at import | Open. |
+| 9 | No linting or coverage gate in CI | **FIXED 2026-08-11** — `ruff` added as a hard gate; see below for why `black`/`mypy` were deliberately NOT added in this pass. |
+| 10 | No coverage measurement or gate | **FIXED 2026-08-11** — `pytest --cov --cov-fail-under=65`; see below for why 65, not the originally-suggested 70. |
+| 11 | Two parallel benchmark implementations that disagree | Partially addressed — `evaluate_final.py` (a superseded, unreferenced duplicate of `tests/benchmark.py`) deleted. `tests/eval_harness.py` and `benchmarks/evaluate_accuracy.py` still exist; a full consolidation is out of scope for this pass. |
+| 12 | `core/privacy.py` skips NER whenever regex matches | Open. |
+| 13 | Bare `except Exception` returning a sentinel string | Partially addressed by §1j's `_judge_via_llama_guard` work, which already distinguishes non-200 (backend failure) from malformed-but-200 (not a backend failure) at that call site. `output_judge`'s equivalent path is untouched. |
+| 14 | No test isolation from real models | Improved as a side effect of other work — the suite is measured at 60–130s depending on machine load, not audited directly in this pass. |
+
+### §4 item 4 and the CI gates — what changed 2026-08-11
+
+**Loose root scripts.** Four untracked, one-off debugging artefacts —
+`find_sentinal.py` and `fix_repo.py` from a project rename (SentinAL →
+Gatekeeper), `repro_f1_bug.py` and `smoke_test_assess_risk.py` from a
+since-fixed F1 bug repro (§1n) — were referenced nowhere except this
+assessment's own issue list, and deleted rather than moved: nothing was
+importing them, and a one-off repro script has no ongoing home in
+`scripts/`. `evaluate_final.py` (tracked) was a single-commit relic from the
+original import, importing the config module's old-style constants and
+duplicating what `tests/benchmark.py` now does more completely — deleted as
+part of item 11, not moved.
+
+**CI gates.** `ruff check core/ api/` is now a blocking step, scoped to the
+request-path code rather than the whole tree (`archive/`, `scripts/`,
+`tests/` have a different bar). It found 12 real, pre-existing issues — 7
+unused imports, 2 ambiguous single-letter variable names, a stray f-string
+prefix, a one-line `if:` — all fixed alongside adding the gate.
+`line-length` in `pyproject.toml` is set to 136, the length of the longest
+pre-existing line, rather than a smaller conventional number: enforcing a
+new number would have meant reformatting 17 working log/comment lines this
+pass did not otherwise touch, for no correctness gain.
+
+`black --check` and `mypy` were **not** added, deliberately, and this is a
+disclosed gap rather than a silent omission. `black --check --diff` on
+`core/` and `api/` as they stand today would reformat 28 of the ~30 files —
+every one of them whitespace/wrapping only, but a diff of that size buries
+the actually-meaningful changes from every commit for months afterward, and
+belongs in its own explicitly-reviewed reformat commit, not folded into a
+hygiene pass. `mypy core/` doesn't even reach type-checking yet — the
+package has no `__init__.py` layout, so it fails immediately on module-path
+resolution, and getting it running would mean either restructuring the
+package or configuring `--explicit-package-bases`, then facing down however
+many pre-existing type errors a fully untyped 2,000-line codebase surfaces on
+a first run. Both are real, both are correctly-sized as their own separate
+pieces of work.
+
+**Coverage gate.** Set at `--cov-fail-under=65`, not the 70 this document
+originally suggested, because 70 was aspirational rather than measured:
+actual coverage of `core/` + `api/` is 69% today. 65 leaves a few points of
+margin so incidental variance doesn't flake CI, while still catching a real
+regression — a gate is meant to hold a floor, not to be a target hit on day
+one. Measuring it surfaced a genuine finding: `core/audit.py` and
+`core/intent.py` are at 0% coverage because nothing in the codebase imports
+either of them (checked for dynamic/string-based imports too — there are
+none). That is very likely dead code, not a testing gap, and is flagged here
+rather than acted on, since deleting a module is a bigger call than a
+hygiene pass should make unilaterally.
+
+Verified: the full `ruff` + `pytest --cov --cov-fail-under=65` sequence was
+run locally exactly as CI runs it before committing, and passed
+(292 tests, 68.61% coverage).
 
 **Test coverage is the weakest area.** Current suite: 10 tests, of which one fails. There is no test for `fuse_signals` (the core decision logic!), none for `policy_decision`, none for cache TTL/LRU/eviction, none for the auth bypass, none for any adversarial input. For the report you want a table of *behavioural* test cases — obfuscated jailbreaks, unicode homoglyphs, base64-encoded injections, multi-turn escalation — with pass/fail. `core/normalizer.py` exists to defeat obfuscation and is entirely untested.
 

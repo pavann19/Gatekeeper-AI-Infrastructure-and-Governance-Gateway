@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any, List
+from typing import Dict, Any, List
 
 class AssessRequest(BaseModel):
     prompt: str = Field(

@@ -23,6 +23,7 @@ semantic_cache.json
 semantic_cache_exact.json
 evaluation_results.txt
 .pytest_cache/
+.coverage
 logging/
 *.jsonl
 

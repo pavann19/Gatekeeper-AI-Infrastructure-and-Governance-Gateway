@@ -30,8 +30,23 @@ jobs:
         pip install -r requirements-ci.txt
         python -m spacy download en_core_web_sm
 
-    - name: Run Pytest
+    - name: Lint (ruff)
+      run: |
+        # Scoped to core/ and api/ — see pyproject.toml for why. Blocking:
+        # the 12 pre-existing issues here were cheap fixes, not a reason to
+        # ship this as report-only.
+        ruff check core/ api/
+
+    - name: Run Pytest with coverage
       env:
         PYTHONPATH: ${{ github.workspace }}
       run: |
-        pytest tests/ -v --tb=short
+        # Gate set at 65%, a few points BELOW the 69% measured when this was
+        # introduced — margin so incidental variance doesn't flake CI, not a
+        # ceiling. Ratchet the number up as coverage genuinely improves;
+        # lowering it should require the same scrutiny as any other test
+        # deletion. core/audit.py and core/intent.py sit at 0% because
+        # nothing imports them (see docs/ENGINEERING_ASSESSMENT.md §4) —
+        # that is a dead-code question, not a reason to write tests for
+        # unreachable code just to move this number.
+        pytest tests/ -v --tb=short --cov=core --cov=api --cov-report=term-missing --cov-fail-under=65

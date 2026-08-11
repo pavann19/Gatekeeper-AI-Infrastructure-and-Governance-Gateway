@@ -62,7 +62,7 @@ def fetch_latest_threats():
                 
                 # Heuristic Parsing: Grab paragraphs that look like prompts (long text)
                 # In a real system, we would use specific parsers for STIX/TAXII or JSON feeds.
-                lines = [l.strip() for l in raw_text.split('\n') if len(l) > 60]
+                lines = [line.strip() for line in raw_text.split('\n') if len(line) > 60]
                 
                 # Take top candidates to avoid bloat in this research demo
                 candidates = lines[:5]
