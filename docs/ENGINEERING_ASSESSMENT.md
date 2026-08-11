@@ -1830,3 +1830,104 @@ Two documents from one body of work:
 Phase 1 is roughly a day. Phase 2 is one to two weeks. Phase 3 is where "solo project" becomes "product" and is a month or more of real work.
 
 You do not need Phase 3 for MSc admissions. You need Phase 1 completed, Phase 2 mostly done, and a report that is rigorous about what was measured and honest about what was not. A committee will be far more impressed by a well-calibrated system with a clear-eyed limitations section than by a broad feature list with a 37% accuracy figure buried in it.
+
+---
+
+# V2 Planning: Phase 0 (Truth Audit) and Phase 1 (Frozen Baseline)
+
+Everything above this line is the V1 engineering assessment. Everything below
+is the reference point V2 work is measured against — a snapshot as of
+2026-08-11, not a living summary. When a V2 change alters one of these
+numbers, it gets a new dated entry that says so; this section itself does not
+get silently edited to match.
+
+## Phase 0 — Component truth audit
+
+The point of this table is that V2 planning was, in at least three places,
+reasoning about a system that does not match what is deployed (§1l's
+`prompt_guard_2`-inflated AUC figure and §"harmful-content recall" both being
+read from configurations that never ran together). Every row below is
+answered by reading the code, not by recalling what a prior document said.
+
+| Component | What actually exists | Evidence |
+|---|---|---|
+| **API Gateway** | Auth (verified API key → `Principal`, zero-trust default to GENERAL), per-caller rate limiting (token bucket, key_id or peer address), no multi-tenancy — `Principal.tenant` is threaded through but nothing branches policy or thresholds on it. | [core/auth.py](core/auth.py), [core/rate_limit.py](core/rate_limit.py) |
+| **Input / Data** | PII redaction (regex + spaCy NER, §4 item 12 notes NER is skipped once regex hits — a real gap). Obfuscation normalization exists (`core/normalizer.py`) but is only 33% covered by tests. **No secrets/credential detection anywhere** — grepped `core/privacy.py` and `core/normalizer.py`, nothing matches. | [core/privacy.py](core/privacy.py), [core/normalizer.py](core/normalizer.py) |
+| **Security Detection** | Deployed: `anchors` (embedding centroid) + 3 live model detectors (`protectai_injection`, `madhurjindal_jailbreak`, `toxic_bert`). Registry also declares `deepset_injection`, `jailbreak_classifier`, `prompt_guard_2`, `nemoguard_jailbreak`, `llama_guard_3_1b/8b`, `prompt_guard_1` — **none of these participate in live fusion.** `llama_guard_3_1b` exists as a separate, non-fusion synchronous fallback in `judge_arbitration`, gated by a 2.3GB memory precheck. | `LIVE_MODEL_DETECTORS` in [core/fusion.py:53](core/fusion.py) |
+| **Risk / Fusion** | Exactly the 4 detectors above, via a logistic-regression policy loaded from `models/fusion_policy.json` (v2, with a `per_class` section — §"per-class thresholds"). Output today is a single scalar (`fused_threat_score`) plus a `triggering_class` label when per-class fires — **not yet the full per-class risk vector** the V2 plan calls for; the machinery to produce one already exists (`class_scores` is computed internally) but isn't surfaced. | [core/fusion.py](core/fusion.py) |
+| **Policy** | One global `policy_rules.json`: `{capability: {risk_level: action}}`, 3 capability tiers × 3 risk levels. No tenant, no application, no model dimension — confirmed by grep, zero matches for "tenant" in `core/policy.py` or `policy_rules.json`. | [policy_rules.json](policy_rules.json) |
+| **Arbitration** | Reachable — `judge_available()` probes Ollama's `/tags` endpoint before any benchmark run, circuit-breaker guarded (3-failure trip, 30s cooldown, half-open probe), Llama Guard native-protocol path added §1j. Fires on **6.6% of traffic** (36/546 in the last full benchmark) — already the exception path, not the common case. | [core/semantic_judge.py](core/semantic_judge.py), [core/circuit_breaker.py](core/circuit_breaker.py) |
+| **Decision** | `policy_decision(capability, risk_level)` — deterministic lookup, LLM judge output is one input to `risk_level`, never a direct override of the policy table. This is already the "Deterministic Arbiter" property the V2 diagram calls for; it isn't a V2 addition, it's a V1 property worth stating explicitly so V2 doesn't accidentally regress it. | [core/policy.py](core/policy.py) |
+| **Output Security** | **Already exists**, contrary to the V2 plan's Phase 12 framing it as new. PII leakage check, toxicity, semantic-grounding/hallucination check. Exposed at `/api/v1/assess_output`, hardened today with the same auth/rate-limit/timeout/size-cap controls as the input path. | [core/output_guardrails.py](core/output_guardrails.py) |
+| **Audit** | `log_event` records: timestamp, `request_id` (added today, §1q), capability, risk, decision, prompt_hash (not raw prompt), semantic_score, source, educational_context, domain_score, symbolic_triggered, judge_invoked, dynamic_threat_score. **Missing: tenant, policy_version, detector-level scores, arbitration detail.** All were named as V2 audit requirements — none require new instrumentation, all are already computed in `details` and simply not threaded into `log_event`. | [core/logger.py](core/logger.py) |
+| **AI Model invocation** | Gatekeeper does not call a protected downstream LLM in the production path — it is a gateway a caller integrates in front of their own model. `core/llm.py` exists only for `scripts/cli_demo.py`. This matches the V2 "MVP" framing (`AI Application → Gatekeeper → AI Model`) already, not a gap to close. | [core/llm.py](core/llm.py) |
+
+Three corrections to the V2 planning documents this audit produced:
+
+1. **Output Security is not new work** (Phase 12) — it needs evaluation and
+   extension, not construction.
+2. **The risk vector is closer than it looked** — `class_scores` is already
+   computed inside `fused_threat_score`, just not returned. Surfacing it is
+   an API-shape change, not new modeling work.
+3. **Secrets detection is a genuine zero**, not a partially-built gap. If
+   Phase 5's detector-gap analysis includes it, it starts from nothing.
+
+## Phase 1 — Frozen V1 baseline
+
+Two prior planning documents this session both stated numbers that don't
+correspond to any single deployed configuration — 0.952 AUC / 86.1% recall
+(which includes `prompt_guard_2`, never in `LIVE_MODEL_DETECTORS`) and 62.6%
+harmful-content recall (which includes `llama_guard_3_1b` as an in-fusion
+feature, measured on a 554-row stratified sample, not the deployed 4-detector
+pool on the full suite). Every number below is instead traced to the exact
+evidence file that produced it, specifically so this doesn't happen a third
+time.
+
+### Detection — deployed 4-detector pool, offline, out-of-fold
+
+| Metric | Value | Source |
+|---|---|---|
+| Evaluation prompts | 6,933 | `_evidence/ensemble_analysis.json` → `config` |
+| Fusion AUC | 0.944 [0.936, 0.951] | this doc, §1d-era table, "ensemble: learned (out-of-fold)" row (line ~419) — **not** `_evidence/ensemble_analysis.json`, which now holds a later 5-detector rerun including `prompt_guard_2` and reports a different, non-deployed 0.9516/86.1% figure |
+| Fusion recall @ 5% FPR | 82.8% [80.8, 84.7] | same row |
+| Harmful-content recall (global policy) | 28.7% | `_evidence/per_class_threshold_analysis.json` → `global.recall.harmful_content` |
+| Harmful-content recall (per-class policy, **deployed**) | 31.5% | `_evidence/per_class_threshold_analysis.json` → `per_class.recall.harmful_content` |
+| Overall recall (per-class policy) | 83.3% | same file → `per_class.recall.overall` |
+
+### End-to-end — 546-prompt deepset benchmark, llama-guard3 judge, clean run
+
+| Metric | Value | Source |
+|---|---|---|
+| Recall (Operational: HIGH or MEDIUM) | 55.67% | `benchmark_results.json` → `cold` |
+| Precision | 84.33% | same |
+| F1 | 0.671 | same |
+| FPR | 6.12% | same |
+| Recall (Strict: HIGH only) | 53.20% | same |
+| Precision (Strict) | 88.52% | same |
+| Judge invocation rate | 6.6% (36/546) | same |
+| p50 latency, cold | 938.6 ms | same |
+| p95 latency, cold | 12,664.8 ms | same |
+| p99 latency, cold | 19,261.3 ms | same |
+| p50 / p95 / p99, warm (cache) | 51.1 / 110.8 / 243.7 ms | `benchmark_results.json` → `warm` |
+| Cache speedup | 30.85× (this run) — 30–52× across runs | same |
+
+### System
+
+| Metric | Value | Source |
+|---|---|---|
+| Test count | 292 | CI run [31458323087](https://github.com/pavann19/Gatekeeper-AI-Infrastructure-and-Governance-Gateway/actions/runs/31458323087) |
+| Coverage (`core/` + `api/`) | 68.61% | same, `--cov-report=term-missing` |
+| Dead code found during coverage measurement | `core/audit.py`, `core/intent.py` (0% coverage, zero importers, no dynamic imports) | §4 audit, 2026-08-11 |
+
+**What is explicitly NOT part of this baseline**, because it was never a
+deployed configuration and must not be compared against as if it were:
+
+- 0.9516 AUC / 86.1% recall — the 5-detector pool including `prompt_guard_2`
+- 62.6% harmful-content recall — 554-row sample, `llama_guard_3_1b` in-fusion
+- Any number from `evaluate_final.py` (deleted, §4) or `tests/eval_harness.py`
+  (still present, not reconciled against `tests/benchmark.py`)
+
+Every V2 experiment result reported from here forward states which of these
+two benchmarks (offline 6,933-row suite, or end-to-end 546-row deepset run)
+it was measured against, and at what FPR budget — a number without both is
+not comparable to anything in this table.
