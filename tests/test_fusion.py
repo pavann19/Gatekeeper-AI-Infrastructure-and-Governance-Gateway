@@ -274,7 +274,11 @@ def test_fusion_key_absent_also_falls_back(domain_mode):
     "verdict,threat_present,expected_risk,expected_source",
     [
         ("DANGEROUS", False, "HIGH", "semantic_judge"),
-        ("SAFE", False, "LOW", "semantic_judge_override"),
+        # By DEFAULT the arbiter has no clear-authority: a SAFE verdict caps at
+        # MEDIUM even in the lower band. Measured — the judge spent that
+        # authority to clear 13 attacks and only 4 benign prompts.
+        # See core/config.py::JUDGE_MAY_CLEAR_TO_LOW.
+        ("SAFE", False, "MEDIUM", "semantic_judge_override_capped"),
         # A SAFE verdict must not fully clear a prompt that tripped a threat signal.
         ("SAFE", True, "MEDIUM", "semantic_judge_override_restricted"),
         ("AMBIGUOUS", False, "MEDIUM", "semantic_judge_ambiguous"),

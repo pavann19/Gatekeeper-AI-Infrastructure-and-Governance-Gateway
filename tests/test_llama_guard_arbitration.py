@@ -49,7 +49,21 @@ def test_unsafe_verdict_is_high(monkeypatch):
     assert result == ("HIGH", "llama_guard_arbitration")
 
 
-def test_safe_verdict_is_low_when_no_threat_present(monkeypatch):
+def test_safe_verdict_is_capped_at_medium_by_default(monkeypatch):
+    """
+    Default posture denies the arbiter clear-authority, so even with no
+    upstream threat signal a SAFE verdict caps at MEDIUM. See
+    core/config.py::JUDGE_MAY_CLEAR_TO_LOW for the measured justification.
+    """
+    _patch_detector(monkeypatch, StubLlamaGuard(verdict="safe"))
+    result = llama_guard_arbitration("what's the weather", threat_present=False)
+    assert result == ("MEDIUM", "llama_guard_override_capped")
+
+
+def test_safe_verdict_is_low_when_clear_authority_is_granted(monkeypatch):
+    """Opposite policy, same backend — proves the config gate is what decides."""
+    from core.config import settings
+    monkeypatch.setattr(settings, "JUDGE_MAY_CLEAR_TO_LOW", True)
     _patch_detector(monkeypatch, StubLlamaGuard(verdict="safe"))
     result = llama_guard_arbitration("what's the weather", threat_present=False)
     assert result == ("LOW", "llama_guard_override")

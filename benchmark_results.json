@@ -8,7 +8,7 @@
         "meta_intent_threshold": 0.3,
         "domain_threshold": 0.22,
         "embedding_model": "all-mpnet-base-v2",
-        "judge_model": "llama3.2"
+        "judge_model": "llama-guard3"
     },
     "dataset": {
         "name": "deepset/prompt-injections",
@@ -16,54 +16,53 @@
     },
     "cold": {
         "run_name": "Cold Cache (uncached, FAISS)",
-        "avg_latency_ms": 1608.2055785713696,
-        "p50_latency_ms": 1170.1321999935317,
-        "p95_latency_ms": 5307.029600000533,
-        "p99_latency_ms": 9316.878900004667,
+        "avg_latency_ms": 2274.80244065942,
+        "p50_latency_ms": 1160.8220000052825,
+        "p95_latency_ms": 9557.577799998398,
+        "p99_latency_ms": 22557.118799995806,
         "metrics_operational": {
             "mode": "operational (HIGH or MEDIUM)",
-            "accuracy": 0.8003663003663004,
-            "precision": 0.8405797101449275,
-            "recall_tpr": 0.5714285714285714,
-            "f1": 0.6803519061583577,
-            "fpr": 0.0641399416909621,
+            "accuracy": 0.8131868131868132,
+            "precision": 0.8344370860927153,
+            "recall_tpr": 0.6206896551724138,
+            "f1": 0.7118644067796611,
+            "fpr": 0.0728862973760933,
             "confusion_matrix": {
-                "TP": 116,
-                "FP": 22,
-                "TN": 321,
-                "FN": 87
+                "TP": 126,
+                "FP": 25,
+                "TN": 318,
+                "FN": 77
             }
         },
         "metrics_strict": {
             "mode": "strict (HIGH only)",
-            "accuracy": 0.8003663003663004,
-            "precision": 0.8852459016393442,
-            "recall_tpr": 0.5320197044334976,
-            "f1": 0.6646153846153847,
+            "accuracy": 0.7948717948717948,
+            "precision": 0.8823529411764706,
+            "recall_tpr": 0.5172413793103449,
+            "f1": 0.6521739130434783,
             "fpr": 0.04081632653061224,
             "confusion_matrix": {
-                "TP": 108,
+                "TP": 105,
                 "FP": 14,
                 "TN": 329,
-                "FN": 95
+                "FN": 98
             }
         },
         "risk_distribution": {
-            "LOW": 408,
-            "HIGH": 122,
-            "MEDIUM": 16
+            "LOW": 395,
+            "HIGH": 119,
+            "MEDIUM": 32
         },
         "source_distribution": {
-            "fusion_clean_pass": 387,
-            "fusion_threat_critical": 102,
-            "semantic_judge_override": 21,
-            "semantic_judge": 11,
-            "semantic_judge_ambiguous": 4,
+            "fusion_clean_pass": 395,
+            "fusion_threat_critical": 106,
+            "semantic_judge_override_restricted": 14,
+            "semantic_judge_override_capped": 18,
             "semantic_meta_intent": 6,
             "symbolic_rule": 3,
-            "semantic_judge_override_restricted": 12
+            "semantic_judge": 4
         },
-        "judge_invocations": 48,
+        "judge_invocations": 36,
         "topicality": {
             "mode": "off",
             "distribution": {
@@ -76,46 +75,46 @@
     },
     "warm": {
         "run_name": "Warm Cache (LRU + FAISS)",
-        "avg_latency_ms": 68.13909011002696,
-        "p50_latency_ms": 56.42000000079861,
-        "p95_latency_ms": 118.78140000044368,
-        "p99_latency_ms": 264.1234999973676,
+        "avg_latency_ms": 96.98321190452398,
+        "p50_latency_ms": 82.26460000150837,
+        "p95_latency_ms": 171.25420000229497,
+        "p99_latency_ms": 342.6312999945367,
         "metrics_operational": {
             "mode": "operational (HIGH or MEDIUM)",
-            "accuracy": 0.8003663003663004,
-            "precision": 0.8405797101449275,
-            "recall_tpr": 0.5714285714285714,
-            "f1": 0.6803519061583577,
-            "fpr": 0.0641399416909621,
+            "accuracy": 0.8131868131868132,
+            "precision": 0.8344370860927153,
+            "recall_tpr": 0.6206896551724138,
+            "f1": 0.7118644067796611,
+            "fpr": 0.0728862973760933,
             "confusion_matrix": {
-                "TP": 116,
-                "FP": 22,
-                "TN": 321,
-                "FN": 87
+                "TP": 126,
+                "FP": 25,
+                "TN": 318,
+                "FN": 77
             }
         },
         "metrics_strict": {
             "mode": "strict (HIGH only)",
-            "accuracy": 0.8003663003663004,
-            "precision": 0.8852459016393442,
-            "recall_tpr": 0.5320197044334976,
-            "f1": 0.6646153846153847,
+            "accuracy": 0.7948717948717948,
+            "precision": 0.8823529411764706,
+            "recall_tpr": 0.5172413793103449,
+            "f1": 0.6521739130434783,
             "fpr": 0.04081632653061224,
             "confusion_matrix": {
-                "TP": 108,
+                "TP": 105,
                 "FP": 14,
                 "TN": 329,
-                "FN": 95
+                "FN": 98
             }
         },
         "risk_distribution": {
-            "LOW": 408,
-            "HIGH": 122,
-            "MEDIUM": 16
+            "LOW": 395,
+            "HIGH": 119,
+            "MEDIUM": 32
         },
         "source_distribution": {
-            "cache": 424,
-            "cache_locked_high": 122
+            "cache": 427,
+            "cache_locked_high": 119
         },
         "judge_invocations": 0,
         "topicality": {
@@ -128,5 +127,5 @@
             "note": "Scoping signal. Excluded from the safety confusion matrix by design."
         }
     },
-    "speedup": 23.601805894010834
+    "speedup": 23.45563109313053
 }
