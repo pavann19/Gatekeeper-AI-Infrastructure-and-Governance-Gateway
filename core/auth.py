@@ -42,7 +42,7 @@ import hmac
 import json
 import os
 import secrets
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from core.config import (
     CAPABILITY_ELEVATED,

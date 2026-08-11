@@ -1,0 +1,20 @@
+[tool.ruff]
+# Scoped to core/ and api/ deliberately, not the whole tree: archive/ is
+# 125MB of vendored/experimental snapshots this project never lints (see
+# .gitignore), and scripts/ + tests/ are one-off/CLI code with a different
+# bar. Linting only the request-path code keeps the gate meaningful instead
+# of noisy.
+include = ["core/**/*.py", "api/**/*.py"]
+# 136 covers the longest pre-existing line (api/main.py) without reformatting
+# 17 working log/comment lines just to satisfy a number picked after the
+# fact. Chosen from what the codebase actually contains, not an arbitrary
+# style target.
+line-length = 136
+
+[tool.ruff.lint]
+# The default rule set (E/F) is what caught the 12 pre-existing issues fixed
+# alongside this config (unused imports, ambiguous single-letter names, a
+# stray f-string). Deliberately NOT enabling stricter rule families (e.g.
+# import sorting, docstring rules) yet — this file is establishing that CI
+# enforces *something*, not attempting a full style migration in one pass.
+select = ["E", "F"]

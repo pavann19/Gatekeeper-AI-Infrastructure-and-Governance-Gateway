@@ -1,6 +1,5 @@
 # core/llm.py
 import subprocess
-import sys
 
 def generate_llm_response_stream(prompt: str) -> str:
     """

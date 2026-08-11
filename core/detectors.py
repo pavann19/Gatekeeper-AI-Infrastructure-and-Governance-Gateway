@@ -144,7 +144,7 @@ class TransformerDetector(Detector):
                  multi_label=False, max_length=256, trained_on=(), description=""):
         self.name = name
         self.model_id = model_id
-        self.positive_labels = {l.lower() for l in positive_labels}
+        self.positive_labels = {label.lower() for label in positive_labels}
         self.targets = tuple(targets)
         self.multi_label = multi_label
         self.max_length = max_length

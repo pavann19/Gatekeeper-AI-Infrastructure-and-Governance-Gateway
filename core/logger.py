@@ -1,10 +1,8 @@
 # core/logger.py
-import json
 import hashlib
 from datetime import datetime
 import logging
 from pythonjsonlogger import jsonlogger
-import os
 
 # --- CONFIGURE STRUCTURED LOGGING ---
 logger = logging.getLogger("gatekeeper")
@@ -31,7 +29,8 @@ def get_logger(name="gatekeeper"):
     return logging.getLogger(name)
 
 def log_event(capability, prompt, risk, decision, metadata=None):
-    if metadata is None: metadata = {}
+    if metadata is None:
+        metadata = {}
     
     timestamp = datetime.now().isoformat()
     prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
