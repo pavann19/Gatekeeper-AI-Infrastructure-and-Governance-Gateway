@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 class AssessRequest(BaseModel):
     prompt: str = Field(
@@ -7,6 +7,27 @@ class AssessRequest(BaseModel):
         min_length=1,
         max_length=50_000,
         description="The user prompt to analyze.",
+    )
+
+    # Optional. When present, /api/v1/assess runs BOTH input and output
+    # assessment in one call — see api/main.py's "Output Guard" step for why
+    # this exists: the Phase 0 V2 audit found Output Guard was a separate
+    # endpoint a caller had to remember to invoke themselves, which is not a
+    # property an MVP integration should require. This does NOT make
+    # Gatekeeper call the caller's LLM — the caller still generates the
+    # response and submits it here alongside the original prompt, in the
+    # pattern "assess input -> call your own LLM -> submit both here". Bounded
+    # identically to AssessOutputRequest.response_text for the same reason: a
+    # limit either field could tolerate but the other couldn't would just
+    # move the problem.
+    response_text: Optional[str] = Field(
+        None,
+        min_length=1,
+        max_length=50_000,
+        description="Optional: the LLM's response to the prompt, if already "
+                    "generated. When present, output assessment runs in the "
+                    "same call and the response is assessed by the same "
+                    "machinery as /api/v1/assess_output.",
     )
 
     # NOTE: `role` was REMOVED from this schema deliberately, and its absence is
@@ -49,6 +70,18 @@ class AssessResponse(BaseModel):
     clean_prompt: str = Field(..., description="Prompt after PII redaction.")
     redacted_items: List[str] = Field(default_factory=list, description="List of redacted PII items.")
     process_time_ms: float = Field(default=0.0, description="Server-side processing latency in milliseconds.")
+    output_decision: Optional[str] = Field(
+        None,
+        description="ALLOW or BLOCK for the response_text, if one was "
+                    "submitted. None when response_text was omitted — "
+                    "distinct from ALLOW, which means it WAS checked and "
+                    "passed.",
+    )
+    output_details: Optional[Dict[str, Any]] = Field(
+        None, description="Output-assessment metadata, mirroring "
+                          "AssessOutputResponse.details. None when "
+                          "response_text was omitted.",
+    )
 
 class AssessOutputRequest(BaseModel):
     # Bounded for the same reason AssessRequest.prompt is: this text is

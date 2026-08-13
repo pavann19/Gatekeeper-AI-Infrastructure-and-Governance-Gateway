@@ -1858,7 +1858,7 @@ answered by reading the code, not by recalling what a prior document said.
 | **Policy** | *As of §1t (2026-08-13): `policy_rules.json` is tenant-scoped — `{tenant_id: {capability: {risk_level: action}}}`, required `"default"` fallback. Two tenants can now get different decisions for the same (capability, risk_level).* No application or model dimension yet, and risk THRESHOLDS (as opposed to the decision mapping) are still identical across every tenant — see §1t for that scope boundary. | [policy_rules.json](policy_rules.json), [core/policy.py](core/policy.py) |
 | **Arbitration** | Reachable — `judge_available()` probes Ollama's `/tags` endpoint before any benchmark run, circuit-breaker guarded (3-failure trip, 30s cooldown, half-open probe), Llama Guard native-protocol path added §1j. Fires on **6.6% of traffic** (36/546 in the last full benchmark) — already the exception path, not the common case. | [core/semantic_judge.py](core/semantic_judge.py), [core/circuit_breaker.py](core/circuit_breaker.py) |
 | **Decision** | `policy_decision(capability, risk_level)` — deterministic lookup, LLM judge output is one input to `risk_level`, never a direct override of the policy table. This is already the "Deterministic Arbiter" property the V2 diagram calls for; it isn't a V2 addition, it's a V1 property worth stating explicitly so V2 doesn't accidentally regress it. | [core/policy.py](core/policy.py) |
-| **Output Security** | **Already exists**, contrary to the V2 plan's Phase 12 framing it as new. PII leakage check, toxicity, semantic-grounding/hallucination check. Exposed at `/api/v1/assess_output`, hardened today with the same auth/rate-limit/timeout/size-cap controls as the input path. | [core/output_guardrails.py](core/output_guardrails.py) |
+| **Output Security** | Exists since before this audit. *As of §1u (2026-08-13): also wired into `/api/v1/assess` — a caller can submit `response_text` alongside `prompt` and get a combined decision in one call, no longer required to orchestrate two separate requests.* Still exposed standalone at `/api/v1/assess_output` for a caller checking a response without re-assessing its prompt. | [core/output_guardrails.py](core/output_guardrails.py) |
 | **Audit** | `log_event` records: timestamp, `request_id` (added today, §1q), capability, risk, decision, prompt_hash (not raw prompt), semantic_score, source, educational_context, domain_score, symbolic_triggered, judge_invoked, dynamic_threat_score. **Missing: tenant, policy_version, detector-level scores, arbitration detail.** All were named as V2 audit requirements — none require new instrumentation, all are already computed in `details` and simply not threaded into `log_event`. | [core/logger.py](core/logger.py) |
 | **AI Model invocation** | Gatekeeper does not call a protected downstream LLM in the production path — it is a gateway a caller integrates in front of their own model. `core/llm.py` exists only for `scripts/cli_demo.py`. This matches the V2 "MVP" framing (`AI Application → Gatekeeper → AI Model`) already, not a gap to close. | [core/llm.py](core/llm.py) |
 
@@ -2121,5 +2121,76 @@ Output Guard wired into the request loop automatically. Per-tenant risk
 *thresholds* (as opposed to per-tenant *decision mapping*, which this
 closes) remain unimplemented and would require re-running fusion per
 tenant — a separate, larger piece of work.
+
+---
+
+## 1u. Output Guard wired into the request loop (2026-08-13)
+
+Closes the last of the three "not built" items §1t's own audit table
+listed. Before this, checking a response required a caller to remember to
+call `/api/v1/assess_output` as a second, separate request after generating
+one — an MVP integration should not depend on the caller correctly
+orchestrating two calls in the right order.
+
+### What "wired into the loop" means here, and what it deliberately does not
+
+Gatekeeper does not call the caller's LLM itself — confirmed in the Phase 0
+audit ("Gatekeeper does not call a protected downstream LLM in the
+production path — it is a gateway a caller integrates in front of their
+own model"), and building that (managing arbitrary upstream credentials,
+streaming, multiple provider APIs) is a materially larger, different
+feature than what "Output Guard" being missing from the loop was actually
+about. What ships here: `AssessRequest` gained an optional
+`response_text`. When present, `/api/v1/assess` runs input assessment,
+and — if the input wasn't already BLOCKed — output assessment, in the
+SAME call, using the identical `assess_output` machinery
+`/api/v1/assess_output` already used. The pattern becomes "assess input ->
+call your own LLM -> submit both here," one round trip instead of two.
+`/api/v1/assess_output` is unchanged and still works standalone for a
+caller that wants to check a response without re-assessing its prompt.
+
+### The combined decision is the MORE SEVERE of the two, not the input's alone
+
+BLOCK > RESTRICT > ALLOW. A clean prompt with a leaky or toxic response
+still BLOCKs — an output check that could be overridden by a clean input
+would not be an output check. Symmetrically, a clean output cannot LOOSEN
+an input decision: RESTRICT stays RESTRICT even when the response passes,
+since the input-side reason for restricting had nothing to do with the
+response. Already-BLOCKed input skips output checking entirely — assessing
+the response of a prompt that was never allowed through spends the bounded
+pool's budget on a question nobody asked.
+
+### Audit and metrics record the FINAL combined decision
+
+`log_event` and `metrics.record_assessment` both fire once, after the
+severity comparison, with the combined `decision` — not the pre-output-check
+input decision. A record showing ALLOW for a request actually blocked on its
+response would be a falsified audit trail, the exact failure mode this
+project exists to prevent.
+
+### Verified
+
+11 new tests (355 total), covering: backward compatibility (omitting
+`response_text` behaves identically to before, and does not invoke
+`assess_output` at all), the escalate-on-dirty-output and
+never-loosen-on-clean-output properties in both directions, the
+skip-when-already-blocked short-circuit, audit/metrics reflecting the
+combined decision, the output-side timeout returning 503 with an
+explicit "neither half was assessed" message (mirroring §1q's input-side
+timeout), and the size cap applying identically to `response_text`.
+
+Sensitivity confirmed the way §1s did — by temporarily neutralizing the
+real escalation line in `api/main.py` (not mocking around it), running the
+suite, and restoring from a byte-verified backup (`diff` before AND after,
+learning from §1s's near-miss where the backup step failed silently).
+Exactly the 4 tests asserting escalation/audit-reflects-combined-decision
+behaviour failed; the other 7 were unaffected, confirming they check
+something else and aren't accidentally coupled to this code path.
+
+### What this does not close
+
+The fast/deep cascade with early exit and the per-class risk vector remain
+open — the last two items from the original Phase 0 audit's "not built"
+list.
 
 ---
