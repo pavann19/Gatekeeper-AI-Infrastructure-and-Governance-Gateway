@@ -386,13 +386,59 @@ async def assess_prompt(req: AssessRequest, request: Request, background_tasks: 
     #    keyed by the same tenant_id.
     decision, reason = policy_decision(principal.capability, risk_level, principal.tenant)
 
+    # 3b. OUTPUT GUARD, IN THE SAME CALL — closes the V2 Phase 0 gap where
+    #     Output Guard was a separate endpoint a caller had to remember to
+    #     invoke correctly after generating a response. Only runs when the
+    #     caller submitted response_text AND the input wasn't already
+    #     BLOCKed — checking the output of a prompt that was never allowed
+    #     through in the first place answers a question nobody asked.
+    #
+    #     The final decision is the MORE SEVERE of the two (BLOCK > RESTRICT
+    #     > ALLOW): a clean prompt with a leaky or toxic response must still
+    #     BLOCK — that is the entire point of checking output at all, not an
+    #     edge case of it.
+    output_decision = None
+    output_details = None
+    if req.response_text is not None and decision != "BLOCK":
+        from core.output_guardrails import assess_output
+
+        try:
+            output_decision, output_details = await _run_bounded(
+                assess_output, req.response_text
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                f"Output assessment (combined call) timed out after "
+                f"{settings.ASSESS_TIMEOUT_SECONDS}s | key_id={principal.key_id} "
+                f"request_id={request.state.request_id}"
+            )
+            metrics.assessment_timeouts_total.labels(endpoint="/api/v1/assess (output)").inc()
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    f"Output assessment did not complete within "
+                    f"{settings.ASSESS_TIMEOUT_SECONDS:g}s. Neither the prompt "
+                    f"nor the response were assessed and must not be treated "
+                    f"as approved."
+                ),
+                headers={"Retry-After": "5"},
+            )
+
+        _SEVERITY = {"ALLOW": 0, "RESTRICT": 1, "BLOCK": 2}
+        if _SEVERITY.get(output_decision, 2) > _SEVERITY.get(decision, 0):
+            decision = output_decision
+
     # Update details with reason and the identity the decision was made under.
     details["policy_reason"] = reason
     details["principal"] = principal.to_audit()
     details["request_id"] = request.state.request_id
     details["tenant"] = principal.tenant
+    if output_details is not None:
+        details["output_assessment"] = output_details
 
-    # 4. Audit Logging
+    # 4. Audit Logging — the FINAL combined decision, not the pre-output-check
+    #    input decision, so a record never shows "ALLOW" for a request that
+    #    was actually blocked on its response.
     log_event(principal.capability, clean_query, risk_level, decision, details)
 
     # 5. Metrics. After the audit write, deliberately: the audit record is the
@@ -410,7 +456,7 @@ async def assess_prompt(req: AssessRequest, request: Request, background_tasks: 
     # We'll just pass 0.0 here since the middleware calculates the true end-to-end,
     # but the client can read the header. Alternatively, we can calculate it here:
     process_time_ms = round((time.perf_counter() - request.state.start_time) * 1000, 2) if hasattr(request.state, "start_time") else 0.0
-    
+
     return AssessResponse(
         decision=decision,
         risk_level=risk_level,
@@ -420,7 +466,9 @@ async def assess_prompt(req: AssessRequest, request: Request, background_tasks: 
         details=details,
         clean_prompt=clean_query,
         redacted_items=redacted_items,
-        process_time_ms=process_time_ms
+        process_time_ms=process_time_ms,
+        output_decision=output_decision,
+        output_details=output_details,
     )
 
 @app.post("/api/v1/assess_output", response_model=AssessOutputResponse)
