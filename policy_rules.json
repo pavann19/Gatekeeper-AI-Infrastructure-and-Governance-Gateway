@@ -1,20 +1,24 @@
 {
-    "policies": {
-        "GENERAL": {
-            "HIGH": "BLOCK",
-            "MEDIUM": "RESTRICT",
-            "LOW": "ALLOW"
-        },
-        "ELEVATED": {
-            "HIGH": "BLOCK",
-            "MEDIUM": "ALLOW",
-            "LOW": "ALLOW"
-        },
-        "INTERNAL": {
-            "HIGH": "ALLOW",
-            "MEDIUM": "ALLOW",
-            "LOW": "ALLOW"
+    "default_action": "BLOCK",
+    "tenants": {
+        "default": {
+            "policies": {
+                "GENERAL": {
+                    "HIGH": "BLOCK",
+                    "MEDIUM": "RESTRICT",
+                    "LOW": "ALLOW"
+                },
+                "ELEVATED": {
+                    "HIGH": "BLOCK",
+                    "MEDIUM": "ALLOW",
+                    "LOW": "ALLOW"
+                },
+                "INTERNAL": {
+                    "HIGH": "ALLOW",
+                    "MEDIUM": "ALLOW",
+                    "LOW": "ALLOW"
+                }
+            }
         }
-    },
-    "default_action": "BLOCK"
+    }
 }

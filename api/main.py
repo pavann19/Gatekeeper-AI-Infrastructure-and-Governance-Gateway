@@ -377,8 +377,14 @@ async def assess_prompt(req: AssessRequest, request: Request, background_tasks: 
             headers={"Retry-After": "5"},
         )
 
-    # 3. Policy Arbitration — using the SERVER-RESOLVED capability.
-    decision, reason = policy_decision(principal.capability, risk_level)
+    # 3. Policy Context / Arbitration — using the SERVER-RESOLVED capability
+    #    AND the SERVER-RESOLVED tenant (never a client-asserted one, same
+    #    boundary auth.py already enforces for capability). A tenant's
+    #    policy is looked up independently of the Tenant Resolver step
+    #    above — they are separate concerns (identity/SLA vs. enforcement
+    #    mapping; see core/policy.py's module docstring) that happen to be
+    #    keyed by the same tenant_id.
+    decision, reason = policy_decision(principal.capability, risk_level, principal.tenant)
 
     # Update details with reason and the identity the decision was made under.
     details["policy_reason"] = reason
