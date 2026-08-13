@@ -12,6 +12,7 @@ from api.schemas import AssessRequest, AssessResponse, AssessOutputRequest, Asse
 from core.auth import auth_required, resolve_principal
 from core.privacy import redact_pii
 from core.rate_limit import assess_rate_limiter, bucket_parameters
+from core.tenancy import resolve_tenant
 from core.risk import assess_risk
 from core.updates import fetch_latest_threats
 from core.cache import flush_cache
@@ -148,7 +149,7 @@ def _client_address(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-def _enforce_rate_limit(principal, request: Request) -> None:
+def _enforce_rate_limit(principal, request: Request, tenant_config=None) -> None:
     """
     Spends one token for this caller, or raises 429.
 
@@ -156,6 +157,14 @@ def _enforce_rate_limit(principal, request: Request) -> None:
     cannot be forged. Anonymous callers are keyed by peer address and given a
     smaller allowance, because their traffic is unattributable — there is no
     key to revoke if it turns out to be abusive.
+
+    `tenant_config.rate_limit_rpm`, when set, overrides the tier default for
+    authenticated callers — a tenant's SLA, not a per-key setting. It never
+    applies to anonymous traffic: an unauthenticated caller has no verified
+    tenant to carry an override from. Bucketing stays PER-KEY even when the
+    rate comes from the tenant: two keys under one tenant sharing a bucket
+    would let one integration's retry storm exhaust the other's budget, which
+    defeats the reason key-level bucketing exists in the first place.
     """
     if not settings.RATE_LIMIT_ENABLED:
         return
@@ -163,6 +172,8 @@ def _enforce_rate_limit(principal, request: Request) -> None:
     if principal.authenticated:
         identity = f"key:{principal.key_id}"
         rpm = settings.RATE_LIMIT_AUTHENTICATED_RPM
+        if tenant_config is not None and tenant_config.rate_limit_rpm is not None:
+            rpm = tenant_config.rate_limit_rpm
     else:
         identity = f"ip:{_client_address(request)}"
         rpm = settings.RATE_LIMIT_ANONYMOUS_RPM
@@ -304,10 +315,23 @@ async def assess_prompt(req: AssessRequest, request: Request, background_tasks: 
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # 0b. RATE LIMITING — before any expensive work is scheduled. Placing this
+    # 0b. TENANT RESOLVER — identity and SLA only, never policy (see
+    #     core/tenancy.py). Placed right after auth and before rate limiting
+    #     on purpose: a suspended tenant is rejected before spending a rate
+    #     token or reaching detection, and the SLA it carries (rate_limit_rpm)
+    #     must be known before the limiter runs.
+    tenant_config = resolve_tenant(principal.tenant)
+    if tenant_config.suspended:
+        logger.warning(f"Rejected request for suspended tenant '{principal.tenant}'.")
+        raise HTTPException(
+            status_code=403,
+            detail=f"Tenant '{principal.tenant}' is suspended.",
+        )
+
+    # 0c. RATE LIMITING — before any expensive work is scheduled. Placing this
     #     after authentication is deliberate: the limit that applies depends on
     #     whether the caller has a verified identity.
-    _enforce_rate_limit(principal, request)
+    _enforce_rate_limit(principal, request, tenant_config)
 
     logger.info(
         f"Assess request | capability={principal.capability} "
@@ -360,6 +384,7 @@ async def assess_prompt(req: AssessRequest, request: Request, background_tasks: 
     details["policy_reason"] = reason
     details["principal"] = principal.to_audit()
     details["request_id"] = request.state.request_id
+    details["tenant"] = principal.tenant
 
     # 4. Audit Logging
     log_event(principal.capability, clean_query, risk_level, decision, details)
@@ -410,9 +435,20 @@ async def assess_output_endpoint(req: AssessOutputRequest, request: Request):
                    "'Authorization: Bearer <key>'.",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    _enforce_rate_limit(principal, request)
 
-    logger.info(f"Output assessment request | key_id={principal.key_id}")
+    # Same reasoning as /assess: a suspended tenant must not have a working
+    # bypass route just because it happens to be the OTHER endpoint.
+    tenant_config = resolve_tenant(principal.tenant)
+    if tenant_config.suspended:
+        logger.warning(f"Rejected output-assessment request for suspended tenant '{principal.tenant}'.")
+        raise HTTPException(
+            status_code=403,
+            detail=f"Tenant '{principal.tenant}' is suspended.",
+        )
+
+    _enforce_rate_limit(principal, request, tenant_config)
+
+    logger.info(f"Output assessment request | key_id={principal.key_id} tenant={principal.tenant}")
 
     from core.output_guardrails import assess_output
 

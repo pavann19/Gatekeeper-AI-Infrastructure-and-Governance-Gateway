@@ -134,6 +134,12 @@ class Settings(BaseSettings):
     AUTH_MODE: str = "optional"
     API_KEYS_FILE: str = "api_keys.json"
 
+    # Tenant Resolver (core/tenancy.py) — identity and SLA only, not policy.
+    # See that module's docstring for the identity/policy split and why it
+    # matters. A missing file means every caller resolves to a safe default
+    # tenant; configuring tenants.json is opt-in.
+    TENANTS_FILE: str = "tenants.json"
+
     # Comma-separated CORS origin allowlist. Credentialed cross-origin requests
     # are only enabled when this is NOT a wildcard.
     CORS_ORIGINS: str = "*"
