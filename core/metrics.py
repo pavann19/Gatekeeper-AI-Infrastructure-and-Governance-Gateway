@@ -76,6 +76,8 @@ KNOWN_SOURCES = frozenset({
     "semantic_judge_override_capped",
     "semantic_judge_override_restricted",
     "semantic_meta_intent",
+    "fast_path_meta_intent",
+    "fast_path_anchor_critical",
     "symbolic_rule",
     "vector_threat_critical",
     "mock",          # unit tests and harnesses

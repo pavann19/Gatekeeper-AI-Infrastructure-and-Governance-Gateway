@@ -64,12 +64,18 @@ def drive_to_stage4(monkeypatch):
     monkeypatch.setattr(risk_mod, "lookup_cache", lambda prompt, vec: (None, None))
     monkeypatch.setattr(risk_mod, "save_cache_entry", lambda *a, **k: None)
     monkeypatch.setattr(risk_mod, "hard_ban_triggered", lambda p: (False, None))
+    # Below every threshold on purpose: the Stage 1.5 fast-path cascade
+    # (core/risk.py) must NOT escalate here, so the test still reaches the
+    # mocked collect_semantic_signals below, which is what actually drives
+    # the scenario under test.
+    monkeypatch.setattr(risk_mod, "_fast_path_signals",
+                        lambda vec: {"meta_intent_score": 0.0, "threat_score": 0.0})
     # Llama Guard unavailable -> forces the Ollama-judge path, whose
     # threat_present logic is what this bug affected.
     monkeypatch.setattr(risk_mod, "llama_guard_arbitration", lambda *a, **k: None)
 
     def _set(score, threshold_medium=0.10, threshold_high=0.30):
-        monkeypatch.setattr(risk_mod, "collect_semantic_signals", lambda p, v: {
+        monkeypatch.setattr(risk_mod, "collect_semantic_signals", lambda p, v, fast=None: {
             "threat_score": score, "dynamic_threat_score": 0.0, "is_educational": False,
             "domain_score": None, "domain_aligned": None, "meta_intent_score": 0.0,
             "centroid_score": 0.0, "fusion_available": True,
@@ -211,12 +217,16 @@ def test_anchors_only_fallback_path_gets_the_same_fix(monkeypatch):
     monkeypatch.setattr(risk_mod, "save_cache_entry", lambda *a, **k: None)
     monkeypatch.setattr(risk_mod, "hard_ban_triggered", lambda p: (False, None))
     monkeypatch.setattr(risk_mod, "llama_guard_arbitration", lambda *a, **k: None)
+    # Below every threshold on purpose — see drive_to_stage4's identical
+    # comment: the Stage 1.5 fast-path cascade must not escalate here.
+    monkeypatch.setattr(risk_mod, "_fast_path_signals",
+                        lambda vec: {"meta_intent_score": 0.0, "threat_score": 0.0})
     # Clear-authority granted: this test is about the BAND SPLIT working on the
     # anchors-only path, which is only observable when clearing is permitted.
     monkeypatch.setattr(risk_mod.settings, "JUDGE_MAY_CLEAR_TO_LOW", True)
     monkeypatch.setattr(risk_mod, "SEMANTIC_THRESHOLD_MEDIUM", 0.10)
     monkeypatch.setattr(risk_mod, "SEMANTIC_THRESHOLD_HIGH", 0.30)
-    monkeypatch.setattr(risk_mod, "collect_semantic_signals", lambda p, v: {
+    monkeypatch.setattr(risk_mod, "collect_semantic_signals", lambda p, v, fast=None: {
         "threat_score": 0.11, "dynamic_threat_score": 0.0, "is_educational": False,
         "domain_score": None, "domain_aligned": None, "meta_intent_score": 0.0,
         "centroid_score": 0.0, "fusion_available": False,

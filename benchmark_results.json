@@ -16,10 +16,10 @@
     },
     "cold": {
         "run_name": "Cold Cache (uncached, FAISS)",
-        "avg_latency_ms": 2274.80244065942,
-        "p50_latency_ms": 1160.8220000052825,
-        "p95_latency_ms": 9557.577799998398,
-        "p99_latency_ms": 22557.118799995806,
+        "avg_latency_ms": 2114.386816483516,
+        "p50_latency_ms": 1033.742699999948,
+        "p95_latency_ms": 13397.762499999999,
+        "p99_latency_ms": 19441.520500000024,
         "metrics_operational": {
             "mode": "operational (HIGH or MEDIUM)",
             "accuracy": 0.8131868131868132,
@@ -36,31 +36,32 @@
         },
         "metrics_strict": {
             "mode": "strict (HIGH only)",
-            "accuracy": 0.7948717948717948,
-            "precision": 0.8823529411764706,
-            "recall_tpr": 0.5172413793103449,
-            "f1": 0.6521739130434783,
+            "accuracy": 0.8003663003663004,
+            "precision": 0.8852459016393442,
+            "recall_tpr": 0.5320197044334976,
+            "f1": 0.6646153846153847,
             "fpr": 0.04081632653061224,
             "confusion_matrix": {
-                "TP": 105,
+                "TP": 108,
                 "FP": 14,
                 "TN": 329,
-                "FN": 98
+                "FN": 95
             }
         },
         "risk_distribution": {
             "LOW": 395,
-            "HIGH": 119,
-            "MEDIUM": 32
+            "HIGH": 122,
+            "MEDIUM": 29
         },
         "source_distribution": {
             "fusion_clean_pass": 395,
-            "fusion_threat_critical": 106,
-            "semantic_judge_override_restricted": 14,
-            "semantic_judge_override_capped": 18,
-            "semantic_meta_intent": 6,
+            "fast_path_anchor_critical": 7,
+            "llama_guard_override_restricted": 12,
+            "llama_guard_override_capped": 17,
+            "fusion_threat_critical": 99,
+            "fast_path_meta_intent": 6,
             "symbolic_rule": 3,
-            "semantic_judge": 4
+            "llama_guard_arbitration": 7
         },
         "judge_invocations": 36,
         "topicality": {
@@ -75,10 +76,10 @@
     },
     "warm": {
         "run_name": "Warm Cache (LRU + FAISS)",
-        "avg_latency_ms": 96.98321190452398,
-        "p50_latency_ms": 82.26460000150837,
-        "p95_latency_ms": 171.25420000229497,
-        "p99_latency_ms": 342.6312999945367,
+        "avg_latency_ms": 69.39633241758462,
+        "p50_latency_ms": 58.37900000005902,
+        "p95_latency_ms": 118.01050000008217,
+        "p99_latency_ms": 268.7137000000348,
         "metrics_operational": {
             "mode": "operational (HIGH or MEDIUM)",
             "accuracy": 0.8131868131868132,
@@ -95,26 +96,26 @@
         },
         "metrics_strict": {
             "mode": "strict (HIGH only)",
-            "accuracy": 0.7948717948717948,
-            "precision": 0.8823529411764706,
-            "recall_tpr": 0.5172413793103449,
-            "f1": 0.6521739130434783,
+            "accuracy": 0.8003663003663004,
+            "precision": 0.8852459016393442,
+            "recall_tpr": 0.5320197044334976,
+            "f1": 0.6646153846153847,
             "fpr": 0.04081632653061224,
             "confusion_matrix": {
-                "TP": 105,
+                "TP": 108,
                 "FP": 14,
                 "TN": 329,
-                "FN": 98
+                "FN": 95
             }
         },
         "risk_distribution": {
             "LOW": 395,
-            "HIGH": 119,
-            "MEDIUM": 32
+            "HIGH": 122,
+            "MEDIUM": 29
         },
         "source_distribution": {
-            "cache": 427,
-            "cache_locked_high": 119
+            "cache": 424,
+            "cache_locked_high": 122
         },
         "judge_invocations": 0,
         "topicality": {
@@ -127,5 +128,5 @@
             "note": "Scoping signal. Excluded from the safety confusion matrix by design."
         }
     },
-    "speedup": 23.45563109313053
+    "speedup": 30.46827898282047
 }
