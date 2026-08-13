@@ -1851,7 +1851,7 @@ answered by reading the code, not by recalling what a prior document said.
 
 | Component | What actually exists | Evidence |
 |---|---|---|
-| **API Gateway** | Auth (verified API key → `Principal`, zero-trust default to GENERAL), per-caller rate limiting (token bucket, key_id or peer address), no multi-tenancy — `Principal.tenant` is threaded through but nothing branches policy or thresholds on it. | [core/auth.py](core/auth.py), [core/rate_limit.py](core/rate_limit.py) |
+| **API Gateway** | Auth (verified API key → `Principal`, zero-trust default to GENERAL), per-caller rate limiting (token bucket, key_id or peer address). *As of §1s (2026-08-13): `Principal.tenant` now resolves to a `TenantConfig` — suspension is enforced and a tenant's SLA can override its rate limit. Per-tenant policy/thresholds still do not exist; see §1s for the identity/policy split.* | [core/auth.py](core/auth.py), [core/rate_limit.py](core/rate_limit.py), [core/tenancy.py](core/tenancy.py) |
 | **Input / Data** | PII redaction (regex + spaCy NER, §4 item 12 notes NER is skipped once regex hits — a real gap). Obfuscation normalization exists (`core/normalizer.py`) but is only 33% covered by tests. **No secrets/credential detection anywhere** — grepped `core/privacy.py` and `core/normalizer.py`, nothing matches. | [core/privacy.py](core/privacy.py), [core/normalizer.py](core/normalizer.py) |
 | **Security Detection** | Deployed: `anchors` (embedding centroid) + 3 live model detectors (`protectai_injection`, `madhurjindal_jailbreak`, `toxic_bert`). Registry also declares `deepset_injection`, `jailbreak_classifier`, `prompt_guard_2`, `nemoguard_jailbreak`, `llama_guard_3_1b/8b`, `prompt_guard_1` — **none of these participate in live fusion.** `llama_guard_3_1b` exists as a separate, non-fusion synchronous fallback in `judge_arbitration`, gated by a 2.3GB memory precheck. | `LIVE_MODEL_DETECTORS` in [core/fusion.py:53](core/fusion.py) |
 | **Risk / Fusion** | Exactly the 4 detectors above, via a logistic-regression policy loaded from `models/fusion_policy.json` (v2, with a `per_class` section — §"per-class thresholds"). Output today is a single scalar (`fused_threat_score`) plus a `triggering_class` label when per-class fires — **not yet the full per-class risk vector** the V2 plan calls for; the machinery to produce one already exists (`class_scores` is computed internally) but isn't surfaced. | [core/fusion.py](core/fusion.py) |
@@ -1931,3 +1931,98 @@ Every V2 experiment result reported from here forward states which of these
 two benchmarks (offline 6,933-row suite, or end-to-end 546-row deepset run)
 it was measured against, and at what FPR budget — a number without both is
 not comparable to anything in this table.
+
+---
+
+## 1s. Tenant Resolver — the first V2 architecture component actually built (2026-08-13)
+
+Everything from §1q through §1r, and the arbiter fix that followed, was V1
+hardening — necessary regardless of the V2 architecture decision, but not
+an implementation of it. This is the first component built specifically
+because the approved V2 diagram calls for it: `API Gateway → Auth → Tenant
+Resolver → Policy Context → ...`.
+
+### Scope, deliberately narrow
+
+`core/tenancy.py` resolves WHO a tenant is and whether they may proceed —
+identity and SLA, not policy. It does not add per-tenant risk thresholds or
+a per-tenant BLOCK/RESTRICT/ALLOW mapping; that is "Policy Context", the
+next box in the diagram, and conflating the two would repeat the exact
+mistake core/auth.py's own docstring documents fixing (capability decided
+by something other than a verified, narrowly-scoped source).
+
+### Why this needed building at all
+
+`Principal.tenant` (core/auth.py) has existed since auth was rebuilt, but
+the Phase 0 audit (§ above) found nothing ever read it. A resolver that
+only echoes a field back is not a resolver — it is dead code with an audit
+trail. `core/tenancy.py` makes the field load-bearing in three concrete
+ways:
+
+1. **Suspension is enforced.** A suspended tenant is rejected with 403
+   before any detection work runs — checked right after auth, before rate
+   limiting, so a suspended tenant doesn't even spend a rate-limit token.
+2. **SLA overrides the rate limit.** `TenantConfig.rate_limit_rpm`, when
+   set, replaces the tier default for that tenant's authenticated callers.
+   Deliberately never applies to anonymous traffic — an unauthenticated
+   caller has no verified tenant to carry an override from, and letting one
+   through would mean any caller could claim a generous `tenant_id` and
+   inherit its limit.
+3. **Tenant reaches the audit record.** `core/logger.py::log_event` gained
+   a top-level `tenant` field (mirroring how `request_id` was added in
+   §1r) — a record from before this landed reads `"unset"`, not
+   `"default"`, so a query can distinguish "no tenant concept existed yet"
+   from "this caller resolved to the default tenant".
+
+### Design mirrors `KeyStore` on purpose
+
+Same shape as the API key store: JSON file (`tenants.json`), loaded once
+and cached, a force-reload hook, per-entry validation so one malformed
+tenant doesn't take down the others, and a safe default (`DEFAULT_TENANT`,
+active, no override) when the file is absent or a tenant is unconfigured.
+Configuring tenancy is opt-in — a deployment that never touches
+`tenants.json` is unaffected by this module existing. Consistency with
+`core/auth.py` matters more here than any abstract preference, because
+whoever operates one will need to operate the other.
+
+### Wired into both assessment endpoints, not just one
+
+`/api/v1/assess_output` got the same auth/rate-limit hardening as `/assess`
+in §1q, so it also needed the same tenant check — otherwise a suspended
+tenant would have a working bypass by calling the other endpoint, the exact
+class of gap §1q closed for auth and rate limiting.
+
+### A near-miss during verification, disclosed
+
+Proving the suspension check was load-bearing (not just present) meant
+temporarily neutralizing it and confirming the right tests went red. The
+scripted revert step failed silently — a `cp` to `/tmp` had actually
+succeeded on this environment (unlike the fallback path assumed), so the
+intended backup file was never created, and `api/main.py` was momentarily
+left with the suspension check disabled (`if False and
+tenant_config.suspended:`) after the verification run. Caught immediately
+by grepping for the neutralized string, restored from the `/tmp` copy that
+had in fact been written, and reconfirmed with a full lint + test run (320
+passed) before treating the file as clean. Recorded here rather than
+quietly fixed, since a scripted safety step that fails without saying so is
+itself a finding.
+
+### Verified
+
+24 new tests (320 total). Endpoint-level suspension enforcement was checked
+by neutralizing the real code path (not mocking around it) and confirming
+exactly the three suspension-specific tests failed —
+`test_suspended_tenant_is_rejected`,
+`test_suspension_is_checked_before_the_expensive_work`,
+`test_output_endpoint_also_enforces_suspension` — while the SLA and
+unrelated tests still passed, showing the tests are sensitive to the actual
+guard, not to an incidental side effect of the way it was disabled.
+
+### What this does not close
+
+Per-tenant policy (Policy Context — the next diagram box), the fast/deep
+cascade with early exit, the per-class risk vector, and Output Guard being
+wired into the request loop automatically rather than called as a separate
+endpoint. All four remain exactly as stated in the Phase 0 audit above.
+
+---

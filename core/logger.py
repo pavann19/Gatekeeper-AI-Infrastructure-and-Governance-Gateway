@@ -44,6 +44,14 @@ def log_event(capability, prompt, risk, decision, metadata=None):
         # caused it is a timestamp, which stops being unique under any real
         # concurrency.
         "request_id": metadata.get("request_id", "unset"),
+        # Top-level, not just nested in "principal" (which also carries it) —
+        # "show every decision for tenant X" is a query an auditor actually
+        # runs, and it should not require reaching into a nested object to
+        # answer. Named for the Tenant Resolver work (core/tenancy.py); a
+        # record from before that landed reads "unset", not "default", so a
+        # query can distinguish "no tenant concept existed yet" from "this
+        # caller resolved to the default tenant".
+        "tenant": metadata.get("tenant", "unset"),
         "capability": capability,
         "risk": risk,
         "decision": decision,
