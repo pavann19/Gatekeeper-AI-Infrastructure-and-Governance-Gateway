@@ -182,13 +182,74 @@ def hard_ban_triggered(prompt: str) -> tuple:
     return False, None
 
 # ============================================================================
+# STAGE 1.5: FAST PATH (cheap, vector-only, escalate-only cascade)
+# ============================================================================
+#
+# Everything in this stage is a cosine similarity against an already-loaded
+# anchor set — no transformer inference, no fusion call. §1m measured the
+# expensive part of the pipeline as the 3-detector fusion pass (parallel
+# median 308ms, cold p50 938ms+ end to end); meta-intent and anchor-threat
+# similarity are microsecond-scale dot products on the SAME prompt_vec the
+# pipeline already computed for the cache lookup in Stage 0.
+#
+# ASYMMETRIC AUTHORITY, the property that makes this cascade safe rather
+# than a detection regression: this stage may only ESCALATE to HIGH, never
+# ALLOW. A prompt that clears both cheap checks still goes through the full
+# deep path unchanged — cheap anchor similarity to a small, fixed set is
+# exactly what an adversarial prompt is likely to evade BY DESIGN, which is
+# the whole reason the deep fusion pass (which generalises better) exists at
+# all. This stage only saves latency for the subset of attacks a cheap
+# signal is ALREADY confident about; it does not, and cannot, reduce
+# latency for benign or subtle traffic, which must still reach the deep
+# path. See docs/ENGINEERING_ASSESSMENT.md §1v for the measured before/after
+# and this scope boundary stated in full.
+def _fast_path_signals(prompt_vec) -> dict:
+    """The two cheap, vector-only signals, computed once and reused whether
+    or not they end up deciding anything — collect_semantic_signals accepts
+    these back so Stage 2 never repeats the same dot products."""
+    return {
+        "meta_intent_score": float(check_meta_intent(prompt_vec)),
+        "threat_score": float(threat_store.get_max_similarity(prompt_vec)),
+    }
+
+
+def _fast_path_decision(fast: dict):
+    """
+    Returns (risk, source) if the cheap signals alone are already decisive,
+    else None. Both thresholds are pre-existing, calibrated values reused
+    verbatim from their deep-path equivalents (META_INTENT_THRESHOLD;
+    SEMANTIC_THRESHOLD_HIGH, the standalone anchors-only operating point —
+    see docs/ENGINEERING_ASSESSMENT.md §1b) — this stage introduces no new
+    threshold, only an earlier exit for a decision the deep path (or its
+    anchors-only fallback) would have reached anyway.
+    """
+    if fast["meta_intent_score"] >= META_INTENT_THRESHOLD:
+        logger.warning(f"🚫 META-INTENT DETECTED (score: {fast['meta_intent_score']:.3f}) — fast path")
+        return "HIGH", "fast_path_meta_intent"
+
+    if fast["threat_score"] >= SEMANTIC_THRESHOLD_HIGH:
+        logger.warning(f"🚫 ANCHOR THREAT CRITICAL (score: {fast['threat_score']:.3f}) — fast path")
+        return "HIGH", "fast_path_anchor_critical"
+
+    return None
+
+
+# ============================================================================
 # STAGE 2: PARALLEL SIGNAL COLLECTION
 # ============================================================================
 
-def collect_semantic_signals(prompt: str, prompt_vec) -> dict:
+def collect_semantic_signals(prompt: str, prompt_vec, fast: dict = None) -> dict:
     """
     Stage 2: Collects all semantic signals without making any blocking decisions.
     Returns a dict of raw signal values for downstream fusion.
+
+    `fast`, when provided, carries meta_intent_score/threat_score already
+    computed by the Stage 1.5 fast-path check (see above) — reused here
+    rather than recomputed, since they are the identical dot products
+    against the identical prompt_vec. `fast=None` (the default) preserves
+    the original from-scratch behaviour for any caller that still invokes
+    this function directly, e.g. existing tests that construct signals
+    without going through assess_risk's fast-path stage.
 
     BUG FIX (F1): Previously, `details` and the first `t0` were used before
     being assigned, causing a NameError on every prompt that survived Stage 0
@@ -199,21 +260,27 @@ def collect_semantic_signals(prompt: str, prompt_vec) -> dict:
     """
     # FIX: Initialise accumulator dict and first timing checkpoint here.
     details: dict = {}
-    t0 = time.perf_counter()
 
-    # 1) Meta-intent similarity
-    meta_intent_score = check_meta_intent(prompt_vec)
-    t1 = time.perf_counter()
-    details["meta_intent_ms"] = round((t1 - t0) * 1000, 2)
-    details["meta_intent_score"] = float(meta_intent_score)
+    if fast is not None:
+        details["meta_intent_ms"] = 0.0  # already paid in Stage 1.5, not here
+        details["meta_intent_score"] = fast["meta_intent_score"]
+        details["faiss_threat_search_ms"] = 0.0
+        details["threat_score"] = fast["threat_score"]
+    else:
+        t0 = time.perf_counter()
+        # 1) Meta-intent similarity
+        meta_intent_score = check_meta_intent(prompt_vec)
+        t1 = time.perf_counter()
+        details["meta_intent_ms"] = round((t1 - t0) * 1000, 2)
+        details["meta_intent_score"] = float(meta_intent_score)
 
-    t0 = time.perf_counter()
-    # 2) Vector Threat Scan using FAISS
-    threat_score = threat_store.get_max_similarity(prompt_vec)
-    t1 = time.perf_counter()
-    details["faiss_threat_search_ms"] = round((t1 - t0) * 1000, 2)
+        t0 = time.perf_counter()
+        # 2) Vector Threat Scan using FAISS
+        threat_score = threat_store.get_max_similarity(prompt_vec)
+        t1 = time.perf_counter()
+        details["faiss_threat_search_ms"] = round((t1 - t0) * 1000, 2)
 
-    details["threat_score"] = float(threat_score)
+        details["threat_score"] = float(threat_score)
     details["dynamic_threat_score"] = float(check_dynamic_threats(prompt_vec))
     details["is_educational"] = check_dynamic_safe_harbors(prompt_vec)
 
@@ -653,8 +720,25 @@ def assess_risk(prompt: str, background_scheduler=None) -> tuple:
                         "symbolic_triggered": True, "judge_invoked": False,
                         "dynamic_threat_score": None, "meta_intent_score": None}
 
+    # ---- STAGE 1.5: FAST PATH (cheap, escalate-only cascade) ----
+    # See _fast_path_decision's docstring for why this is safe: it can only
+    # ESCALATE to HIGH, never ALLOW, so a prompt that clears it is in
+    # EXACTLY the same position as before this stage existed — it still
+    # goes through the full deep path below.
+    fast = _fast_path_signals(prompt_vec)
+    fast_decision = _fast_path_decision(fast)
+    if fast_decision is not None:
+        risk, source = fast_decision
+        save_cache_entry(prompt, prompt_vec, risk, 1.0, source=source)
+        return risk, {"source": source, "semantic_score": 1.0,
+                      "educational_context": False, "domain_score": None,
+                      "topicality": "UNKNOWN",
+                      "symbolic_triggered": False, "judge_invoked": False,
+                      "dynamic_threat_score": None,
+                      "meta_intent_score": fast["meta_intent_score"]}
+
     # ---- STAGE 2: COLLECT SEMANTIC SIGNALS ----
-    signals = collect_semantic_signals(prompt, prompt_vec)
+    signals = collect_semantic_signals(prompt, prompt_vec, fast=fast)
 
     # ---- STAGE 3: DETERMINISTIC FUSION ----
     risk, source, judge_required, topicality = fuse_signals(signals, prompt)

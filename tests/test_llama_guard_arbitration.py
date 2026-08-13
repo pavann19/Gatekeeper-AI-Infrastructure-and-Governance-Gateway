@@ -120,7 +120,12 @@ def force_judge_required(monkeypatch):
     monkeypatch.setattr(risk_mod, "lookup_cache", lambda prompt, vec: (None, None))
     monkeypatch.setattr(risk_mod, "save_cache_entry", lambda *a, **k: None)
     monkeypatch.setattr(risk_mod, "hard_ban_triggered", lambda p: (False, None))
-    monkeypatch.setattr(risk_mod, "collect_semantic_signals", lambda p, v: {
+    # Below every threshold on purpose: the Stage 1.5 fast-path cascade
+    # (core/risk.py) must not escalate before this test's mocked
+    # collect_semantic_signals below gets a chance to run.
+    monkeypatch.setattr(risk_mod, "_fast_path_signals",
+                        lambda vec: {"meta_intent_score": 0.0, "threat_score": 0.0})
+    monkeypatch.setattr(risk_mod, "collect_semantic_signals", lambda p, v, fast=None: {
         "threat_score": 0.35, "dynamic_threat_score": 0.0, "is_educational": False,
         "domain_score": None, "domain_aligned": None, "meta_intent_score": 0.0,
         "centroid_score": 0.0, "fusion_available": False,

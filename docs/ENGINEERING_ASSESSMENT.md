@@ -1854,7 +1854,7 @@ answered by reading the code, not by recalling what a prior document said.
 | **API Gateway** | Auth (verified API key → `Principal`, zero-trust default to GENERAL), per-caller rate limiting (token bucket, key_id or peer address). *As of §1s (2026-08-13): `Principal.tenant` now resolves to a `TenantConfig` — suspension is enforced and a tenant's SLA can override its rate limit. Per-tenant policy/thresholds still do not exist; see §1s for the identity/policy split.* | [core/auth.py](core/auth.py), [core/rate_limit.py](core/rate_limit.py), [core/tenancy.py](core/tenancy.py) |
 | **Input / Data** | PII redaction (regex + spaCy NER, §4 item 12 notes NER is skipped once regex hits — a real gap). Obfuscation normalization exists (`core/normalizer.py`) but is only 33% covered by tests. **No secrets/credential detection anywhere** — grepped `core/privacy.py` and `core/normalizer.py`, nothing matches. | [core/privacy.py](core/privacy.py), [core/normalizer.py](core/normalizer.py) |
 | **Security Detection** | Deployed: `anchors` (embedding centroid) + 3 live model detectors (`protectai_injection`, `madhurjindal_jailbreak`, `toxic_bert`). Registry also declares `deepset_injection`, `jailbreak_classifier`, `prompt_guard_2`, `nemoguard_jailbreak`, `llama_guard_3_1b/8b`, `prompt_guard_1` — **none of these participate in live fusion.** `llama_guard_3_1b` exists as a separate, non-fusion synchronous fallback in `judge_arbitration`, gated by a 2.3GB memory precheck. | `LIVE_MODEL_DETECTORS` in [core/fusion.py:53](core/fusion.py) |
-| **Risk / Fusion** | Exactly the 4 detectors above, via a logistic-regression policy loaded from `models/fusion_policy.json` (v2, with a `per_class` section — §"per-class thresholds"). Output today is a single scalar (`fused_threat_score`) plus a `triggering_class` label when per-class fires — **not yet the full per-class risk vector** the V2 plan calls for; the machinery to produce one already exists (`class_scores` is computed internally) but isn't surfaced. | [core/fusion.py](core/fusion.py) |
+| **Risk / Fusion** | Exactly the 4 detectors above, via a logistic-regression policy loaded from `models/fusion_policy.json` (v2, with a `per_class` section — §"per-class thresholds"). Output today is a single scalar (`fused_threat_score`) plus a `triggering_class` label when per-class fires — **not yet the full per-class risk vector** the V2 plan calls for; the machinery to produce one already exists (`class_scores` is computed internally) but isn't surfaced. *As of §1v (2026-08-13): a cheap, escalate-only fast-path stage now runs before this — see §1v for the scope boundary (cannot ALLOW, cannot speed up benign/subtle traffic).* | [core/fusion.py](core/fusion.py) |
 | **Policy** | *As of §1t (2026-08-13): `policy_rules.json` is tenant-scoped — `{tenant_id: {capability: {risk_level: action}}}`, required `"default"` fallback. Two tenants can now get different decisions for the same (capability, risk_level).* No application or model dimension yet, and risk THRESHOLDS (as opposed to the decision mapping) are still identical across every tenant — see §1t for that scope boundary. | [policy_rules.json](policy_rules.json), [core/policy.py](core/policy.py) |
 | **Arbitration** | Reachable — `judge_available()` probes Ollama's `/tags` endpoint before any benchmark run, circuit-breaker guarded (3-failure trip, 30s cooldown, half-open probe), Llama Guard native-protocol path added §1j. Fires on **6.6% of traffic** (36/546 in the last full benchmark) — already the exception path, not the common case. | [core/semantic_judge.py](core/semantic_judge.py), [core/circuit_breaker.py](core/circuit_breaker.py) |
 | **Decision** | `policy_decision(capability, risk_level)` — deterministic lookup, LLM judge output is one input to `risk_level`, never a direct override of the policy table. This is already the "Deterministic Arbiter" property the V2 diagram calls for; it isn't a V2 addition, it's a V1 property worth stating explicitly so V2 doesn't accidentally regress it. | [core/policy.py](core/policy.py) |
@@ -2192,5 +2192,124 @@ something else and aren't accidentally coupled to this code path.
 The fast/deep cascade with early exit and the per-class risk vector remain
 open — the last two items from the original Phase 0 audit's "not built"
 list.
+
+---
+
+## 1v. Fast/deep cascade with early exit (2026-08-13)
+
+Closes the second-to-last open item from the original Phase 0 audit.
+Cheap, vector-only signals (meta-intent similarity, anchor-threat
+similarity — both single cosine-similarity dot products against an
+already-loaded anchor set, computed on the SAME `prompt_vec` Stage 0's
+cache lookup already produced) are now checked before the expensive
+3-transformer fusion pass, and can skip it entirely when already decisive.
+
+### The scope boundary, stated up front because it is easy to overclaim
+
+This cascade can only ESCALATE to HIGH on a confident cheap signal. It
+CANNOT allow, and it does not — cannot — reduce latency for benign or
+subtle-attack traffic, which must still reach the full deep path. Cheap
+similarity to a small, fixed anchor set is exactly what an adversarial
+prompt is likely to evade by design; that is the whole reason the deep
+fusion pass (which generalises far better — out-of-fold AUC 0.944 vs 0.890
+anchors-alone) exists at all. Granting the fast tier ALLOW authority would
+not be an optimisation, it would be a detection regression wearing a
+latency win's clothes. This was stated as the design constraint before any
+code was written, and the measured result below confirms it landed exactly
+where predicted: real but narrow.
+
+### Implementation
+
+`core/risk.py` gained a Stage 1.5 between the existing hard-ban veto and
+signal collection: `_fast_path_signals` (computes the two cheap dot
+products once) and `_fast_path_decision` (checks them against the SAME
+calibrated thresholds the deep path already uses — `META_INTENT_THRESHOLD`,
+`SEMANTIC_THRESHOLD_HIGH` — introducing no new threshold, only an earlier
+exit for a decision the deep path or its anchors-only fallback would have
+reached anyway). `collect_semantic_signals` accepts the precomputed values
+via a `fast=` parameter so a non-escalating request never repeats the same
+two dot products in Stage 2.
+
+### Measured, on the identical 546-prompt benchmark, same day, same judge
+
+| | Before cascade | After cascade |
+|---|---|---|
+| Recall / Precision / F1 / FPR | 62.07% / 83.44% / 0.712 / 7.29% | **identical, bit for bit** |
+| Cold p50 | 1160.8ms | **1033.7ms** (−11%) |
+| Cold avg | 2274.8ms | **2114.4ms** (−7%) |
+| Decision sources | `fusion_threat_critical: 106`, `semantic_meta_intent: 6` | `fusion_threat_critical: 99` + `fast_path_anchor_critical: 7` = 106; `fast_path_meta_intent: 6` |
+
+The decision-source arithmetic is the real proof, not the latency number
+alone: exactly 13 of the 106 prompts previously attributed to
+`fusion_threat_critical`/`semantic_meta_intent` now resolve one stage
+earlier, and the union across both runs is identical — nothing was
+reclassified, only *when* the same classification happened moved earlier.
+Zero accuracy drift confirms the escalate-only design worked exactly as
+specified rather than merely as intended.
+
+Honestly reported rather than cherry-picked: p95 latency was WORSE in this
+run (13.4s vs 9.6s in the immediately preceding benchmark). This is not
+attributed to the cascade — p95 is dominated by judge-arbitration calls to
+Ollama, a code path this change does not touch — and is far more likely
+explained by this run's circumstances: it followed two unexpected system
+shutdowns (see below) and ran alongside a newly-added system health
+monitor competing for the same constrained RAM. Reported as measured,
+not adjusted to look better.
+
+### Verified
+
+12 new tests (`tests/test_fast_path_cascade.py`, 367 total at commit time):
+the pure decision logic in isolation (threshold boundaries, deterministic
+tie-breaking when both signals are simultaneously decisive), a proof that
+`_fast_path_signals` never touches `fused_threat_score` (the architectural
+claim that this stage is cheap, checked directly rather than assumed), two
+end-to-end tests proving `assess_risk` skips `fused_threat_score` and
+`collect_semantic_signals` ENTIRELY when the fast path escalates (mocking
+each and asserting zero calls — not just checking the returned verdict),
+a regression test proving a non-escalating prompt reaches the deep path
+completely unchanged (the asymmetric-authority property, proven not just
+asserted), and a test that the cheap signals are computed exactly once
+even when Stage 2 also needs them.
+
+Sensitivity confirmed by disabling `_fast_path_decision` (forcing it to
+always return `None`, simulating pre-cascade behaviour) — exactly the 6
+escalation-dependent tests failed, the other 6 (which test the
+non-escalating path) were unaffected.
+
+Four pre-existing test fixtures (`test_threat_present_band.py` ×2,
+`test_llama_guard_arbitration.py`, `test_llama_guard_async.py`) needed
+mechanical updates: they mock `collect_semantic_signals` directly with a
+dummy `[0.0]` prompt vector and previously never reached a code path that
+would call the real `check_meta_intent`/`threat_store.get_max_similarity`
+against it. Adding Stage 1.5 meant they now did, which would have run real
+anchor-similarity math against a 1-dimensional dummy vector against 768-dim
+real anchors. Each fixture now also mocks `_fast_path_signals` to return
+non-decisive values, matching the scenario each test is actually about.
+
+### An unrelated finding surfaced while re-running the benchmark
+
+Two consecutive unexpected system shutdowns (Windows Event ID 6008)
+interrupted this benchmark mid-run before the reported result was
+captured. Investigation found `Win32_Battery` returns **no battery device
+at all** on this machine — it runs purely on AC power with no buffer — and
+neither shutdown left a BSOD, bugcheck, or thermal-trip event in the
+System log, which is more consistent with a hard power-delivery
+interruption than a software crash or graceful thermal shutdown. Not a
+Gatekeeper issue and not fixable from this codebase, but recorded because
+it directly affected the reliability of collecting this section's numbers.
+A resumability-free, single-shot benchmark run (`tests/benchmark.py`, ~4-5
+minutes) tolerates a restart cheaply; the earlier §1s/§1t/§1u work and the
+overnight Llama Guard 8B scoring run (§1r-adjacent, `scripts/
+score_llama_guard_8b_sample.py`) are far more exposed to this, which is
+why that scoring script was built resumable from the start. A background
+system health monitor (`scripts/system_health_monitor.py`, RAM/CPU/GPU/
+shutdown-event sampling every 15s to `_evidence/system_health.jsonl`) was
+added afterward specifically to leave a diagnostic trail if it happens
+again.
+
+### What this does not close
+
+The per-class risk vector — the last remaining item from the original
+Phase 0 audit's "not built" list.
 
 ---
