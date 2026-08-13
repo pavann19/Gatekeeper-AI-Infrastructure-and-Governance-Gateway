@@ -1855,7 +1855,7 @@ answered by reading the code, not by recalling what a prior document said.
 | **Input / Data** | PII redaction (regex + spaCy NER, §4 item 12 notes NER is skipped once regex hits — a real gap). Obfuscation normalization exists (`core/normalizer.py`) but is only 33% covered by tests. **No secrets/credential detection anywhere** — grepped `core/privacy.py` and `core/normalizer.py`, nothing matches. | [core/privacy.py](core/privacy.py), [core/normalizer.py](core/normalizer.py) |
 | **Security Detection** | Deployed: `anchors` (embedding centroid) + 3 live model detectors (`protectai_injection`, `madhurjindal_jailbreak`, `toxic_bert`). Registry also declares `deepset_injection`, `jailbreak_classifier`, `prompt_guard_2`, `nemoguard_jailbreak`, `llama_guard_3_1b/8b`, `prompt_guard_1` — **none of these participate in live fusion.** `llama_guard_3_1b` exists as a separate, non-fusion synchronous fallback in `judge_arbitration`, gated by a 2.3GB memory precheck. | `LIVE_MODEL_DETECTORS` in [core/fusion.py:53](core/fusion.py) |
 | **Risk / Fusion** | Exactly the 4 detectors above, via a logistic-regression policy loaded from `models/fusion_policy.json` (v2, with a `per_class` section — §"per-class thresholds"). Output today is a single scalar (`fused_threat_score`) plus a `triggering_class` label when per-class fires — **not yet the full per-class risk vector** the V2 plan calls for; the machinery to produce one already exists (`class_scores` is computed internally) but isn't surfaced. | [core/fusion.py](core/fusion.py) |
-| **Policy** | One global `policy_rules.json`: `{capability: {risk_level: action}}`, 3 capability tiers × 3 risk levels. No tenant, no application, no model dimension — confirmed by grep, zero matches for "tenant" in `core/policy.py` or `policy_rules.json`. | [policy_rules.json](policy_rules.json) |
+| **Policy** | *As of §1t (2026-08-13): `policy_rules.json` is tenant-scoped — `{tenant_id: {capability: {risk_level: action}}}`, required `"default"` fallback. Two tenants can now get different decisions for the same (capability, risk_level).* No application or model dimension yet, and risk THRESHOLDS (as opposed to the decision mapping) are still identical across every tenant — see §1t for that scope boundary. | [policy_rules.json](policy_rules.json), [core/policy.py](core/policy.py) |
 | **Arbitration** | Reachable — `judge_available()` probes Ollama's `/tags` endpoint before any benchmark run, circuit-breaker guarded (3-failure trip, 30s cooldown, half-open probe), Llama Guard native-protocol path added §1j. Fires on **6.6% of traffic** (36/546 in the last full benchmark) — already the exception path, not the common case. | [core/semantic_judge.py](core/semantic_judge.py), [core/circuit_breaker.py](core/circuit_breaker.py) |
 | **Decision** | `policy_decision(capability, risk_level)` — deterministic lookup, LLM judge output is one input to `risk_level`, never a direct override of the policy table. This is already the "Deterministic Arbiter" property the V2 diagram calls for; it isn't a V2 addition, it's a V1 property worth stating explicitly so V2 doesn't accidentally regress it. | [core/policy.py](core/policy.py) |
 | **Output Security** | **Already exists**, contrary to the V2 plan's Phase 12 framing it as new. PII leakage check, toxicity, semantic-grounding/hallucination check. Exposed at `/api/v1/assess_output`, hardened today with the same auth/rate-limit/timeout/size-cap controls as the input path. | [core/output_guardrails.py](core/output_guardrails.py) |
@@ -2024,5 +2024,102 @@ Per-tenant policy (Policy Context — the next diagram box), the fast/deep
 cascade with early exit, the per-class risk vector, and Output Guard being
 wired into the request loop automatically rather than called as a separate
 endpoint. All four remain exactly as stated in the Phase 0 audit above.
+
+---
+
+## 1t. Policy Context — per-tenant enforcement decisions (2026-08-13)
+
+The box immediately after Tenant Resolver in the V2 diagram. §1s made
+`Principal.tenant` load-bearing for identity and SLA; this makes it
+load-bearing for the actual (capability, risk_level) -> action mapping —
+the same risk assessment can now produce a different HTTP-level decision
+for a different tenant.
+
+### Scope, held to the same discipline as §1s
+
+Policy Context maps capability + risk_level -> BLOCK/RESTRICT/ALLOW, per
+tenant. It does NOT touch risk scoring — detector thresholds and fusion
+weights stay identical across every tenant. The V2 planning notes' example
+("Tenant A: Injection > 0.75 -> BLOCK; Tenant B: Injection > 0.65 -> BLOCK")
+describes threshold-level policy, which would mean re-running fusion per
+tenant — a materially larger change than remapping an already-computed
+risk_level, and explicitly left for later if it turns out to be needed.
+
+### `core/policy.py` was rewritten, not extended
+
+Zero existing tests touched it, and only two call sites existed
+(`api/main.py`, `scripts/cli_demo.py`), so this was a genuine rewrite rather
+than a careful patch — and it closed two items §4's code-quality table had
+flagged as still open since that audit: `print()` calls replaced with the
+logger, and the eager-at-import mutable global replaced with the same
+load-once-and-cache `Store` pattern as `KeyStore` (auth) and `TenantStore`
+(tenancy). Three modules now share one shape; an operator who has learned
+to provision an API key or suspend a tenant already knows how to edit a
+tenant's policy.
+
+`policy_rules.json` migrated from a flat `{policies, default_action}`
+object to `{default_action, tenants: {tenant_id: {policies}}}` with a
+required `"default"` entry — the existing three-tier policy was lifted
+into `tenants.default` unchanged, so `policy_decision(capability, risk)`
+with no `tenant_id` argument (the pre-tenancy call shape) behaves
+identically to before.
+
+### Two different "something is wrong" states, kept distinct — same principle as §1s, opposite default
+
+An unconfigured tenant falls back to `"default"`'s REAL policy — normal,
+silent, expected, matching `core/tenancy.py`'s `DEFAULT_TENANT`. But when
+there is no usable policy data at all (missing file, corrupt JSON, or
+`"default"` itself fails validation), policy fails closed to BLOCK for
+EVERY tenant, not just the unconfigured ones — there is nothing safe to
+fall back to when the fallback itself doesn't exist. This is the opposite
+default from `TenantStore` (which fails OPEN to an active default tenant
+when unconfigured) and it is opposite on purpose: identity resolution
+missing its config means "nobody has set up tenancy yet", a normal state:
+policy missing its config means "the system cannot prove what it is
+supposed to enforce", which must never silently become ALLOW.
+
+### A real bug the tests caught before it shipped
+
+The first version of `policy_decision`'s audit `reason` string named
+whichever tenant was REQUESTED, even when that tenant's policy didn't
+exist and the DEFAULT tenant's policy silently applied instead —
+`"Tenant: broken"` when tenant `broken` had no policy of its own and
+`default`'s was actually used. An incident investigator reading that would
+conclude `broken` has its own distinct policy, which is false.
+`test_malformed_tenant_entry_falls_back_to_default_others_unaffected`
+caught this on first run; the reason string now states the fallback
+explicitly — `"broken -> default (fallback)"` — whenever the resolved
+tenant differs from the requested one.
+
+### Wired into both assessment endpoints
+
+Same reasoning as §1s: `/api/v1/assess_output` got the same tenant handling
+as `/assess`, since leaving one endpoint on the old single-policy behaviour
+would mean a client could route around a tenant's stricter policy by
+calling the other endpoint. Tenant identity for the policy lookup comes
+from the SERVER-RESOLVED `Principal.tenant`, never a client-supplied field
+— `AssessRequest` has no `tenant` field and rejects unknown fields outright
+(`extra="forbid"`, §3.4), so a request cannot claim a softer tenant to get
+a looser decision.
+
+### Verified
+
+24 new tests (344 total): 20 for the store/resolution logic
+(`tests/test_policy.py`) and 4 proving it end-to-end on the real API
+(`tests/test_policy_context.py`) — including the actual claim this section
+exists to support, `test_same_risk_different_decision_by_tenant`: the
+identical mocked risk assessment (`MEDIUM`) produces `RESTRICT` for one
+tenant and `BLOCK` for another through the real `/api/v1/assess` endpoint.
+Sensitivity confirmed by patching `policy_decision` to ignore `tenant_id`
+entirely (simulating the pre-Policy-Context state) — 8 tests fail, exactly
+the ones asserting tenant-differentiated behaviour.
+
+### What this does not close
+
+The fast/deep cascade with early exit, the per-class risk vector, and
+Output Guard wired into the request loop automatically. Per-tenant risk
+*thresholds* (as opposed to per-tenant *decision mapping*, which this
+closes) remain unimplemented and would require re-running fusion per
+tenant — a separate, larger piece of work.
 
 ---
