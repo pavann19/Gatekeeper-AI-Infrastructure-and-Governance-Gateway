@@ -62,6 +62,33 @@ def sample_gpu():
         return {"ollama_reachable": False}
 
 
+def sample_temperature():
+    """
+    ACPI thermal zone temperature via the Windows performance counter
+    `\\Thermal Zone Information(*)\\Temperature` — works without admin
+    rights, unlike the WMI MSAcpi_ThermalZoneTemperature class (confirmed
+    "Access denied" on this machine). Reports the highest of any zone found,
+    since a single ACPI thermal zone on a laptop typically tracks whatever
+    is running hottest (often near the CPU package), and the safety
+    decision that consumes this value only cares about the worst case.
+    """
+    try:
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "(Get-Counter '\\Thermal Zone Information(*)\\Temperature' "
+             "-ErrorAction Stop).CounterSamples | "
+             "ForEach-Object { $_.CookedValue }"],
+            capture_output=True, text=True, timeout=10,
+        )
+        values_kelvin = [float(v) for v in out.stdout.split() if v.strip()]
+        if not values_kelvin:
+            return {"available": False, "celsius": None}
+        celsius = [round(v - 273.15, 1) for v in values_kelvin]
+        return {"available": True, "celsius": max(celsius), "zones_celsius": celsius}
+    except Exception as e:
+        return {"available": False, "celsius": None, "error": str(e)}
+
+
 def sample_recent_shutdown_events():
     """Checks for a NEW unexpected-shutdown event (6008) since the monitor
     started, using PowerShell (no admin rights needed for the System log)."""
@@ -92,6 +119,7 @@ def main():
         sample.update(sample_ram())
         sample.update(sample_cpu())
         sample["gpu"] = sample_gpu()
+        sample["temperature"] = sample_temperature()
         sample["shutdown_check"] = sample_recent_shutdown_events()
 
         with open(OUT_FILE, "a", encoding="utf-8") as f:
@@ -103,6 +131,10 @@ def main():
         if sample["ram_available_gb"] < 1.0:
             print(f"[{sample['timestamp']}] LOW RAM WARNING: "
                   f"{sample['ram_available_gb']}GB available")
+
+        temp_c = sample["temperature"].get("celsius")
+        if temp_c is not None and temp_c > 65:
+            print(f"[{sample['timestamp']}] HIGH TEMPERATURE WARNING: {temp_c}C")
 
         time.sleep(args.interval)
 

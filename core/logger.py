@@ -1,12 +1,23 @@
 # core/logger.py
 import hashlib
+import os
 from datetime import datetime
 import logging
 from pythonjsonlogger import jsonlogger
 
+from core.config import settings
+
 # --- CONFIGURE STRUCTURED LOGGING ---
 logger = logging.getLogger("gatekeeper")
 logger.setLevel(logging.INFO)
+
+# Configurable so a container deployment can point this at a mounted volume
+# — "audit.jsonl" (relative to cwd) previously meant every container
+# recreation silently discarded the ENTIRE audit trail, which is a real
+# compliance defect for a project whose audit record is repeatedly
+# documented elsewhere as the compliance artefact. Default is unchanged
+# from before this setting existed, so nothing that already works differs.
+AUDIT_LOG_PATH = settings.AUDIT_LOG_PATH
 
 if not logger.handlers:
     # Console Handler
@@ -16,7 +27,8 @@ if not logger.handlers:
     logger.addHandler(console_handler)
 
     # JSON Audit Handler
-    audit_handler = logging.FileHandler("audit.jsonl", encoding="utf-8")
+    os.makedirs(os.path.dirname(AUDIT_LOG_PATH) or ".", exist_ok=True)
+    audit_handler = logging.FileHandler(AUDIT_LOG_PATH, encoding="utf-8")
     json_formatter = jsonlogger.JsonFormatter('%(timestamp)s %(level)s %(name)s %(message)s')
     audit_handler.setFormatter(json_formatter)
     

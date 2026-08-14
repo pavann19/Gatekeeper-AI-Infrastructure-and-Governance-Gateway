@@ -1,21 +1,57 @@
-FROM python:3.9-slim
+# Python 3.10, matching .github/workflows/ci.yml exactly — the tested
+# version and the deployed version must be the same version, or a passing
+# CI run stops meaning "this works in production."
+FROM python:3.10-slim
 
 WORKDIR /app
 
-# Install dependencies required for sentence-transformers and spacy
-RUN apt-get update && apt-get install -y build-essential && rm -rf /var/lib/apt/lists/*
+# build-essential for sentence-transformers/faiss native extensions.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential curl \
+    && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# requirements-api.txt, NOT requirements.txt — the latter is a kitchen-sink
+# covering the UI (streamlit/altair/pydeck), dev tooling (pytest/ruff), and
+# a comparison-benchmark-only dependency (nemoguardrails, confirmed absent
+# from core/fusion.py's live detector pool). None of it belongs in this
+# image; installing it anyway was a real contributor to a build-time RAM
+# crisis on a resource-constrained machine. See requirements-api.txt's own
+# header for the full accounting.
+COPY requirements-api.txt .
 
-# Download the spacy model
+# torch is a TRANSITIVE dependency (via sentence-transformers) with no
+# entry of its own in requirements-api.txt, so plain `pip install -r`
+# resolves it from PyPI's default index — the full CUDA-bundled build
+# (nvidia_cudnn_cu13 alone is 366MB, the full set well over 2GB) — even
+# though this image has no GPU passthrough and never will. Installed
+# explicitly first, from PyTorch's own CPU-only wheel index, so the later
+# `-r requirements-api.txt` finds torch's version constraint already
+# satisfied and never reaches for the CUDA build. Measured consequence of
+# NOT doing this: a build-time RAM spike large enough to leave well under
+# 1GB free on an already-constrained machine.
+# --extra-index-url, NOT --index-url: the latter REPLACES PyPI entirely for
+# this command, and PyTorch's wheel index doesn't host general build tools
+# (measured failure: flit_core, needed to build one of torch's own
+# dependencies, became unresolvable). --extra-index-url adds the CPU wheel
+# index alongside PyPI, so pip still finds everything else there while
+# preferring the CPU build of torch itself.
+RUN pip install --no-cache-dir torch --extra-index-url https://download.pytorch.org/whl/cpu
+RUN pip install --no-cache-dir -r requirements-api.txt
+
 RUN python -m spacy download en_core_web_sm
 
-# Copy the rest of the application
 COPY . .
 
-# Expose API port
 EXPOSE 8000
 
-# Start FastAPI server
+# Matches api/main.py's /health endpoint. start-period is generous —
+# §1r measured cold model warm-up (encoder + 3 fusion detectors + anchor
+# centroid) at ~43s on the reference machine, and an orchestrator that
+# starts routing traffic before that completes will send a request into
+# WARM_MODELS_ON_STARTUP's in-progress load, defeating the entire reason
+# that warm-up exists (§1r: the same 30s ASSESS_TIMEOUT_SECONDS deadline it
+# was built to stop the FIRST request from tripping).
+HEALTHCHECK --interval=15s --timeout=5s --start-period=90s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
 CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
