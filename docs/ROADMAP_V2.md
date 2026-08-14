@@ -48,7 +48,17 @@ Original estimate: ~20–30h
       contributes diluted inside the pooled ensemble). Blocked on data
       volume: only 234 German rows (76 attacks) in the current suite, thin
       for a dedicated fit — may need more German-labelled data first.
-- [ ] Clean threat taxonomy
+- [x] Clean threat taxonomy — done 2026-08-14, see
+      `docs/ENGINEERING_ASSESSMENT.md` §1y. Two fixes: (1) added a
+      `jailbreak` anchor class to `policies.json` — anchor layer previously
+      modeled only harmful_content/prompt_injection despite jailbreak
+      being 36% of attacks; measured out-of-fold before keeping (no
+      regression, jailbreak recall@5%FPR 74.7%→80.6%), fusion policy
+      retrained to match; (2) split `symbolic_rules.json`'s
+      `jailbreak_patterns` (previously a mix of genuine jailbreak and
+      instruction-override regexes reported under one misleading detail
+      string) into `jailbreak_patterns` + `instruction_override_patterns`.
+      8 new tests, 373 passed overall (unchanged).
 - [ ] Separate `risk` from `topicality` (topicality field already exists in
       the schema — confirm it's actually independent in practice, not just
       in name)

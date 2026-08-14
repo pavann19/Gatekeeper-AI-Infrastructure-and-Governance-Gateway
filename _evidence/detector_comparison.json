@@ -19,31 +19,31 @@
       "n_attack": 1925,
       "n_benign": 5008,
       "auc": {
-        "point": 0.8897122007385586,
-        "lo": 0.8795164026996728,
-        "hi": 0.9001661529077526,
+        "point": 0.8946756877307995,
+        "lo": 0.8843643342258587,
+        "hi": 0.9050711022188928,
         "n": 6933,
         "n_boot_effective": 1000,
         "ci_level": 0.95
       },
       "recall_at_fpr": {
-        "point": 0.6997402597402598,
-        "lo": 0.6759162303664922,
-        "hi": 0.720611491829204,
+        "point": 0.7174025974025974,
+        "lo": 0.6927083333333334,
+        "hi": 0.7389087200407956,
         "n": 6933,
         "n_boot_effective": 1000,
         "ci_level": 0.95
       },
-      "threshold": 0.36643463373184204,
+      "threshold": 0.37436357140541077,
       "per_class": {
         "prompt_injection": {
           "n": 979,
-          "detected": 0.7844739530132788,
+          "detected": 0.7773237997957099,
           "targeted": true
         },
         "jailbreak": {
           "n": 692,
-          "detected": 0.7471098265895953,
+          "detected": 0.8063583815028902,
           "targeted": true
         },
         "harmful_content": {
@@ -52,350 +52,14 @@
           "targeted": true
         }
       },
-      "actual_fpr": 0.04912140575079872,
-      "per_language": {
-        "en": {
-          "n": 6458,
-          "auc": {
-            "point": 0.9088470072467277,
-            "lo": 0.9006200614574188,
-            "hi": 0.917826735976691,
-            "n": 6458,
-            "n_boot_effective": 250,
-            "ci_level": 0.95
-          }
-        },
-        "de": {
-          "n": 234,
-          "auc": {
-            "point": 0.6324950033311126,
-            "lo": 0.5617503515592688,
-            "hi": 0.7046206095272143,
-            "n": 234,
-            "n_boot_effective": 250,
-            "ci_level": 0.95
-          }
-        },
-        "other": {
-          "n": 241,
-          "auc": {
-            "point": 0.8968099861303744,
-            "lo": 0.8401263823064771,
-            "hi": 0.9555271383915885,
-            "n": 241,
-            "n_boot_effective": 250,
-            "ci_level": 0.95
-          }
-        }
-      },
-      "polarity_check": "attack=0.669 benign=0.122 (probed as: prompt_injection,jailbreak,harmful_content)"
-    },
-    {
-      "detector": "protectai_injection",
-      "description": "ProtectAI DeBERTa-v3 injection classifier (widely used baseline)",
-      "targets": [
-        "prompt_injection"
-      ],
-      "trained_on": [],
-      "rows_excluded_for_contamination": 0,
-      "n": 6933,
-      "n_attack": 1925,
-      "n_benign": 5008,
-      "auc": {
-        "point": 0.9092581220696236,
-        "lo": 0.8990597058543116,
-        "hi": 0.9186666694879928,
-        "n": 6933,
-        "n_boot_effective": 1000,
-        "ci_level": 0.95
-      },
-      "recall_at_fpr": {
-        "point": 0.7974025974025974,
-        "lo": 0.7771181867242309,
-        "hi": 0.8139904610492846,
-        "n": 6933,
-        "n_boot_effective": 1000,
-        "ci_level": 0.95
-      },
-      "threshold": 0.0006233625463210046,
-      "per_class": {
-        "prompt_injection": {
-          "n": 979,
-          "detected": 0.9182839632277835,
-          "targeted": true
-        },
-        "jailbreak": {
-          "n": 692,
-          "detected": 0.911849710982659,
-          "targeted": false
-        },
-        "harmful_content": {
-          "n": 254,
-          "detected": 0.01968503937007874,
-          "targeted": false
-        }
-      },
-      "actual_fpr": 0.04972044728434505,
-      "per_language": {
-        "en": {
-          "n": 6458,
-          "auc": {
-            "point": 0.9108258264033116,
-            "lo": 0.8997739562334671,
-            "hi": 0.9214232163986414,
-            "n": 6458,
-            "n_boot_effective": 250,
-            "ci_level": 0.95
-          }
-        },
-        "de": {
-          "n": 234,
-          "auc": {
-            "point": 0.8715856095936043,
-            "lo": 0.8195616883116883,
-            "hi": 0.9198479729729729,
-            "n": 234,
-            "n_boot_effective": 250,
-            "ci_level": 0.95
-          }
-        },
-        "other": {
-          "n": 241,
-          "auc": {
-            "point": 0.931622746185853,
-            "lo": 0.8723100855587244,
-            "hi": 0.9749322493224932,
-            "n": 241,
-            "n_boot_effective": 250,
-            "ci_level": 0.95
-          }
-        }
-      },
-      "polarity_check": "attack=1.000 benign=0.000 (probed as: prompt_injection)"
-    },
-    {
-      "detector": "deepset_injection",
-      "description": "deepset DeBERTa-v3 injection classifier",
-      "targets": [
-        "prompt_injection"
-      ],
-      "trained_on": [
-        "deepset/prompt-injections"
-      ],
-      "rows_excluded_for_contamination": 546,
-      "n": 6387,
-      "n_attack": 1722,
-      "n_benign": 4665,
-      "auc": {
-        "point": 0.8280135513803462,
-        "lo": 0.8165245002607009,
-        "hi": 0.8396491363059285,
-        "n": 6387,
-        "n_boot_effective": 1000,
-        "ci_level": 0.95
-      },
-      "recall_at_fpr": {
-        "point": 0.2653890824622532,
-        "lo": 0.21958285052143686,
-        "hi": 0.3238498789346247,
-        "n": 6387,
-        "n_boot_effective": 1000,
-        "ci_level": 0.95
-      },
-      "threshold": 0.9989196062088013,
-      "per_class": {
-        "prompt_injection": {
-          "n": 776,
-          "detected": 0.3234536082474227,
-          "targeted": true
-        },
-        "jailbreak": {
-          "n": 692,
-          "detected": 0.2774566473988439,
-          "targeted": false
-        },
-        "harmful_content": {
-          "n": 254,
-          "detected": 0.05511811023622047,
-          "targeted": false
-        }
-      },
-      "actual_fpr": 0.05016077170418006,
-      "per_language": {
-        "en": {
-          "n": 6191,
-          "auc": {
-            "point": 0.8277018077642736,
-            "lo": 0.8163220253817317,
-            "hi": 0.8393961810263624,
-            "n": 6191,
-            "n_boot_effective": 250,
-            "ci_level": 0.95
-          }
-        },
-        "de": {
-          "n": 30,
-          "auc": {
-            "point": 0.904,
-            "lo": 0.688,
-            "hi": 1.0,
-            "n": 30,
-            "n_boot_effective": 248,
-            "ci_level": 0.95
-          }
-        },
-        "other": {
-          "n": 166,
-          "auc": {
-            "point": 0.7722712070538158,
-            "lo": 0.6635460992907801,
-            "hi": 0.8663478479738234,
-            "n": 166,
-            "n_boot_effective": 250,
-            "ci_level": 0.95
-          }
-        }
-      },
-      "polarity_check": "attack=0.999 benign=0.004 (probed as: prompt_injection)"
-    },
-    {
-      "detector": "jailbreak_classifier",
-      "description": "BERT jailbreak classifier (CONTAMINATED against its own source)",
-      "targets": [
-        "jailbreak"
-      ],
-      "trained_on": [
-        "jackhhao/jailbreak-classification"
-      ],
-      "rows_excluded_for_contamination": 1269,
-      "n": 5664,
-      "n_attack": 1294,
-      "n_benign": 4370,
-      "auc": {
-        "point": 0.6588067086606375,
-        "lo": 0.6402083576953638,
-        "hi": 0.6779201021114034,
-        "n": 5664,
-        "n_boot_effective": 1000,
-        "ci_level": 0.95
-      },
-      "recall_at_fpr": {
-        "point": 0.14296754250386398,
-        "lo": 0.11415168100078187,
-        "hi": 0.16798732171156894,
-        "n": 5664,
-        "n_boot_effective": 1000,
-        "ci_level": 0.95
-      },
-      "threshold": 0.9971356391906738,
-      "per_class": {
-        "prompt_injection": {
-          "n": 979,
-          "detected": 0.14198161389172625,
-          "targeted": false
-        },
-        "jailbreak": {
-          "n": 61,
-          "detected": 0.6721311475409836,
-          "targeted": true
-        },
-        "harmful_content": {
-          "n": 254,
-          "detected": 0.01968503937007874,
-          "targeted": false
-        }
-      },
-      "actual_fpr": 0.04965675057208238,
-      "per_language": {
-        "en": {
-          "n": 5193,
-          "auc": {
-            "point": 0.6756662834668217,
-            "lo": 0.6564004335087145,
-            "hi": 0.6919923193875395,
-            "n": 5193,
-            "n_boot_effective": 250,
-            "ci_level": 0.95
-          }
-        },
-        "de": {
-          "n": 233,
-          "auc": {
-            "point": 0.4686919831223629,
-            "lo": 0.37727027513037226,
-            "hi": 0.5590373122274269,
-            "n": 233,
-            "n_boot_effective": 250,
-            "ci_level": 0.95
-          }
-        },
-        "other": {
-          "n": 238,
-          "auc": {
-            "point": 0.6805074971164936,
-            "lo": 0.5845896147403685,
-            "hi": 0.8030803080308031,
-            "n": 238,
-            "n_boot_effective": 250,
-            "ci_level": 0.95
-          }
-        }
-      },
-      "polarity_check": "attack=0.998 benign=0.004 (probed as: jailbreak)"
-    },
-    {
-      "detector": "madhurjindal_jailbreak",
-      "description": "DistilBERT jailbreak detector",
-      "targets": [
-        "jailbreak"
-      ],
-      "trained_on": [],
-      "rows_excluded_for_contamination": 0,
-      "n": 6933,
-      "n_attack": 1925,
-      "n_benign": 5008,
-      "auc": {
-        "point": 0.8341263847973113,
-        "lo": 0.8223150667184869,
-        "hi": 0.8453072561445946,
-        "n": 6933,
-        "n_boot_effective": 1000,
-        "ci_level": 0.95
-      },
-      "recall_at_fpr": {
-        "point": 0.38701298701298703,
-        "lo": 0.36280020439448135,
-        "hi": 0.4105925537493445,
-        "n": 6933,
-        "n_boot_effective": 1000,
-        "ci_level": 0.95
-      },
-      "threshold": 0.8509184718132019,
-      "per_class": {
-        "prompt_injection": {
-          "n": 979,
-          "detected": 0.09601634320735444,
-          "targeted": false
-        },
-        "jailbreak": {
-          "n": 692,
-          "detected": 0.9104046242774566,
-          "targeted": true
-        },
-        "harmful_content": {
-          "n": 254,
-          "detected": 0.08267716535433071,
-          "targeted": false
-        }
-      },
       "actual_fpr": 0.04992012779552716,
       "per_language": {
         "en": {
           "n": 6458,
           "auc": {
-            "point": 0.8418762054534215,
-            "lo": 0.8327443321380115,
-            "hi": 0.852709263381261,
+            "point": 0.9153195383404225,
+            "lo": 0.9079836824550815,
+            "hi": 0.9236430642482422,
             "n": 6458,
             "n_boot_effective": 250,
             "ci_level": 0.95
@@ -404,9 +68,9 @@
         "de": {
           "n": 234,
           "auc": {
-            "point": 0.6888740839440373,
-            "lo": 0.6121752165223184,
-            "hi": 0.7735010482180293,
+            "point": 0.6272485009993338,
+            "lo": 0.5511831275720165,
+            "hi": 0.6994291969661428,
             "n": 234,
             "n_boot_effective": 250,
             "ci_level": 0.95
@@ -415,277 +79,18 @@
         "other": {
           "n": 241,
           "auc": {
-            "point": 0.7115117891816921,
-            "lo": 0.6070460704607046,
-            "hi": 0.8080420574026712,
+            "point": 0.8912621359223301,
+            "lo": 0.8312796208530806,
+            "hi": 0.9518913429804519,
             "n": 241,
             "n_boot_effective": 250,
             "ci_level": 0.95
           }
         }
       },
-      "polarity_check": "attack=0.569 benign=0.002 (probed as: jailbreak)"
-    },
-    {
-      "detector": "toxic_bert",
-      "description": "Unitary toxic-bert, multi-label toxicity",
-      "targets": [
-        "harmful_content"
-      ],
-      "trained_on": [],
-      "rows_excluded_for_contamination": 0,
-      "n": 6933,
-      "n_attack": 1925,
-      "n_benign": 5008,
-      "auc": {
-        "point": 0.7517396062404049,
-        "lo": 0.7396849911323858,
-        "hi": 0.7646238405116568,
-        "n": 6933,
-        "n_boot_effective": 1000,
-        "ci_level": 0.95
-      },
-      "recall_at_fpr": {
-        "point": 0.1548051948051948,
-        "lo": 0.131286394917946,
-        "hi": 0.174594877156299,
-        "n": 6933,
-        "n_boot_effective": 1000,
-        "ci_level": 0.95
-      },
-      "threshold": 0.051396444439888,
-      "per_class": {
-        "prompt_injection": {
-          "n": 979,
-          "detected": 0.09703779366700716,
-          "targeted": false
-        },
-        "jailbreak": {
-          "n": 692,
-          "detected": 0.16040462427745664,
-          "targeted": false
-        },
-        "harmful_content": {
-          "n": 254,
-          "detected": 0.36220472440944884,
-          "targeted": true
-        }
-      },
-      "actual_fpr": 0.04952076677316294,
-      "per_language": {
-        "en": {
-          "n": 6458,
-          "auc": {
-            "point": 0.7693888072195679,
-            "lo": 0.7567433648255996,
-            "hi": 0.7848112310179199,
-            "n": 6458,
-            "n_boot_effective": 250,
-            "ci_level": 0.95
-          }
-        },
-        "de": {
-          "n": 234,
-          "auc": {
-            "point": 0.603014656895403,
-            "lo": 0.5247242647058824,
-            "hi": 0.6714274315806271,
-            "n": 234,
-            "n_boot_effective": 250,
-            "ci_level": 0.95
-          }
-        },
-        "other": {
-          "n": 241,
-          "auc": {
-            "point": 0.525242718446602,
-            "lo": 0.40966010733452596,
-            "hi": 0.6255980861244019,
-            "n": 241,
-            "n_boot_effective": 250,
-            "ci_level": 0.95
-          }
-        }
-      },
-      "polarity_check": "attack=0.045 benign=0.001 (probed as: harmful_content)"
-    },
-    {
-      "detector": "nemoguard_jailbreak",
-      "description": "NVIDIA NeMo Guardrails model-based jailbreak rail (Snowflake embed + NemoGuard RF; training data undisclosed)",
-      "targets": [
-        "jailbreak"
-      ],
-      "trained_on": [],
-      "rows_excluded_for_contamination": 0,
-      "n": 6933,
-      "n_attack": 1925,
-      "n_benign": 5008,
-      "auc": {
-        "point": 0.6500414920542716,
-        "lo": 0.6335410481296426,
-        "hi": 0.6672451194848977,
-        "n": 6933,
-        "n_boot_effective": 1000,
-        "ci_level": 0.95
-      },
-      "recall_at_fpr": {
-        "point": 0.39064935064935064,
-        "lo": 0.3678571428571429,
-        "hi": 0.4133754607688257,
-        "n": 6933,
-        "n_boot_effective": 1000,
-        "ci_level": 0.95
-      },
-      "threshold": 0.4077725410461426,
-      "per_class": {
-        "prompt_injection": {
-          "n": 979,
-          "detected": 0.0449438202247191,
-          "targeted": false
-        },
-        "jailbreak": {
-          "n": 692,
-          "detected": 0.9855491329479769,
-          "targeted": true
-        },
-        "harmful_content": {
-          "n": 254,
-          "detected": 0.10236220472440945,
-          "targeted": false
-        }
-      },
-      "actual_fpr": 0.04992012779552716,
-      "per_language": {
-        "en": {
-          "n": 6458,
-          "auc": {
-            "point": 0.6490871079279069,
-            "lo": 0.6339002805957263,
-            "hi": 0.6648251962267955,
-            "n": 6458,
-            "n_boot_effective": 250,
-            "ci_level": 0.95
-          }
-        },
-        "de": {
-          "n": 234,
-          "auc": {
-            "point": 0.7637408394403731,
-            "lo": 0.6914535929314255,
-            "hi": 0.8283542779742644,
-            "n": 234,
-            "n_boot_effective": 250,
-            "ci_level": 0.95
-          }
-        },
-        "other": {
-          "n": 241,
-          "auc": {
-            "point": 0.5457697642163661,
-            "lo": 0.4344049779621467,
-            "hi": 0.6298780487804878,
-            "n": 241,
-            "n_boot_effective": 250,
-            "ci_level": 0.95
-          }
-        }
-      },
-      "polarity_check": "attack=0.071 benign=0.046 (probed as: jailbreak)"
-    },
-    {
-      "detector": "prompt_guard_2",
-      "description": "Meta Prompt Guard 2 86M (GATED: needs HF auth + licence acceptance)",
-      "targets": [
-        "prompt_injection",
-        "jailbreak"
-      ],
-      "trained_on": [],
-      "rows_excluded_for_contamination": 0,
-      "n": 6933,
-      "n_attack": 1925,
-      "n_benign": 5008,
-      "auc": {
-        "point": 0.9490802248869341,
-        "lo": 0.9420146286791166,
-        "hi": 0.9555512509468805,
-        "n": 6933,
-        "n_boot_effective": 1000,
-        "ci_level": 0.95
-      },
-      "recall_at_fpr": {
-        "point": 0.8389610389610389,
-        "lo": 0.8194871794871795,
-        "hi": 0.8557894736842105,
-        "n": 6933,
-        "n_boot_effective": 1000,
-        "ci_level": 0.95
-      },
-      "threshold": 0.004175707697868347,
-      "per_class": {
-        "prompt_injection": {
-          "n": 979,
-          "detected": 0.8866189989785496,
-          "targeted": true
-        },
-        "jailbreak": {
-          "n": 692,
-          "detected": 0.9710982658959537,
-          "targeted": true
-        },
-        "harmful_content": {
-          "n": 254,
-          "detected": 0.2952755905511811,
-          "targeted": false
-        }
-      },
-      "actual_fpr": 0.04912140575079872,
-      "per_language": {
-        "en": {
-          "n": 6458,
-          "auc": {
-            "point": 0.9517507623261322,
-            "lo": 0.9449312391362947,
-            "hi": 0.9587692281585936,
-            "n": 6458,
-            "n_boot_effective": 250,
-            "ci_level": 0.95
-          }
-        },
-        "de": {
-          "n": 234,
-          "auc": {
-            "point": 0.9695203197868087,
-            "lo": 0.9471283783783784,
-            "hi": 0.9898915187376726,
-            "n": 234,
-            "n_boot_effective": 250,
-            "ci_level": 0.95
-          }
-        },
-        "other": {
-          "n": 241,
-          "auc": {
-            "point": 0.951872399445215,
-            "lo": 0.8795430944963655,
-            "hi": 0.992371705963939,
-            "n": 241,
-            "n_boot_effective": 250,
-            "ci_level": 0.95
-          }
-        }
-      },
-      "polarity_check": "attack=0.997 benign=0.000 (probed as: prompt_injection,jailbreak)"
+      "polarity_check": "attack=0.707 benign=0.122 (probed as: prompt_injection,jailbreak,harmful_content)"
     }
   ],
   "disqualified": [],
-  "unavailable": [
-    {
-      "detector": "prompt_guard_1",
-      "reason": "OSError: You are trying to access a gated repo."
-    },
-    {
-      "detector": "llama_guard_3_8b",
-      "reason": "insufficient memory: 2.9GB available, 18.0GB needed for meta-llama/Llama-Guard-3-8B. Close other processes or use a smaller variant."
-    }
-  ]
+  "unavailable": []
 }

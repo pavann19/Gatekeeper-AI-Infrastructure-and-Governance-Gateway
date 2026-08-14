@@ -82,19 +82,32 @@ def _ensure_faiss_initialized():
         _faiss_initialized = True
 
 # --- 2. SYMBOLIC RULES (from centralized policy loader) ---
-from core.policy_loader import get_jailbreak_patterns, get_hard_ban_keywords  # noqa: E402
+from core.policy_loader import (  # noqa: E402
+    get_jailbreak_patterns, get_instruction_override_patterns, get_hard_ban_keywords,
+)
 
+# Split 2026-08-14: JAILBREAK_PATTERNS previously also held instruction-
+# override (prompt-injection) regexes, so every hit reported the same
+# "JAILBREAK_DETECTED" detail regardless of which kind of attack actually
+# matched. See policies/symbolic_rules.json's _comment and
+# docs/ENGINEERING_ASSESSMENT.md section 1y. No pattern coverage changed,
+# only which detail string each one now reports.
 JAILBREAK_PATTERNS = get_jailbreak_patterns()
+INSTRUCTION_OVERRIDE_PATTERNS = get_instruction_override_patterns()
 HARD_BAN_KEYWORDS = get_hard_ban_keywords()
 
 def check_symbolic_violations(prompt: str) -> str:
     # FAIL-CLOSED: If symbolic rules failed to load, block everything
-    if JAILBREAK_PATTERNS is None or HARD_BAN_KEYWORDS is None:
+    if (JAILBREAK_PATTERNS is None or INSTRUCTION_OVERRIDE_PATTERNS is None
+            or HARD_BAN_KEYWORDS is None):
         return "SYMBOLIC_POLICY_MISSING"
     prompt_lower = prompt.lower()
     for pattern in JAILBREAK_PATTERNS:
         if re.search(pattern, prompt_lower):
             return "JAILBREAK_DETECTED"
+    for pattern in INSTRUCTION_OVERRIDE_PATTERNS:
+        if re.search(pattern, prompt_lower):
+            return "INSTRUCTION_OVERRIDE_DETECTED"
     for keyword in HARD_BAN_KEYWORDS:
         if keyword in prompt_lower:
             return "HARD_BAN_DETECTED"
