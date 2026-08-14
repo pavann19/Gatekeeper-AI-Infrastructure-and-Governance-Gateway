@@ -13,8 +13,9 @@ SYMBOLIC_RULES_FILE = "policies/symbolic_rules.json"
 # --- Internal State (loaded once) ---
 _domain_anchors = []
 _suspicious_phrases = []
-_jailbreak_patterns = None   # None signals fail-closed
-_hard_ban_keywords = None    # None signals fail-closed
+_jailbreak_patterns = None            # None signals fail-closed
+_instruction_override_patterns = None  # None signals fail-closed
+_hard_ban_keywords = None             # None signals fail-closed
 
 
 def _load_json_file(filepath):
@@ -33,7 +34,8 @@ def _load_json_file(filepath):
 
 def _init_policies():
     """Loads all policy files into module-level variables at import time."""
-    global _domain_anchors, _suspicious_phrases, _jailbreak_patterns, _hard_ban_keywords
+    global _domain_anchors, _suspicious_phrases, _jailbreak_patterns
+    global _instruction_override_patterns, _hard_ban_keywords
 
     # --- Domain Anchors ---
     data = _load_json_file(DOMAIN_ANCHORS_FILE)
@@ -48,11 +50,13 @@ def _init_policies():
     if data is not None:
         _suspicious_phrases = data.get("suspicious_phrases", [])
         _jailbreak_patterns = data.get("jailbreak_patterns", [])
+        _instruction_override_patterns = data.get("instruction_override_patterns", [])
         _hard_ban_keywords = data.get("hard_ban_keywords", [])
     else:
         print("CRITICAL: Symbolic rules not loaded. Symbolic detection will fail closed.")
         _suspicious_phrases = []
         _jailbreak_patterns = None
+        _instruction_override_patterns = None
         _hard_ban_keywords = None
 
 
@@ -67,8 +71,16 @@ def get_suspicious_phrases():
     return _suspicious_phrases
 
 def get_jailbreak_patterns():
-    """Returns list of jailbreak regex pattern strings, or None if load failed."""
+    """Returns list of jailbreak (persona/roleplay hijack) regex pattern
+    strings, or None if load failed. Distinct from
+    get_instruction_override_patterns() -- see policies/symbolic_rules.json's
+    _comment for why these were split."""
     return _jailbreak_patterns
+
+def get_instruction_override_patterns():
+    """Returns list of instruction-override (prompt injection) regex pattern
+    strings, or None if load failed."""
+    return _instruction_override_patterns
 
 def get_hard_ban_keywords():
     """Returns list of hard ban keyword strings, or None if load failed."""

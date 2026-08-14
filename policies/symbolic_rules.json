@@ -1,4 +1,14 @@
 {
+    "_comment": [
+        "TAXONOMY NOTE (2026-08-14): 'jailbreak_patterns' previously held a mix",
+        "of genuine jailbreak (persona/roleplay hijack, e.g. 'dan mode') and",
+        "prompt-injection (instruction override, e.g. 'ignore previous') regexes",
+        "under one name -- an audit hit on any of them was reported as",
+        "JAILBREAK_DETECTED regardless of which kind actually matched. Split",
+        "into two lists so the returned detail string is accurate. No coverage",
+        "was removed or added, only re-labelled -- see",
+        "docs/ENGINEERING_ASSESSMENT.md section 1y."
+    ],
     "suspicious_phrases": [
         "ignore safety",
         "without restriction",
@@ -7,16 +17,18 @@
         "hidden instructions"
     ],
     "jailbreak_patterns": [
-        "ignore (all )?previous",
-        "you are (now )?no longer",
-        "override (system|safety) (rules|protocols)",
         "act as (an? )?uncensored",
         "developer mode(:| )on",
         "hypothetical response",
-        "start your answer with",
         "do anything now",
         "dan mode",
-        "jailbreak",
+        "jailbreak"
+    ],
+    "instruction_override_patterns": [
+        "ignore (all )?previous",
+        "you are (now )?no longer",
+        "override (system|safety) (rules|protocols)",
+        "start your answer with",
         "disable (your )?system prompt",
         "grant me admin access",
         "bypass (firewall|security)"
