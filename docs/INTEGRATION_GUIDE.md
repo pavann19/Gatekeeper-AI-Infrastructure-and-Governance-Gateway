@@ -208,7 +208,7 @@ not a lighter-weight bypass.
 | `clean_prompt` | Your prompt after PII redaction — use this, not your original, if you log or forward the prompt anywhere downstream. |
 | `redacted_items` | What was stripped (e.g. emails, phone numbers). |
 | `process_time_ms` | Server-side latency for this call. |
-| `details` | Internal scores and metadata — useful for debugging/audit, not something to branch application logic on (its shape isn't a stable contract). |
+| `details` | Internal scores and metadata — useful for debugging/audit, not something to branch application logic on (its shape isn't a stable contract). Notably includes `fusion_triggering_class` and `fusion_class_scores` — which attack category (e.g. `jailbreak`, `harmful_content`, `prompt_injection`) fusion believed a HIGH/MEDIUM verdict was, and its per-class probabilities. Both are `None`/`{}` when the request was decided by an earlier stage (cache, hard-ban, fast-path) that never reached fusion. |
 
 **Integration rule of thumb:** branch only on `decision` (and `output_decision`
 when present). Treat everything else as diagnostic.

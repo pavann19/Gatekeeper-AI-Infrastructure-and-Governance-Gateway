@@ -318,6 +318,14 @@ def collect_semantic_signals(prompt: str, prompt_vec, fast: dict = None) -> dict
     details["fusion_threshold_medium"] = fusion["threshold_medium"]
     details["fusion_detail"] = fusion["detail"]
     details["fusion_detector_scores"] = fusion["detector_scores"]
+    # Per-class risk vector (§1w) — `fused_threat_score` already computes
+    # this (core/fusion.py's _select_per_class_verdict), it just wasn't
+    # copied into `details` before. `triggering_class` is None and
+    # `class_scores` is {} when FUSION_PER_CLASS is off or the loaded
+    # policy artifact has no per-class section — distinct from "computed
+    # but nothing triggered", which is not a state this returns.
+    details["fusion_triggering_class"] = fusion.get("triggering_class")
+    details["fusion_class_scores"] = fusion.get("class_scores", {})
     if not fusion["available"]:
         logger.warning(
             f"Fusion unavailable ({fusion['detail']}) - falling back to the "
@@ -701,13 +709,15 @@ def assess_risk(prompt: str, background_scheduler=None) -> tuple:
                             "educational_context": False, "domain_score": None,
                             "topicality": "UNKNOWN",
                             "symbolic_triggered": False, "judge_invoked": False,
-                            "dynamic_threat_score": None, "meta_intent_score": None}
+                            "dynamic_threat_score": None, "meta_intent_score": None,
+                            "fusion_triggering_class": None, "fusion_class_scores": {}}
         logger.info(f"⚡ CACHE HIT! Risk: {cached_risk}")
         return cached_risk, {"semantic_score": cached_score, "source": "cache",
                              "educational_context": False, "domain_score": None,
                              "topicality": "UNKNOWN",
                              "symbolic_triggered": False, "judge_invoked": False,
-                             "dynamic_threat_score": None, "meta_intent_score": None}
+                             "dynamic_threat_score": None, "meta_intent_score": None,
+                             "fusion_triggering_class": None, "fusion_class_scores": {}}
 
     # ---- STAGE 1: HARD BAN (SYMBOLIC VETO) ----
     triggered, detail = hard_ban_triggered(prompt)
@@ -718,7 +728,8 @@ def assess_risk(prompt: str, background_scheduler=None) -> tuple:
                         "educational_context": False, "domain_score": None,
                         "topicality": "UNKNOWN",
                         "symbolic_triggered": True, "judge_invoked": False,
-                        "dynamic_threat_score": None, "meta_intent_score": None}
+                        "dynamic_threat_score": None, "meta_intent_score": None,
+                        "fusion_triggering_class": None, "fusion_class_scores": {}}
 
     # ---- STAGE 1.5: FAST PATH (cheap, escalate-only cascade) ----
     # See _fast_path_decision's docstring for why this is safe: it can only
@@ -735,7 +746,8 @@ def assess_risk(prompt: str, background_scheduler=None) -> tuple:
                       "topicality": "UNKNOWN",
                       "symbolic_triggered": False, "judge_invoked": False,
                       "dynamic_threat_score": None,
-                      "meta_intent_score": fast["meta_intent_score"]}
+                      "meta_intent_score": fast["meta_intent_score"],
+                      "fusion_triggering_class": None, "fusion_class_scores": {}}
 
     # ---- STAGE 2: COLLECT SEMANTIC SIGNALS ----
     signals = collect_semantic_signals(prompt, prompt_vec, fast=fast)
@@ -807,5 +819,7 @@ def assess_risk(prompt: str, background_scheduler=None) -> tuple:
                   "fusion_available": signals.get("fusion_available"),
                   "fusion_detail": signals.get("fusion_detail"),
                   "fusion_detector_scores": signals.get("fusion_detector_scores"),
+                  "fusion_triggering_class": signals.get("fusion_triggering_class"),
+                  "fusion_class_scores": signals.get("fusion_class_scores", {}),
                   "anchor_threat_score": signals["threat_score"],
                   "meta_intent_score": signals["meta_intent_score"]}
