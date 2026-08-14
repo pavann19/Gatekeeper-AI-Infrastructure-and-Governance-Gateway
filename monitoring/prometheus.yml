@@ -1,0 +1,12 @@
+# Scrape config for the Gatekeeper dashboard. Points at gatekeeper-api's
+# /metrics endpoint (core/metrics.py) inside the compose network — the
+# service name resolves via Docker's internal DNS, no hardcoded IP.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: gatekeeper-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["gatekeeper-api:8000"]

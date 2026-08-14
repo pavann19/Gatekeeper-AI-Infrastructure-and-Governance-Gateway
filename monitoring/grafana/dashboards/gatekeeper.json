@@ -1,0 +1,83 @@
+{
+  "title": "Gatekeeper",
+  "uid": "gatekeeper-overview",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1, "title": "Decisions per second, by outcome",
+      "type": "timeseries", "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [{ "expr": "sum by (decision) (rate(gatekeeper_assessments_total[5m]))", "legendFormat": "{{decision}}" }],
+      "description": "BLOCK/RESTRICT/ALLOW rate. A sudden shift in the ALLOW:BLOCK ratio is the first thing worth noticing on this dashboard."
+    },
+    {
+      "id": 2, "title": "Decision source breakdown (which stage decided)",
+      "type": "timeseries", "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [{ "expr": "sum by (source) (rate(gatekeeper_assessments_total[5m]))", "legendFormat": "{{source}}" }],
+      "description": "cache/fast_path_*/fusion_*/*_judge_* — shows the fast/deep cascade (§1v) actually working: fast_path_* firing means fusion was skipped for that request."
+    },
+    {
+      "id": 3, "title": "End-to-end request latency (p50 / p95 / p99)",
+      "type": "timeseries", "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum by (le) (rate(gatekeeper_request_duration_seconds_bucket[5m])))", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.95, sum by (le) (rate(gatekeeper_request_duration_seconds_bucket[5m])))", "legendFormat": "p95" },
+        { "expr": "histogram_quantile(0.99, sum by (le) (rate(gatekeeper_request_duration_seconds_bucket[5m])))", "legendFormat": "p99" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "description": "§1p/§1v measured cold p50 ~1.0s, p95 double-digit seconds (judge-dominated) -- this panel is where that shows up live rather than in a one-off benchmark log."
+    },
+    {
+      "id": 4, "title": "Per-stage latency, p95",
+      "type": "timeseries", "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [{ "expr": "histogram_quantile(0.95, sum by (le, stage) (rate(gatekeeper_stage_duration_seconds_bucket[5m])))", "legendFormat": "{{stage}}" }],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "description": "meta_intent / faiss_threat_search / domain_alignment / fusion. Fusion should dominate -- if another stage suddenly doesn't, something regressed."
+    },
+    {
+      "id": 5, "title": "Assessments in flight",
+      "type": "timeseries", "gridPos": { "h": 6, "w": 8, "x": 0, "y": 16 },
+      "targets": [{ "expr": "gatekeeper_assessments_in_flight", "legendFormat": "in-flight" }],
+      "description": "Sustained values at/above ASSESS_MAX_CONCURRENCY (default 4) mean requests are queueing -- the leading indicator before the 30s timeout starts firing."
+    },
+    {
+      "id": 6, "title": "Rate-limited requests (429s)",
+      "type": "timeseries", "gridPos": { "h": 6, "w": 8, "x": 8, "y": 16 },
+      "targets": [{ "expr": "sum by (authenticated) (rate(gatekeeper_rate_limited_total[5m]))", "legendFormat": "authenticated={{authenticated}}" }],
+      "description": "Anonymous overage is ordinary; sustained authenticated=true overage usually means a client-side bug worth chasing, not abuse."
+    },
+    {
+      "id": 7, "title": "Assessment timeouts (503s)",
+      "type": "timeseries", "gridPos": { "h": 6, "w": 8, "x": 16, "y": 16 },
+      "targets": [{ "expr": "sum by (endpoint) (rate(gatekeeper_assessment_timeouts_total[5m]))", "legendFormat": "{{endpoint}}" }],
+      "description": "Should be near zero in steady state. A timeout is an availability event -- see docs/ENGINEERING_ASSESSMENT.md §1q for why it returns 503 rather than a fabricated verdict."
+    },
+    {
+      "id": 8, "title": "Judge invocation rate",
+      "type": "timeseries", "gridPos": { "h": 6, "w": 8, "x": 0, "y": 22 },
+      "targets": [{ "expr": "rate(gatekeeper_judge_invocations_total[5m])", "legendFormat": "judge calls/s" }],
+      "description": "§1v measured this at ~6.6% of traffic on the reference benchmark -- the ambiguous zone is meant to be the exception, not the common case."
+    },
+    {
+      "id": 9, "title": "Circuit breaker state",
+      "type": "state-timeline", "gridPos": { "h": 6, "w": 8, "x": 8, "y": 22 },
+      "targets": [{ "expr": "gatekeeper_circuit_breaker_open", "legendFormat": "{{backend}}" }],
+      "description": "1 = open (failing fast). ollama_judge and llama_guard tracked separately -- see core/circuit_breaker.py."
+    },
+    {
+      "id": 10, "title": "Unrecognised decision sources (should be ~0)",
+      "type": "timeseries", "gridPos": { "h": 6, "w": 8, "x": 16, "y": 22 },
+      "targets": [{ "expr": "sum(rate(gatekeeper_metrics_unknown_source_total[5m]))", "legendFormat": "unknown sources/s" }],
+      "description": "Non-zero means core/risk.py emits a verdict source core/metrics.py's KNOWN_SOURCES allowlist doesn't recognise yet -- the metric degraded, not the gateway. See core/metrics.py's cardinality-guard docstring."
+    },
+    {
+      "id": 11, "title": "Assessments per tenant",
+      "type": "timeseries", "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
+      "targets": [{ "expr": "sum by (tenant, decision) (rate(gatekeeper_tenant_assessments_total[5m]))", "legendFormat": "{{tenant}} / {{decision}}" }],
+      "description": "Per-tenant traffic and decision mix -- §1s/§1t made tenant load-bearing for suspension, SLA, and policy; this is where that becomes visible operationally."
+    }
+  ]
+}
