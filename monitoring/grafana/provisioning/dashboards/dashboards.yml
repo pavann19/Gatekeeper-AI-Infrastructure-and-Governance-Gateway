@@ -1,0 +1,14 @@
+# Tells Grafana to auto-load any dashboard JSON dropped in
+# monitoring/grafana/dashboards/ — same zero-click-setup reasoning as the
+# datasource provisioning file.
+apiVersion: 1
+
+providers:
+  - name: gatekeeper
+    orgId: 1
+    folder: ""
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    options:
+      path: /etc/grafana/provisioning/dashboards/files
