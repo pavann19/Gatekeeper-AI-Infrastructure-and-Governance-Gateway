@@ -2402,3 +2402,88 @@ in name, dead dynamic-threat-feed removal, threshold recalibration, and a
 full benchmark rerun) remains open — see `docs/ROADMAP_V2.md`.
 
 ---
+
+## 1x. Multilingual encoder — investigated, NOT wired in, negative result recorded (2026-08-14)
+
+Phase 1 of `docs/ROADMAP_V2.md`. §1b/§1d already concluded, at the single-
+detector level, that swapping the embedding model is no longer the fix for
+the German gap — `protectai_injection` alone gets German AUC 0.872, and
+Prompt Guard 2 alone gets 0.970 (higher than its own English number). What
+had never been measured was whether either of those single-detector wins
+actually survives contact with the DEPLOYED 4-feature fusion ensemble, and
+whether adding Prompt Guard 2 as a 5th feature is worth its real
+deployment cost. `scripts/analyze_multilingual_fusion.py` (new) answers
+both, out-of-fold, on the full 6,933-row suite — result:
+`_evidence/multilingual_fusion_analysis.json`.
+
+### Finding 1 — the deployed ensemble already narrows the gap substantially, and nobody had measured it
+
+| | anchors-only (§1c, single detector) | deployed 4-feature fusion, out-of-fold (new) |
+|---|---|---|
+| English AUC | 0.909 [0.900, 0.918] | 0.950 [0.943, 0.957] |
+| German AUC | 0.632 [0.550, 0.712] | **0.819 [0.752, 0.876]** |
+| German recall@5%FPR | 22.4% [9.5, 39.7] | 47.4% [35.8, 65.8] |
+
+`protectai_injection` being IN the deployed ensemble already does most of
+the German-closing work §1d predicted it would — this is the first time
+that prediction was checked against the actual fused ensemble rather than
+the standalone detector. The English/German AUC gap narrowed from 0.277 to
+0.131. This is real, useful, and was previously undocumented.
+
+### Finding 2 — adding Prompt Guard 2 does NOT close the residual gap, and isn't worth its cost
+
+| | deployed (4-feature) | candidate (+ prompt_guard_2) | delta | decisive? |
+|---|---|---|---|---|
+| Pooled AUC | 0.944 [0.936, 0.951] | 0.952 [0.944, 0.958] | +0.008 | **NO — CIs overlap** |
+| German AUC | 0.819 [0.752, 0.876] | 0.819 [0.752, 0.876] | -0.0003 | **NO — identical** |
+| German recall@5%FPR | 47.4% [35.8, 65.8] | 43.4% [33.3, 62.9] | -4.0pp | not decisive either direction |
+
+Prompt Guard 2's own gated-model access was verified working on this
+machine (`meta-llama/Llama-Prompt-Guard-2-86M` loads successfully — HF
+licence already accepted, weights cached), so this was a genuine live
+feasibility test, not a theoretical one. The result is still a clear NO:
+folding it into the pooled logistic-regression fusion does not move
+German performance at all, and the pooled-AUC lift is not statistically
+decisive either. Given `fused_threat_score`'s existing fail-closed design
+— ANY missing required feature drops the WHOLE ensemble to the
+anchors-only fallback, not just the German-specific signal — adding a
+Meta-gated dependency for an undecided gain would mean every fresh
+deployment that hasn't completed Meta's per-deployment licence step
+degrades on 100% of its traffic. That is a real, asymmetric cost against
+an unproven benefit. **Not wired into `core/fusion.py`.** The negative
+result is recorded rather than discarded, per this project's own stated
+methodology (§1b: "keep every number, including the bad ones").
+
+### Why pooled fusion doesn't transfer a strong single-detector German number
+
+The most likely explanation, consistent with §1c's structural finding
+about attack classes: a single pooled logistic regression, fit to
+maximise separability across the WHOLE (mostly-English, n=6,458 vs
+n=234-German) dataset, will weight features toward what best separates
+the majority. Prompt Guard 2's German strength doesn't survive being
+averaged against three other detectors' English-dominated calibration.
+This is the same lesson §1c already drew for `harmful_content` vs
+`injection`/`jailbreak` — "no single cut point serves both classes" — now
+observed for language instead of attack class.
+
+### What this does not close
+
+The English/German gap (0.950 vs 0.819 AUC, 84.7% vs 47.4% recall@5%FPR)
+is real, decisive (non-overlapping CIs), and still open. The likely fix is
+a language-aware policy (a German-specific threshold or a per-language
+fusion, mirroring the per-class mechanism §1w already surfaces) rather
+than another pooled feature — but German is only 234 rows (76 attacks) in
+the current suite, thin for fitting a dedicated logistic regression with
+any confidence, so this needs either more German-labelled data or a
+simpler intervention (e.g. a calibrated German-specific threshold on the
+existing `protectai_injection` score alone, which already gets German AUC
+0.872 standalone — higher than the diluted 0.819 it contributes inside
+the pooled ensemble). Neither is built. Tracked as a reprioritized,
+better-scoped Phase 1 follow-up in `docs/ROADMAP_V2.md`, not the vague
+"multilingual encoder" item it started as.
+
+Remaining Phase 1 items untouched by this pass: clean threat taxonomy,
+separating `risk` from `topicality` in practice, dead dynamic-threat-feed
+removal, threshold recalibration, full benchmark rerun.
+
+---

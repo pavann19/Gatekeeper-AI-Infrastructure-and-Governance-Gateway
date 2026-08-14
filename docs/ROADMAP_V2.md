@@ -23,8 +23,31 @@ Original estimate: ~20–30h
       computed in `core/fusion.py`, not yet surfaced)
 - [x] Surface per-class risk vector in `details` / API response — done
       2026-08-14, see `docs/ENGINEERING_ASSESSMENT.md` §1w
-- [ ] Multilingual encoder (German recall gap documented in the engineering
-      assessment — AUC 0.890 overall, German notably weaker)
+- [x] Multilingual encoder — investigated 2026-08-14, see
+      `docs/ENGINEERING_ASSESSMENT.md` §1x and
+      `scripts/analyze_multilingual_fusion.py`. Findings: (a) the deployed
+      4-feature fusion ensemble already narrows the German gap
+      substantially vs. anchors-only (German AUC 0.632 -> 0.819
+      out-of-fold, previously unmeasured for the ensemble) purely because
+      `protectai_injection` is already in it — no encoder swap needed,
+      confirming §1b/§1d's superseded recommendation; (b) adding Prompt
+      Guard 2 as a 5th feature was tested live (gated access confirmed
+      working) and does NOT move German performance (0.819 -> 0.819,
+      confidence intervals identical) and the pooled AUC lift isn't
+      statistically decisive either — NOT wired into `core/fusion.py`,
+      negative result recorded rather than shipped. Encoder swap item is
+      closed; a real, decisive residual gap remains (0.950 vs 0.819 AUC,
+      84.7% vs 47.4% recall@5%FPR, English vs German) — replaced below
+      with the honestly-scoped follow-up.
+- [ ] German-specific detection gap (renamed from "multilingual encoder"
+      per the above): investigate a language-aware threshold or per-
+      language policy (mirrors the per-class mechanism §1w already
+      surfaces) rather than another pooled feature — likely starting point
+      is a calibrated German-specific threshold on `protectai_injection`
+      alone (German AUC 0.872 standalone, higher than the 0.819 it
+      contributes diluted inside the pooled ensemble). Blocked on data
+      volume: only 234 German rows (76 attacks) in the current suite, thin
+      for a dedicated fit — may need more German-labelled data first.
 - [ ] Clean threat taxonomy
 - [ ] Separate `risk` from `topicality` (topicality field already exists in
       the schema — confirm it's actually independent in practice, not just
