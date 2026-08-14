@@ -20,8 +20,9 @@ even where the original proposal's phase 1/8 implied rebuilding them.
 Original estimate: ~20–30h
 
 - [x] Per-class risk vector groundwork identified (`class_scores` already
-      computed in `core/fusion.py`, not yet surfaced) — **starting now**
-- [ ] Surface per-class risk vector in `details` / API response
+      computed in `core/fusion.py`, not yet surfaced)
+- [x] Surface per-class risk vector in `details` / API response — done
+      2026-08-14, see `docs/ENGINEERING_ASSESSMENT.md` §1w
 - [ ] Multilingual encoder (German recall gap documented in the engineering
       assessment — AUC 0.890 overall, German notably weaker)
 - [ ] Clean threat taxonomy
