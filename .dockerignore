@@ -1,0 +1,37 @@
+# DENY-BY-DEFAULT, not a growing blocklist. The previous version of this
+# file excluded specific known-large paths individually and missed
+# .hf_cache/ — a 9.3GB local HuggingFace model cache dir this session
+# created but that nothing had ever inventoried — which then transferred
+# into the build context wholesale and (combined with an already RAM-
+# constrained machine) caused a near-crisis: RAM to 0.34GB free / 97% used
+# mid-build. A blocklist only ever excludes what you already knew to name.
+# An allowlist is safe by construction against the NEXT unknown large
+# directory, not just the ones caught so far.
+*
+
+# --- Explicitly re-included: exactly what Dockerfile.api/.ui need ---
+# requirements.txt (full) for Dockerfile.ui; requirements-api.txt (scoped)
+# for Dockerfile.api — see that file's header for why they're different.
+!requirements.txt
+!requirements-api.txt
+!api/
+!core/
+!ui/
+!models/
+!policies/
+!policies.json
+!policy_rules.json
+
+# Re-including a directory does not recurse into ITS subdirectories'
+# ignored contents by Docker's rules, so caches nested inside re-included
+# dirs still need their own exclusion.
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+
+# Secrets — belt and suspenders even under allowlist, since none of the
+# re-included paths above should ever contain these, but a stray misplaced
+# file must not ship regardless.
+**/api_keys.json
+**/tenants.json
+**/.env

@@ -1,0 +1,32 @@
+# Runtime dependencies for the DEPLOYED gatekeeper-api container only —
+# not the dev/UI/benchmark kitchen-sink in requirements.txt.
+#
+# WHY THIS FILE EXISTS: Dockerfile.api was installing the full
+# requirements.txt, which includes streamlit + altair + pydeck (the UI,
+# which has its OWN Dockerfile and never runs in this container), diagrams
+# (a dev-only report-generation tool), nemoguardrails (registered in
+# core/detectors.py's detector registry for OFFLINE comparison scripts only
+# — confirmed NOT in core/fusion.py's LIVE_MODEL_DETECTORS, so the live API
+# never imports it), and pytest/pytest-cov/ruff (dev tooling; tests/ is
+# already excluded from the image by .dockerignore, so nothing here would
+# even use them). None of that belongs in a production image, and together
+# it was a real contributor to a build-time RAM crisis on a
+# resource-constrained machine (see docs/ENGINEERING_ASSESSMENT.md §1w).
+#
+# Kept in sync BY HAND with requirements.txt's version constraints — if you
+# bump a version there for a package also listed here, bump it here too.
+
+fastapi>=0.109.0
+uvicorn>=0.27.0
+pydantic-settings>=2.0.0
+python-dotenv>=1.0.0
+python-json-logger>=2.0.7
+requests>=2.31.0
+sentence-transformers>=2.3.1
+numpy>=1.26.0,<2.0.0
+spacy>=3.7.0
+faiss-cpu>=1.7.4
+psutil>=5.9.0
+redis>=5.0.0
+prometheus-client>=0.20.0
+einops>=0.8.0

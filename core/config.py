@@ -122,6 +122,13 @@ class Settings(BaseSettings):
     POLICY_FILE: str = "policies.json"
     POLICY_RULES_FILE: str = "policy_rules.json"
 
+    # Path to the JSONL audit log. Relative to cwd by default — unchanged
+    # from before this setting existed. A container deployment should point
+    # this at a mounted volume, since the audit record is this project's
+    # compliance artefact and must not be silently discarded on every
+    # container recreation.
+    AUDIT_LOG_PATH: str = "audit.jsonl"
+
     # --- Authentication ---
     # Capability is resolved from a verified API key, never from the request
     # body. See core/auth.py for the vulnerability this replaces.

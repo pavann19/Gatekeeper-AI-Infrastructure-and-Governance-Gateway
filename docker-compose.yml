@@ -1,6 +1,52 @@
-version: '3.8'
-
 services:
+  redis:
+    image: redis:7-alpine
+    # Enables the distributed cache backend core/cache_backend.py already
+    # supports (§1k) but this compose file never wired in — without it,
+    # every replica's exact-match cache is process-local, which defeats
+    # the entire point of running more than one gatekeeper-api replica.
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - gatekeeper_net
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - gatekeeper_net
+
+  # ONE-SHOT: pulls the judge model and exits. The base ollama/ollama image
+  # ships with NO models — without this, `docker-compose up` on a fresh
+  # volume leaves judge_available() failing (§ core/semantic_judge.py) until
+  # an operator manually runs `docker exec ollama ollama pull llama-guard3`,
+  # which is exactly the kind of undocumented manual step an MVP deployment
+  # should not require. gatekeeper-api's `depends_on: model-pull: service_completed_successfully`
+  # blocks startup until this finishes, rather than starting and silently
+  # falling back to JUDGE_OFFLINE-equivalent behaviour on the first N requests.
+  model-pull:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: ["sh", "-c", "OLLAMA_HOST=http://ollama:11434 ollama pull llama-guard3"]
+    networks:
+      - gatekeeper_net
+
   gatekeeper-api:
     build:
       context: .
@@ -8,13 +54,54 @@ services:
     ports:
       - "8000:8000"
     environment:
+      # llama-guard3, NOT the previous default — the deployed config must
+      # match what §1j-§1v actually measured and validated. Pointing this
+      # at "mistral" (the old default) would silently ship a judge model
+      # this project moved off of months ago.
+      - OLLAMA_MODEL=llama-guard3
       - OLLAMA_API_URL=http://ollama:11434/api/generate
+      - REDIS_URL=redis://redis:6379/0
+      - API_KEYS_FILE=/app/config/api_keys.json
+      - TENANTS_FILE=/app/config/tenants.json
+      # POLICY_RULES_FILE deliberately NOT overridden here — it keeps
+      # core/config.py's default ("policy_rules.json", relative to WORKDIR
+      # /app), which resolves to the copy the Dockerfile already bakes in
+      # from the repo root. Unlike the two files above, an ABSENT policy
+      # file is not a safe default (core/policy.py fails closed to BLOCK
+      # for every request with no usable policy), so pointing it at the
+      # always-empty-by-default ./config mount would silently deny all
+      # traffic on a stock `docker-compose up`. See config/README.md for
+      # how to actually override it.
+      - AUDIT_LOG_PATH=/app/audit/audit.jsonl
+      # Overridable at `docker compose run -e` or via a .env file (see
+      # .env.example) for anything an operator needs to change without
+      # editing this file — AUTH_MODE, RATE_LIMIT_*, METRICS_REQUIRE_AUTH,
+      # etc. all have safe defaults in core/config.py and do not need to be
+      # set here.
+    env_file:
+      - path: .env
+        required: false
     volumes:
-      - ./data:/app/data
-      - ./policies:/app/policies
-      - ./policies.json:/app/policies.json
-      - ./policy_rules.json:/app/policy_rules.json
-      - ./audit.jsonl:/app/audit.jsonl
+      # Config files an operator provisions, NOT single-file bind mounts —
+      # those are fragile (Docker creates a DIRECTORY at the target path if
+      # the host file doesn't already exist, silently breaking startup) and
+      # the previous version of this compose file bind-mounted audit.jsonl
+      # as a file for exactly that reason. Mounting the containing
+      # directory means a missing file degrades safely: core/auth.py's
+      # KeyStore and core/tenancy.py's TenantStore both already treat "file
+      # absent" as "nothing configured yet" rather than an error.
+      - ./config:/app/config:ro
+      - audit_data:/app/audit
+      # HuggingFace/sentence-transformers model cache. Without this, every
+      # container recreation re-downloads all_mpnet-base-v2 and the three
+      # fusion detectors from scratch — slow, and a real failure mode if
+      # the deployment environment has restricted egress.
+      - hf_cache:/root/.cache/huggingface
+    depends_on:
+      redis:
+        condition: service_healthy
+      model-pull:
+        condition: service_completed_successfully
     networks:
       - gatekeeper_net
 
@@ -25,19 +112,15 @@ services:
     ports:
       - "8501:8501"
     environment:
-      - API_URL=http://gatekeeper-api:8000/api/v1
+      # HONEST LIMITATION (see Dockerfile.ui): this UI talks to Ollama
+      # directly, not to gatekeeper-api. Pointed at the real judge model so
+      # it is at least consistent with the API's judge, but it still does
+      # not exercise core/risk.py's pipeline. Documented, not hidden.
+      - OLLAMA_MODEL=llama-guard3
       - OLLAMA_API_URL=http://ollama:11434/api/generate
+      - API_URL=http://gatekeeper-api:8000/api/v1
     depends_on:
       - gatekeeper-api
-    networks:
-      - gatekeeper_net
-
-  ollama:
-    image: ollama/ollama:latest
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_data:/root/.ollama
     networks:
       - gatekeeper_net
 
@@ -47,3 +130,6 @@ networks:
 
 volumes:
   ollama_data:
+  redis_data:
+  audit_data:
+  hf_cache:
