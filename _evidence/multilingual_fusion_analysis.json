@@ -1,0 +1,163 @@
+{
+  "seed": 20260723,
+  "folds": 5,
+  "fpr_budget": 0.05,
+  "n_bootstrap": 500,
+  "n_rows": 6933,
+  "n_attack": 1925,
+  "n_benign": 5008,
+  "deployed_features": [
+    "anchors",
+    "protectai_injection",
+    "madhurjindal_jailbreak",
+    "toxic_bert"
+  ],
+  "candidate_features": [
+    "anchors",
+    "protectai_injection",
+    "madhurjindal_jailbreak",
+    "toxic_bert",
+    "prompt_guard_2"
+  ],
+  "deployed_by_language": {
+    "de": {
+      "n": 234,
+      "n_attack": 76,
+      "auc": {
+        "point": 0.8189540306462358,
+        "lo": 0.7515243902439024,
+        "hi": 0.8761324041811847,
+        "n": 234,
+        "n_boot_effective": 500,
+        "ci_level": 0.95
+      },
+      "recall_at_fpr": {
+        "point": 0.47368421052631576,
+        "lo": 0.35802469135802467,
+        "hi": 0.6578947368421053,
+        "n": 234,
+        "n_boot_effective": 500,
+        "ci_level": 0.95
+      }
+    },
+    "en": {
+      "n": 6458,
+      "n_attack": 1814,
+      "auc": {
+        "point": 0.9501983329962099,
+        "lo": 0.9434624894267681,
+        "hi": 0.9565475224685545,
+        "n": 6458,
+        "n_boot_effective": 500,
+        "ci_level": 0.95
+      },
+      "recall_at_fpr": {
+        "point": 0.8467475192943771,
+        "lo": 0.8261791202967673,
+        "hi": 0.863964464186563,
+        "n": 6458,
+        "n_boot_effective": 500,
+        "ci_level": 0.95
+      }
+    },
+    "other": {
+      "n": 241,
+      "n_attack": 35,
+      "auc": {
+        "point": 0.9693481276005548,
+        "lo": 0.9400863163239401,
+        "hi": 0.9929539295392954,
+        "n": 241,
+        "n_boot_effective": 500,
+        "ci_level": 0.95
+      },
+      "recall_at_fpr": {
+        "point": 0.8571428571428571,
+        "lo": 0.7272727272727273,
+        "hi": 0.9705882352941176,
+        "n": 241,
+        "n_boot_effective": 500,
+        "ci_level": 0.95
+      }
+    }
+  },
+  "candidate_by_language": {
+    "de": {
+      "n": 234,
+      "n_attack": 76,
+      "auc": {
+        "point": 0.8186209193870753,
+        "lo": 0.7518098132094021,
+        "hi": 0.8761942360836952,
+        "n": 234,
+        "n_boot_effective": 500,
+        "ci_level": 0.95
+      },
+      "recall_at_fpr": {
+        "point": 0.4342105263157895,
+        "lo": 0.3333333333333333,
+        "hi": 0.6285714285714286,
+        "n": 234,
+        "n_boot_effective": 500,
+        "ci_level": 0.95
+      }
+    },
+    "en": {
+      "n": 6458,
+      "n_attack": 1814,
+      "auc": {
+        "point": 0.9574804349746018,
+        "lo": 0.9515485836691612,
+        "hi": 0.9632631953814048,
+        "n": 6458,
+        "n_boot_effective": 500,
+        "ci_level": 0.95
+      },
+      "recall_at_fpr": {
+        "point": 0.8754134509371555,
+        "lo": 0.8587319243604005,
+        "hi": 0.8932305998899285,
+        "n": 6458,
+        "n_boot_effective": 500,
+        "ci_level": 0.95
+      }
+    },
+    "other": {
+      "n": 241,
+      "n_attack": 35,
+      "auc": {
+        "point": 0.9819694868238558,
+        "lo": 0.9618441971383148,
+        "hi": 0.9973086124401914,
+        "n": 241,
+        "n_boot_effective": 500,
+        "ci_level": 0.95
+      },
+      "recall_at_fpr": {
+        "point": 0.8857142857142857,
+        "lo": 0.7666666666666667,
+        "hi": 0.9761904761904762,
+        "n": 241,
+        "n_boot_effective": 500,
+        "ci_level": 0.95
+      }
+    }
+  },
+  "pooled_deployed_auc": {
+    "point": 0.9437336625036306,
+    "lo": 0.9356075269827548,
+    "hi": 0.9507819968960165,
+    "n": 6933,
+    "n_boot_effective": 500,
+    "ci_level": 0.95
+  },
+  "pooled_candidate_auc": {
+    "point": 0.9515547072735571,
+    "lo": 0.9441176654827454,
+    "hi": 0.9579054060366008,
+    "n": 6933,
+    "n_boot_effective": 500,
+    "ci_level": 0.95
+  },
+  "pooled_decisive": false
+}

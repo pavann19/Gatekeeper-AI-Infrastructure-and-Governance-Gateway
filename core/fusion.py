@@ -17,10 +17,29 @@ WHAT IT LOADS
 StandardScaler + LogisticRegression over four detectors chosen because they are
 (a) not gated behind an external licence and (b) fast enough for synchronous
 request handling: anchors, protectai_injection, madhurjindal_jailbreak,
-toxic_bert. Prompt Guard 2 / Llama Guard measurably strengthen the offline
-ensemble further, but the first requires a per-deployment Meta licence and the
-second is far too slow for a live request (seconds, not milliseconds, on CPU) —
-both remain valid opt-in upgrades, not part of this default path.
+toxic_bert. Llama Guard is far too slow for a live request (seconds, not
+milliseconds, on CPU) and remains a valid opt-in upgrade, not part of this
+default path.
+
+Prompt Guard 2 was deliberately tested and NOT added as a 5th feature —
+see `scripts.analyze_multilingual_fusion` and docs/ENGINEERING_ASSESSMENT.md
+§1x before re-proposing this. Out-of-fold, on the full 6,933-row suite: it
+lifted pooled AUC 0.944→0.952 and German AUC not at all (0.819→0.819,
+delta -0.0003) — both deltas fall inside overlapping confidence intervals,
+i.e. NOT statistically decisive. Because `fused_threat_score` fails the
+WHOLE ensemble to the anchors-only fallback when any one required feature
+is unavailable (see below), adding a Meta-gated 5th feature for an
+undecided gain would mean every deployment that hasn't completed a
+per-deployment HF licence step degrades on 100% of requests, not just
+German ones — a real cost for no proven benefit. `protectai_injection`
+already does most of the German-closing work inside this ensemble (German
+AUC 0.632 anchors-only -> 0.819 fused, out-of-fold) — a real, decisive gap
+narrowing that had never been measured for the deployed ensemble by
+language before that analysis. The residual English/German gap (0.950 vs
+0.819 AUC, 84.7% vs 47.4% recall@5%FPR) remains OPEN — closing it likely
+needs a language-aware policy, not another feature added to one pooled
+threshold (the same structural lesson §1c already drew for attack
+classes), and that is unbuilt, tracked in docs/ROADMAP_V2.md.
 
 FAIL-CLOSED, BUT NOT TO A CRASH
 --------------------------------
