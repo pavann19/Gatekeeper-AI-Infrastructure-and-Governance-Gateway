@@ -47,7 +47,6 @@ from core.risk import (
     check_meta_intent,
     hard_ban_triggered,
 )
-from core.updates import check_dynamic_threats
 from core.vector_store import threat_store
 
 EVIDENCE_DIR = "_evidence"
@@ -97,7 +96,6 @@ def extract_signals(limit=None, refresh=False):
             "symbolic_triggered": bool(symbolic),
             "symbolic_detail": detail,
             "threat_score": float(threat_store.get_max_similarity(vec)),
-            "dynamic_threat_score": float(check_dynamic_threats(vec)),
             "meta_intent_score": float(check_meta_intent(vec)),
         })
 
@@ -124,7 +122,7 @@ def predict(rec, t_high, t_med, t_meta):
         return True
     if rec["meta_intent_score"] >= t_meta:
         return True
-    return max(rec["threat_score"], rec["dynamic_threat_score"]) >= t_med
+    return rec["threat_score"] >= t_med
 
 
 def confusion(records, t_high, t_med, t_meta):
@@ -171,7 +169,7 @@ def continuous_score(rec):
     """
     if rec["symbolic_triggered"]:
         return 1.0
-    return max(rec["threat_score"], rec["dynamic_threat_score"], rec["meta_intent_score"])
+    return max(rec["threat_score"], rec["meta_intent_score"])
 
 
 def roc_curve(records):

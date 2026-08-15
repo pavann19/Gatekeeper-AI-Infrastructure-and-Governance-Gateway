@@ -181,8 +181,7 @@ def test_fast_path_values_are_not_recomputed_in_stage_2(monkeypatch, drive_past_
                return_value={"available": False, "score": None, "threshold_high": None,
                             "threshold_medium": None, "detail": "test", "detector_scores": {}}), \
          patch("core.risk.compute_centroid_similarity", return_value=0.0), \
-         patch("core.risk.check_dynamic_threats", return_value=0.0), \
-         patch("core.risk.check_dynamic_safe_harbors", return_value=False):
+         patch("core.risk.check_educational_context", return_value=False):
         mock_store.get_max_similarity.return_value = 0.0
         risk_mod.assess_risk("clears the fast path, falls through to Stage 2")
 

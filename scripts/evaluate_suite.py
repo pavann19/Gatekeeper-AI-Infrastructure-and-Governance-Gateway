@@ -67,7 +67,6 @@ def extract_signals(records, refresh=False):
     from tqdm import tqdm
     from core.embeddings import get_embedding
     from core.risk import _ensure_faiss_initialized, check_meta_intent, hard_ban_triggered
-    from core.updates import check_dynamic_threats
     from core.vector_store import threat_store
 
     _ensure_faiss_initialized()
@@ -78,13 +77,12 @@ def extract_signals(records, refresh=False):
         symbolic, _ = hard_ban_triggered(r["text"])
         vec = get_embedding(r["text"])
         threat = float(threat_store.get_max_similarity(vec))
-        dynamic = float(check_dynamic_threats(vec))
         meta = float(check_meta_intent(vec))
         # Single continuous detector score. Symbolic hits are a deterministic
         # veto and take the maximum by construction.
-        score = 1.0 if symbolic else max(threat, dynamic, meta)
+        score = 1.0 if symbolic else max(threat, meta)
         scored.append({**r, "symbolic": bool(symbolic), "threat_score": threat,
-                       "dynamic_threat_score": dynamic, "meta_intent_score": meta,
+                       "meta_intent_score": meta,
                        "score": score})
 
     os.makedirs("_evidence", exist_ok=True)
