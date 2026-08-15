@@ -62,7 +62,21 @@ Original estimate: ~20–30h
 - [ ] Separate `risk` from `topicality` (topicality field already exists in
       the schema — confirm it's actually independent in practice, not just
       in name)
-- [ ] Investigate/remove dead dynamic threat feed
+- [x] Investigate/remove dead dynamic threat feed — done 2026-08-14, see
+      `docs/ENGINEERING_ASSESSMENT.md` §1z. Removed entirely (`core/
+      updates.py`, `/api/v1/update`, all `dynamic_threat_score` refs — it
+      was never auto-populated and never consumed by any decision even
+      when populated). Investigation surfaced a real bug along the way:
+      `is_educational` was wired to a different, permanently-empty dead
+      function instead of the correct, already-implemented
+      `check_educational_context` — silently disabling the entire
+      educational-safe-harbor MEDIUM path. Fixed (one line). Measured
+      impact without needing a live judge: only 4/901 ambiguous-zone rows
+      in the eval suite flip, all 4 benign, zero attacks affected, no HIGH
+      decision reachable by the fix at all. 7 new tests, 386 passed
+      (up from 381). A second, adjacent dead-anchor-list finding
+      (`policies.json`'s unused `safe_anchors`) was noted but NOT acted
+      on — flagged for a future dedicated pass, not folded in here.
 - [ ] Recalibrate thresholds
 - [ ] Rerun full benchmark, regression tests
 

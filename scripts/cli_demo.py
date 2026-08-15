@@ -5,7 +5,6 @@ from core.logger import log_event
 from core.llm import generate_llm_response_stream
 from core.auth import get_user_role
 from core.multimodal import normalize_image, normalize_audio
-from core.updates import fetch_latest_threats
 
 def generate_safe_response(prompt):
     return "Here is general, high-level information without actionable steps. (Educational Mode)"
@@ -56,7 +55,6 @@ if __name__ == "__main__":
     print(" - Type text for standard prompt")
     print(" - 'image:<path>' for Image Rail test")
     print(" - 'audio:<path>' for Audio Rail test")
-    print(" - 'update' to fetch Threat Feeds")
     print("--------------------------------------------------\n")
 
     role = get_user_role()
@@ -66,11 +64,7 @@ if __name__ == "__main__":
             user_input = input(f"[{role}] >> ")
             if user_input.lower() in ["exit", "quit"]:
                 break
-            
-            if user_input.lower() == "update":
-                fetch_latest_threats()
-                continue
-                
+
             print(handle_multimodal_request(user_input, role))
             print("-" * 30)
             

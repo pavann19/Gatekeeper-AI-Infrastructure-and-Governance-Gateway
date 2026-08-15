@@ -2592,4 +2592,138 @@ recalibration, full benchmark rerun.
 
 ---
 
+## 1z. Dead dynamic threat feed: investigated, removed — and a real bug found along the way (2026-08-14)
+
+Phase 1 of `docs/ROADMAP_V2.md`. Started as "investigate/remove the dead
+dynamic threat feed" (§1b flagged `dynamic_threat_score` as 0.000 on all
+546 prompts in the original benchmark). Investigation surfaced something
+more serious than dead code: a real wiring bug that had silently disabled
+a designed safety feature.
+
+### What the dynamic threat feed actually was
+
+`core/updates.py`: `fetch_latest_threats()` scraped one hardcoded GitHub
+README (`0xk1h0/ChatGPT_DAN`) with a heuristic parser ("grab lines >60
+chars, take the first 5" — the code's own comment: "In a real system we
+would use specific parsers for STIX/TAXII... to avoid bloat in this
+research demo"), embedded the results, and stored them in an in-memory
+list, `DYNAMIC_THREATS`. This was reachable only via a manual admin
+endpoint (`POST /api/v1/update`) or a CLI demo script — never called
+automatically anywhere (no startup hook, no schedule). On a fresh
+deployment `DYNAMIC_THREATS` starts empty and stays empty unless an
+operator manually triggers it, which fully explains §1b's "0.000 on all
+546 prompts."
+
+Worse: even when populated, `check_dynamic_threats`'s result
+(`dynamic_threat_score`) was NEVER read by any decision logic in
+`core/risk.py` — only recorded in `details` as an inert diagnostic field.
+The only place it was ever actually *used* was inside the offline
+`AnchorDetector.score_batch()` (used for benchmarking/calibration, not
+live serving), creating a live/offline inconsistency masked only by the
+feature being permanently empty in practice. Decision: **removed
+entirely** — `core/updates.py` deleted, the `/api/v1/update` endpoint
+removed, all `dynamic_threat_score`/`check_dynamic_threats` references
+removed from `core/risk.py`, `core/detectors.py`, and the offline
+calibration scripts (`scripts/calibrate_thresholds.py`,
+`scripts/evaluate_suite.py`, `scripts/cli_demo.py`). No behavioral
+change — every reference removed had been a permanent, unreachable 0.0.
+
+### The real bug: `is_educational` was wired to the wrong function
+
+While tracing every consumer of the dynamic-threat machinery, one more
+call surfaced: `collect_semantic_signals` set
+`details["is_educational"] = check_dynamic_safe_harbors(prompt_vec)` —
+calling a function that only ever consults `DYNAMIC_SAFE_HARBORS`, a list
+with **no population code path anywhere in the codebase** ("Currently
+empty, but structured for future expansion" — a expansion that never
+happened). This always returned `0.0` (falsy).
+
+The correct function already existed, was already fully implemented, and
+was simply never called from the live path: `check_educational_context`
+combines the real, populated `educational_store` (built from
+`EDUCATIONAL_CONTEXT_ANCHORS` — "I am researching for a university
+cybersecurity course", "This is a CTF exercise in a virtual environment",
+etc.) against `EDUCATIONAL_THRESHOLD`, and returns a proper bool.
+
+**Consequence:** `signals["is_educational"]` was always falsy in the live
+pipeline, no matter how clearly a prompt was framed as authorized
+research. `fuse_signals`' entire `fusion_educational_safe_harbor` /
+`educational_safe_harbor` branches — designed to let a genuinely
+research-framed, ambiguous-zone prompt settle at MEDIUM without an
+unnecessary judge call — could never fire. The branches were correctly
+coded and even had unit tests (`tests/test_fusion.py`) confirming
+`fuse_signals` reacts correctly to `is_educational=True` — but every one
+of those tests hand-constructed the `signals` dict directly, so none of
+them exercised whether the flag was ever set correctly from a real
+prompt. That is exactly how the bug survived: the consumer was tested,
+the producer wasn't.
+
+**Fix:** one line — `check_dynamic_safe_harbors(prompt_vec)` →
+`check_educational_context(prompt_vec)`. `check_educational_context`
+itself was also simplified to drop its own dead call into
+`check_dynamic_safe_harbors` (the same always-empty list), leaving it as
+a pure, correct `educational_store` similarity check.
+
+### A second, adjacent dead-data finding — noted, not acted on
+
+`policies.json`'s `safe_anchors` (10 items, loaded into a module-level
+`EDUCATIONAL_ANCHORS` variable via `load_policies()`) is never actually
+passed to `educational_store.add_texts()` — a *second*, separate
+hardcoded list (`EDUCATIONAL_CONTEXT_ANCHORS`, 6 items) populates the
+store instead. `EDUCATIONAL_ANCHORS` is loaded and unpacked but has zero
+effect on any decision. Unlike the `is_educational` bug, this is NOT
+acted on in this pass: `safe_anchors` also contains generic
+capability-question anchors ("What capabilities do you have?", "Hello who
+are you") that are not specifically educational-framing content, so
+merging the two lists without a dedicated investigation into what
+`safe_anchors` was actually meant to gate risks diluting
+`check_educational_context`'s precision. Flagged for a future, properly
+scoped pass rather than folded into this one.
+
+### Verified
+
+- **Impact measurement, without needing a live judge**
+  (`scripts/analyze_educational_safe_harbor_impact.py`, new): the fix only
+  matters inside `fuse_signals`' ambiguous zone
+  (`threshold_medium <= score < threshold_high`), where it changes
+  `fusion_judge_pending` (MEDIUM, judge_required=True) into
+  `fusion_educational_safe_harbor` (MEDIUM, judge_required=False) — the
+  **risk_level is identical either way**; the only change is whether judge
+  arbitration is skipped. Since `is_educational` was always False before
+  this fix, the entire behavioral delta is exactly how many ambiguous-zone
+  rows now flip. Measured on the full 6,933-row suite: 901 rows in the
+  ambiguous zone, **4 flip** — all 4 labeled `benign`
+  (`_evidence/educational_safe_harbor_impact.json`), none are attacks. No
+  HIGH decision can be affected by this fix at all — the branch is
+  unreachable above `threshold_high` by construction. **Zero recall/FPR
+  impact on the eval suite; a small latency win (4 fewer unnecessary judge
+  calls) for legitimately research-framed benign prompts.**
+- 7 new tests (`tests/test_educational_context_fix.py`): `check_
+  educational_context` correct against the real store (True for genuine
+  educational framing, False for unrelated text); `collect_semantic_
+  signals`'s `is_educational` provably sourced from `check_educational_
+  context` (patches it to a sentinel and confirms the value flows through
+  — proves the WIRING, not just that the function works); guards against
+  reintroducing an equivalent dead indirection (`check_dynamic_threats`/
+  `check_dynamic_safe_harbors` no longer exist on `core.risk`); `core.
+  updates` no longer importable; no returned `details` dict carries
+  `dynamic_threat_score`; `/api/v1/update` returns 404.
+- Two existing tests (`tests/test_per_class_risk_vector.py`, `tests/
+  test_fast_path_cascade.py`) had stale mocks of the removed functions —
+  updated to mock `check_educational_context` instead.
+- Full suite: 386 passed (up from 381). Two pre-existing, order-dependent
+  test failures were found during this pass and confirmed — via `git
+  stash` back to the prior commit — to predate it entirely; not caused by
+  this work. Flagged separately rather than fixed here, to keep this
+  change's diff honestly scoped to what it actually touches.
+
+### What this does not close
+
+The second dead-anchor-list finding (`policies.json`'s unused
+`safe_anchors`/`EDUCATIONAL_ANCHORS`) remains open, deliberately. Remaining
+Phase 1 items: separating `risk` from `topicality` in practice, threshold
+recalibration, full benchmark rerun (blocked on Ollama/judge availability
+in this environment — see §1v's "unrelated finding" for the hardware
+context).
+
 ---

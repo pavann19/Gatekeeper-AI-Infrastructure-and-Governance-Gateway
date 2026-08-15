@@ -14,7 +14,6 @@ from core.privacy import redact_pii
 from core.rate_limit import assess_rate_limiter, bucket_parameters
 from core.tenancy import resolve_tenant
 from core.risk import assess_risk
-from core.updates import fetch_latest_threats
 from core.cache import flush_cache
 from core.logger import get_logger, log_event
 from core.policy import policy_decision
@@ -533,13 +532,6 @@ async def assess_output_endpoint(req: AssessOutputRequest, request: Request):
         details=details,
         process_time_ms=process_time_ms
     )
-
-@app.post("/api/v1/update")
-def update_threat_intel():
-    count, success = fetch_latest_threats()
-    if success:
-        return {"status": "success", "signatures_added": count}
-    raise HTTPException(status_code=500, detail="Failed to update threat intel.")
 
 @app.post("/api/v1/cache/flush")
 def flush_semantic_cache():

@@ -5,7 +5,6 @@ import os
 from core.semantic_judge import semantic_judge
 from core.embeddings import get_embedding, cosine_similarity
 from core.cache import lookup_cache, save_cache_entry
-from core.updates import check_dynamic_threats, check_dynamic_safe_harbors
 from core.domain_classifier import is_domain_aligned
 from core.config import (
     SEMANTIC_THRESHOLD_HIGH,
@@ -171,11 +170,7 @@ def check_educational_context(prompt_vec) -> bool:
     """
     # Strict threshold to prevent easy bypassing
     max_score = educational_store.get_max_similarity(prompt_vec)
-    
-    # Check Dynamic Safe Harbors (from Feeds)
-    dyn_score = check_dynamic_safe_harbors(prompt_vec)
-    
-    return max(max_score, dyn_score) > EDUCATIONAL_THRESHOLD
+    return max_score > EDUCATIONAL_THRESHOLD
 
 # ============================================================================
 # STAGE 1: HARD BAN (Symbolic Veto)
@@ -294,8 +289,16 @@ def collect_semantic_signals(prompt: str, prompt_vec, fast: dict = None) -> dict
         details["faiss_threat_search_ms"] = round((t1 - t0) * 1000, 2)
 
         details["threat_score"] = float(threat_score)
-    details["dynamic_threat_score"] = float(check_dynamic_threats(prompt_vec))
-    details["is_educational"] = check_dynamic_safe_harbors(prompt_vec)
+    # BUG FIX (2026-08-14, §1z): this previously called
+    # check_dynamic_safe_harbors(prompt_vec) directly -- a function that
+    # only ever consults DYNAMIC_SAFE_HARBORS, a list nothing populated
+    # (see docs/ENGINEERING_ASSESSMENT.md section 1z), so it always
+    # returned 0.0 (falsy). That silently disabled the entire educational-
+    # safe-harbor MEDIUM-downgrade path in fuse_signals below: no prompt,
+    # however clearly framed as authorized security research against the
+    # real, populated `educational_store` anchors, could ever trigger it.
+    # check_educational_context is the correct, complete check.
+    details["is_educational"] = check_educational_context(prompt_vec)
 
     # 3) Check Domain Alignment (topicality — NOT a safety signal).
     #    Skipped entirely when the guardrail is off, since the embedding
@@ -722,14 +725,14 @@ def assess_risk(prompt: str, background_scheduler=None) -> tuple:
                             "educational_context": False, "domain_score": None,
                             "topicality": "UNKNOWN",
                             "symbolic_triggered": False, "judge_invoked": False,
-                            "dynamic_threat_score": None, "meta_intent_score": None,
+                            "meta_intent_score": None,
                             "fusion_triggering_class": None, "fusion_class_scores": {}}
         logger.info(f"⚡ CACHE HIT! Risk: {cached_risk}")
         return cached_risk, {"semantic_score": cached_score, "source": "cache",
                              "educational_context": False, "domain_score": None,
                              "topicality": "UNKNOWN",
                              "symbolic_triggered": False, "judge_invoked": False,
-                             "dynamic_threat_score": None, "meta_intent_score": None,
+                             "meta_intent_score": None,
                              "fusion_triggering_class": None, "fusion_class_scores": {}}
 
     # ---- STAGE 1: HARD BAN (SYMBOLIC VETO) ----
@@ -741,7 +744,7 @@ def assess_risk(prompt: str, background_scheduler=None) -> tuple:
                         "educational_context": False, "domain_score": None,
                         "topicality": "UNKNOWN",
                         "symbolic_triggered": True, "judge_invoked": False,
-                        "dynamic_threat_score": None, "meta_intent_score": None,
+                        "meta_intent_score": None,
                         "fusion_triggering_class": None, "fusion_class_scores": {}}
 
     # ---- STAGE 1.5: FAST PATH (cheap, escalate-only cascade) ----
@@ -758,7 +761,6 @@ def assess_risk(prompt: str, background_scheduler=None) -> tuple:
                       "educational_context": False, "domain_score": None,
                       "topicality": "UNKNOWN",
                       "symbolic_triggered": False, "judge_invoked": False,
-                      "dynamic_threat_score": None,
                       "meta_intent_score": fast["meta_intent_score"],
                       "fusion_triggering_class": None, "fusion_class_scores": {}}
 
@@ -827,7 +829,6 @@ def assess_risk(prompt: str, background_scheduler=None) -> tuple:
                   "domain_score": signals["domain_score"],
                   "topicality": topicality,
                   "symbolic_triggered": False, "judge_invoked": judge_invoked,
-                  "dynamic_threat_score": signals["dynamic_threat_score"],
                   "centroid_score": signals["centroid_score"],
                   "fusion_available": signals.get("fusion_available"),
                   "fusion_detail": signals.get("fusion_detail"),

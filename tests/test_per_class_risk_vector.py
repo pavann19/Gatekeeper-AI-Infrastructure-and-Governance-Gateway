@@ -25,8 +25,7 @@ from core.config import META_INTENT_THRESHOLD
 def test_collect_semantic_signals_copies_triggering_class_and_class_scores(monkeypatch):
     monkeypatch.setattr(risk_mod, "check_meta_intent", lambda vec: 0.0)
     monkeypatch.setattr(risk_mod.threat_store, "get_max_similarity", lambda vec: 0.0)
-    monkeypatch.setattr(risk_mod, "check_dynamic_threats", lambda vec: 0.0)
-    monkeypatch.setattr(risk_mod, "check_dynamic_safe_harbors", lambda vec: False)
+    monkeypatch.setattr(risk_mod, "check_educational_context", lambda vec: False)
     monkeypatch.setattr(risk_mod, "is_domain_aligned", lambda p: (None, None))
     monkeypatch.setattr(risk_mod, "compute_centroid_similarity", lambda vec: 0.0)
     monkeypatch.setattr(
@@ -54,8 +53,7 @@ def test_collect_semantic_signals_defaults_when_fusion_has_no_per_class_result(m
     unchanged rather than being defaulted to something misleading."""
     monkeypatch.setattr(risk_mod, "check_meta_intent", lambda vec: 0.0)
     monkeypatch.setattr(risk_mod.threat_store, "get_max_similarity", lambda vec: 0.0)
-    monkeypatch.setattr(risk_mod, "check_dynamic_threats", lambda vec: 0.0)
-    monkeypatch.setattr(risk_mod, "check_dynamic_safe_harbors", lambda vec: False)
+    monkeypatch.setattr(risk_mod, "check_educational_context", lambda vec: False)
     monkeypatch.setattr(risk_mod, "is_domain_aligned", lambda p: (None, None))
     monkeypatch.setattr(risk_mod, "compute_centroid_similarity", lambda vec: 0.0)
     monkeypatch.setattr(

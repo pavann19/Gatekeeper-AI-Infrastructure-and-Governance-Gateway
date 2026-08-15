@@ -104,7 +104,6 @@ class AnchorDetector(Detector):
     def score_batch(self, texts):
         from core.embeddings import get_embedding
         from core.risk import _ensure_faiss_initialized, check_meta_intent, hard_ban_triggered
-        from core.updates import check_dynamic_threats
         from core.vector_store import threat_store
 
         _ensure_faiss_initialized()
@@ -117,7 +116,6 @@ class AnchorDetector(Detector):
             vec = get_embedding(text)
             out.append(max(
                 float(threat_store.get_max_similarity(vec)),
-                float(check_dynamic_threats(vec)),
                 float(check_meta_intent(vec)),
             ))
         return out
