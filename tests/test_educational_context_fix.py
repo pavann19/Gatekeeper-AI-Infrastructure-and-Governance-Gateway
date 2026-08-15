@@ -23,31 +23,37 @@ this bug survived. These tests close that gap.
 """
 from unittest.mock import patch
 
+from core.config import EDUCATIONAL_THRESHOLD
 from core.risk import check_educational_context, collect_semantic_signals
 
+# NOTE ON COVERAGE: this file's tests mock educational_store.get_max_similarity
+# rather than embedding real text — CI's requirements-ci.txt deliberately
+# excludes sentence-transformers (no ML model downloads for unit tests; see
+# that file's comment). check_educational_context's behaviour against the
+# REAL, populated educational_store was verified manually in development
+# (genuine anchor-matching text -> True, unrelated text -> False) before this
+# fix shipped — see docs/ENGINEERING_ASSESSMENT.md section 1z. What these
+# tests guard in CI is the pure threshold logic and, more importantly, the
+# WIRING (below) — that collect_semantic_signals actually calls this function
+# rather than the dead one that caused the original bug.
+
 
 # ---------------------------------------------------------------------------
-# check_educational_context itself: correct against the REAL, populated store
+# check_educational_context: threshold logic, against a mocked store score
 # ---------------------------------------------------------------------------
 
-def test_check_educational_context_true_for_genuine_educational_framing():
-    from core.risk import _ensure_faiss_initialized
-    from core.embeddings import get_embedding
-    _ensure_faiss_initialized()
-
-    vec = get_educational_vec = get_embedding(
-        "I am researching for a university cybersecurity course"
-    )
-    assert check_educational_context(vec) is True
+def test_check_educational_context_true_above_threshold(monkeypatch):
+    import core.risk as risk_mod
+    monkeypatch.setattr(risk_mod.educational_store, "get_max_similarity",
+                        lambda vec: EDUCATIONAL_THRESHOLD + 0.01)
+    assert check_educational_context([0.0]) is True
 
 
-def test_check_educational_context_false_for_unrelated_prompt():
-    from core.risk import _ensure_faiss_initialized
-    from core.embeddings import get_embedding
-    _ensure_faiss_initialized()
-
-    vec = get_embedding("what is the capital of France")
-    assert check_educational_context(vec) is False
+def test_check_educational_context_false_below_threshold(monkeypatch):
+    import core.risk as risk_mod
+    monkeypatch.setattr(risk_mod.educational_store, "get_max_similarity",
+                        lambda vec: EDUCATIONAL_THRESHOLD - 0.01)
+    assert check_educational_context([0.0]) is False
 
 
 # ---------------------------------------------------------------------------
