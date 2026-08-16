@@ -59,9 +59,17 @@ Original estimate: ~20–30h
       instruction-override regexes reported under one misleading detail
       string) into `jailbreak_patterns` + `instruction_override_patterns`.
       8 new tests, 373 passed overall (unchanged).
-- [ ] Separate `risk` from `topicality` (topicality field already exists in
-      the schema — confirm it's actually independent in practice, not just
-      in name)
+- [x] Separate `risk` from `topicality` — done 2026-08-15, see
+      `docs/ENGINEERING_ASSESSMENT.md` §2a. Verification finding: already
+      correctly implemented, with a named regression test since before
+      this roadmap existed (`test_off_topic_benign_prompt_is_not_a_safety_
+      risk`, "THE core regression test"). No code change needed. Audited
+      every consumer (policy, metrics, cache, API) — topicality only ever
+      influences risk_level in the one deliberate, documented, opt-in
+      `DOMAIN_GUARDRAIL_MODE=enforcing` case. Added 3 tests closing the one
+      real gap: separation was tested at the decision level but not the
+      enforcement layer it flows through afterward. 391 passed (up from
+      388).
 - [x] Investigate/remove dead dynamic threat feed — done 2026-08-14, see
       `docs/ENGINEERING_ASSESSMENT.md` §1z. Removed entirely (`core/
       updates.py`, `/api/v1/update`, all `dynamic_threat_score` refs — it
