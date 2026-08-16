@@ -2727,3 +2727,70 @@ in this environment — see §1v's "unrelated finding" for the hardware
 context).
 
 ---
+
+## 2a. Separate `risk` from `topicality` in practice — already correct, now guarded (2026-08-15)
+
+Phase 1 of `docs/ROADMAP_V2.md`. The roadmap item read "confirm it's
+actually independent in practice, not just in name" — a real question,
+since the ORIGINAL benchmark harness bug (fixed before §1c) was exactly
+this conflation: an off-domain benign prompt scored MEDIUM was counted as
+a malice prediction, producing ~98% FPR. Verification finding: **the
+separation was already correctly implemented and already had a named
+regression test for exactly this** (`tests/test_fusion.py`'s
+`test_off_topic_benign_prompt_is_not_a_safety_risk`, whose own docstring
+calls it "THE core regression test"). No code change was needed in
+`core/risk.py`. What follows is the audit trail that led to that
+conclusion, plus three new tests closing a real gap: the separation was
+tested at the `fuse_signals` decision level, but never at the enforcement
+layer (policy, metrics, cache) it flows through afterward.
+
+### The one deliberate exception, already correctly scoped
+
+`topicality` influences `risk_level` in exactly one case:
+`DOMAIN_GUARDRAIL_MODE == "enforcing"` (opt-in, default `"off"`) — a
+single-purpose deployment (the docstring's example: a banking assistant)
+choosing to treat off-topic as a policy violation. This is documented
+inline in `fuse_signals`' own docstring and already tested
+(`test_off_topic_escalates_only_in_enforcing_mode`). Not a conflation bug
+— a deliberate, narrow, opt-in escape hatch.
+
+### Audit: does `topicality` leak into anything else?
+
+Traced every consumer of `topicality`/`domain_score` across the codebase:
+
+| Layer | Result |
+|---|---|
+| `core/policy.py`'s `policy_decision(capability, risk, tenant_id)` | No `topicality` parameter — structurally cannot see it. |
+| `core/metrics.py`'s `assessments_total` counter | Labels are `["decision", "risk_level", "source"]` — no topicality dimension, would also violate the module's own cardinality-guard discipline if added carelessly. |
+| `core/cache.py`'s `save_cache_entry` | Never persists topicality — a cache hit legitimately can't know the original classification, so the early-return dicts' `"topicality": "UNKNOWN"` is the correct honest degrade, not a bug. |
+| `api/main.py` | Only copies `details.get("topicality")` into the response field — never reads it back into any decision. |
+| Stage 0/1/1.5 (cache, hard-ban, fast-path) | Structurally cannot be influenced by topicality — `classify_topicality` runs inside `fuse_signals` (Stage 3), which these earlier stages never reach when they short-circuit. |
+
+Nothing found. The separation holds everywhere it was checked.
+
+### Verified
+
+- `tests/test_risk_topicality_separation.py` (3 new tests): `policy_decision`'s
+  signature has no `topicality` parameter (guards against a future refactor
+  silently re-introducing the conflation); `record_assessment` produces an
+  identical metric-counter increment regardless of `details["topicality"]`
+  (behavioural, not just structural — actually calls it with two different
+  topicality values and diffs the counter); `save_cache_entry`'s signature
+  confirms topicality is never threaded through the cache, documenting the
+  UNKNOWN-on-cache-hit behaviour as intentional.
+- Full suite: 391 passed (up from 388).
+- Existing coverage this pass builds on, not duplicates:
+  `test_off_topic_benign_prompt_is_not_a_safety_risk`,
+  `test_off_topic_escalates_only_in_enforcing_mode`,
+  `test_domain_guardrail_default_is_off` (all `tests/test_fusion.py`);
+  `test_assess_reports_topicality_separately`,
+  `test_assess_defaults_topicality_when_absent` (`tests/test_api.py`).
+
+### What this does not close
+
+Nothing new — this pass was verification plus a coverage gap closed at
+the enforcement layer, not a behavior change. Remaining Phase 1 items:
+threshold recalibration, full benchmark rerun (blocked on Ollama/judge
+availability in this environment).
+
+---
