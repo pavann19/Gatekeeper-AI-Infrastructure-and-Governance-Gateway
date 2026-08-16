@@ -115,7 +115,13 @@ class Settings(BaseSettings):
     
     # Execution Environment
     OLLAMA_API_URL: str = "http://localhost:11434/api/generate"
-    OLLAMA_MODEL: str = "mistral"
+    # "mistral" was the original default, stale since Llama Guard 3 became
+    # the validated judge (docs/ENGINEERING_ASSESSMENT.md sections 1g/1j) --
+    # docker-compose.yml already overrides this to "llama-guard3" for
+    # container deployments, but the native/local default (no .env, no env
+    # var override) was never updated to match, so a fresh local run silently
+    # asked Ollama for a model this project stopped validating against.
+    OLLAMA_MODEL: str = "llama-guard3"
     EMBEDDING_MODEL: str = "all-mpnet-base-v2"
     
     # File Paths
