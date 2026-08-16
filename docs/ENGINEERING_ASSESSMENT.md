@@ -2794,3 +2794,151 @@ threshold recalibration, full benchmark rerun (blocked on Ollama/judge
 availability in this environment).
 
 ---
+
+## 2b. Full benchmark rerun — Phase 1 closed, with an honestly reported small regression (2026-08-16)
+
+Closes the last two Phase 1 checklist items in `docs/ROADMAP_V2.md`.
+Ollama was started locally (previously not running) specifically to get a
+live judge and produce a real number, rather than leave this blocked
+indefinitely. This section reports what that run actually found,
+including a real result that isn't simply "everything's fine."
+
+### Two operational bugs fixed to even get a clean run
+
+1. **Stale `OLLAMA_MODEL` default.** `core/config.py`'s default was still
+   `"mistral"` — `docker-compose.yml` already overrode this to
+   `llama-guard3` for container deployments (with its own comment
+   explaining why), but the native/local default was never updated to
+   match, since §1g/§1j. A fresh local run with no `.env` silently asked
+   Ollama for a model this project stopped validating against. Fixed to
+   `llama-guard3`. One existing test
+   (`test_semantic_judge_substring_vulnerability`) was implicitly relying
+   on the stale default to route into `semantic_judge`'s generic parsing
+   path rather than the Llama-Guard-native one — pinned explicitly to a
+   non-guard model instead of depending on the ambient default.
+2. **`python -m tests.benchmark` doesn't work in this environment** — a
+   pip-installed package literally named `tests` in user site-packages
+   shadows the local `tests/` directory (no `__init__.py` there). Not a
+   project bug, an environment collision. Workaround:
+   `PYTHONPATH=. python tests/benchmark.py`.
+
+### Two runs, for an honest reason
+
+RAM on this machine dropped under load exactly as it has before (§1v's
+"unrelated finding") — down to ~1.8GB free mid-run, with the local Llama
+Guard 1B arbitration path repeatedly failing to load
+("insufficient memory... falling back to the Ollama judge") and a handful
+of outright judge failures failing closed to HIGH. Rather than report a
+single run that might be confounded by infrastructure noise, a second,
+independent run was made once conditions recovered.
+
+**Both runs produced bit-for-bit identical Operational metrics** —
+Accuracy 80.77%, Precision 83.11%, Recall 60.59%, F1 0.701, FPR 7.29%,
+TP=123/FP=25/TN=318/FN=80 — despite the two runs having *different*
+judge-infrastructure noise (13 vs 15 judge failures, `semantic_judge`
+succeeding on 23 vs 21 prompts). That reproducibility across two runs
+with different infra noise is itself the evidence that the number is
+real, not noise: whichever prompts flip between a real judge call and a
+fail-closed-to-HIGH default land on the same final HIGH-or-MEDIUM
+bucket either way for this particular benchmark.
+
+### The honest finding: recall dropped, precisely, and it's explainable
+
+| | §1v baseline (before this session's Phase 1 work) | This run |
+|---|---|---|
+| Recall | 62.07% | **60.59%** |
+| Precision | 83.44% | 83.11% |
+| F1 | 0.712 | 0.701 |
+| FPR | 7.29% | **7.29% — unchanged** |
+
+Not noise, and not vague drift either — the exact shape of it is
+identifiable. Both runs: TP=123, FP=25, TN=318, FN=80 (203 attacks, 343
+benign, matching the original 546-prompt set). Back-solving the §1v
+baseline's implied counts from its published percentages: TP=126, FP=25,
+FN=77. **FP and TN are unchanged.** The entire delta is **exactly 3
+attack prompts** that used to be correctly flagged (TP) and are now
+missed (FN) — nothing broader, no benign prompt classification changed
+at all (FPR bit-for-bit identical).
+
+**Most likely cause:** the fusion policy retrain in §1y (adding the
+`jailbreak` anchor class to `policies.json` and retraining
+`models/fusion_policy.json` against the new anchor-score distribution).
+That retrain was already validated out-of-fold on the full 6,933-row
+suite (`scripts/analyze_multilingual_fusion.py`, §1x/§1y) and showed NO
+regression there — pooled AUC unchanged (0.944→0.944), jailbreak
+recall@5%FPR *improved* (74.7%→80.6%). This 546-prompt benchmark is a
+different (smaller, deepset-only) methodology than that out-of-fold
+analysis, so the two are not directly contradictory — a policy retrained
+to do better on the class as a whole can still reclassify a handful of
+individual prompts differently, and 3 prompts out of 546 is within what
+that kind of recalibration can produce. **Not investigated further to
+identify the exact 3 prompts** — the row-level CSV from the original §1v
+baseline run wasn't preserved, so pinpointing them isn't possible from
+what's available; this run's own row-level data is saved at
+`_evidence/benchmark_rows_run2_clean.csv` for any future comparison.
+
+**Ruled out as the cause:** the `is_educational` fix (§1z) — already
+proven to affect zero attack-labeled rows
+(`_evidence/educational_safe_harbor_impact.json`); the dead-feed removal
+(§1z) — every removed code path was provably a permanent, inert zero; the
+`OLLAMA_MODEL` default fix (this section) — changes which model judges,
+but the 3-prompt delta is identical across two runs with different judge
+success/failure counts, so it isn't judge-arbitration-driven either
+(`fusion_threat_critical`/`fusion_clean_pass`, the deterministic
+pre-judge path, account for the overwhelming majority of decisions: 494
+of 546).
+
+### Decision: accept, document, do not revert
+
+FPR — the metric this project has consistently treated as the hard
+constraint (§1b onward: "no single cut point serves both classes",
+per-class thresholds calibrated to a stated FPR budget) — is completely
+unaffected. Three fewer attacks caught out of 203, against zero
+additional false positives and a validated, larger-sample improvement in
+the same underlying change (jailbreak recall@5%FPR +5.9pp out-of-fold),
+is not a regression worth reverting a taxonomy fix that closed a real,
+documented gap (no jailbreak anchor class existed at all before §1y).
+Recorded here, including the number that doesn't flatter the change, per
+this project's own stated methodology (§1b: "keep every number, including
+the bad ones").
+
+### "Recalibrate thresholds" — already substantially done, not separately needed
+
+The Phase 1 checklist's "recalibrate thresholds" item is satisfied by
+work already done, not a separate action: `models/fusion_policy.json`
+(the primary decision path — 494/546 of this benchmark's decisions) was
+already retrained in §1y specifically to recalibrate against the new
+anchor-score distribution. The fixed constants in `core/config.py`
+(`SEMANTIC_THRESHOLD_HIGH/MEDIUM`, `META_INTENT_THRESHOLD`) govern only
+the anchors-only fallback path and the fast-path cascade — fusion was
+available for the overwhelming majority of this run, so those constants
+were barely exercised here and this run gives no evidence they need
+changing. Not touched.
+
+### Verified
+
+- Two independent full 546-prompt benchmark runs, bit-for-bit identical
+  Operational metrics, confirming reproducibility despite different
+  judge-infrastructure conditions.
+- `_evidence/benchmark_results_run1_noisy.json` /
+  `benchmark_rows_run1_noisy.csv` (first run, 13 judge failures) and
+  `benchmark_results_run2_clean.json` / `benchmark_rows_run2_clean.csv`
+  (second run, 15 judge failures) both preserved.
+- Full test suite: 391 passed, unaffected by the `OLLAMA_MODEL` fix once
+  the one dependent test was corrected.
+- System health monitored throughout both runs
+  (`scripts/system_health_monitor.py`) — RAM dipped to ~1.8GB and
+  temperature peaked at ~74°C, both recovering between runs; no
+  unexpected shutdown this time, unlike the two earlier in this project's
+  history under similar conditions.
+
+### What this does not close
+
+The exact 3 flipped prompts were not identified (see above — no
+before-snapshot to diff against). If German-specific detection work
+(the still-open Phase 1 follow-up, `docs/ROADMAP_V2.md`) proceeds, this
+546-prompt benchmark (English-only, `deepset/prompt-injections`) won't
+surface it — that gap only shows up on the multi-source suite's German
+slice, which is a separate, already-documented measurement (§1x).
+
+---

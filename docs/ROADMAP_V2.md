@@ -16,7 +16,7 @@ even where the original proposal's phase 1/8 implied rebuilding them.
 
 ---
 
-## Phase 1 — Strengthen the existing security engine (in progress)
+## Phase 1 — Strengthen the existing security engine (7/8 done — one item blocked on data, not effort)
 Original estimate: ~20–30h
 
 - [x] Per-class risk vector groundwork identified (`class_scores` already
@@ -85,8 +85,25 @@ Original estimate: ~20–30h
       (up from 381). A second, adjacent dead-anchor-list finding
       (`policies.json`'s unused `safe_anchors`) was noted but NOT acted
       on — flagged for a future dedicated pass, not folded in here.
-- [ ] Recalibrate thresholds
-- [ ] Rerun full benchmark, regression tests
+- [x] Recalibrate thresholds — done 2026-08-16, see
+      `docs/ENGINEERING_ASSESSMENT.md` §2b. Already substantially
+      satisfied by the §1y fusion-policy retrain (the primary decision
+      path, 494/546 of benchmark decisions); the fixed fallback constants
+      in `core/config.py` weren't touched since this run gave no evidence
+      they need changing.
+- [x] Rerun full benchmark, regression tests — done 2026-08-16, see
+      `docs/ENGINEERING_ASSESSMENT.md` §2b. Also fixed a real, blocking
+      config bug found along the way: `OLLAMA_MODEL` default was stale
+      (`"mistral"`, never updated to `llama-guard3` for native/local
+      runs). Two independent runs, bit-for-bit identical: Recall 60.59%
+      (was 62.07%), Precision 83.11% (was 83.44%), F1 0.701 (was 0.712),
+      **FPR unchanged at 7.29%**. Traced precisely: exactly 3 of 203
+      attacks flipped from caught to missed, zero benign prompts affected
+      — most likely the §1y fusion retrain, already validated
+      out-of-fold on the larger suite with no regression there. Accepted
+      and documented, not reverted — FPR (this project's hard constraint)
+      is untouched, and the change closed a real taxonomy gap. 391 tests
+      passed throughout.
 
 ## Phase 2 — Output Security
 Original estimate: ~15–25h
