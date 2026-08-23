@@ -52,18 +52,23 @@ Original estimate: ~20–30h
       property of the detector. A German-specific threshold trades 15
       points of recall (35%→20%) to bring German FPR back to the 5%
       budget (currently 17.1% at the pooled threshold) — a real, useful
-      finding, but a single-detector standalone measurement, not yet
-      validated against the deployed 4-feature FUSION ensemble, which is
-      what actually decides. Two follow-up leads found the same night,
-      also standalone-only: (a) `deepset_injection` (not in the deployed
-      ensemble) generalises to German decisively better than
-      `protectai_injection` (AUC 0.714 vs 0.621, CIs don't overlap) — a
-      candidate swap/addition for the fusion; (b) `toxic_bert` measures
-      48.6% FPR on German at its deployed threshold, ~10x its 5% budget —
-      the single most likely concrete contributor to any German FPR
-      problem the live fusion has. Item stays open until a fusion-level
-      per-language rescore happens; not rushed through on the strength of
-      standalone detector numbers.
+      finding. Two follow-up leads, standalone-only: (a) `deepset_injection`
+      (not in the deployed ensemble) generalises to German decisively
+      better than `protectai_injection` (AUC 0.714 vs 0.621); (b)
+      `toxic_bert` measures 48.6% FPR on German standalone, ~10x its 5%
+      budget. **Fusion-level validation completed same night** (see
+      `docs/ENGINEERING_ASSESSMENT.md` §1aa, "the fusion-level validation
+      this section originally deferred — now done"): the DEPLOYED 4-feature
+      fusion does NOT inherit `toxic_bert`'s standalone FPR blowup — German
+      FPR at the deployed threshold is 8.2% (real overshoot vs English's
+      2.9%, but nowhere near 48.6%). The bigger, decisive gap is RECALL:
+      30.6% for German vs 70.8% for English at the same threshold, and OOF
+      AUC 0.671 vs 0.927 — a genuine detection-quality gap, not just a
+      calibration one. Item stays open: fixing recall means retraining the
+      fusion (swap/add `deepset_injection`, or language-conditional feature
+      weighting) — real engineering work, deliberately not done tonight,
+      not merged to `main` (this entire investigation lives on
+      `phase1-german-gap-and-experiments`).
 - [x] Clean threat taxonomy — done 2026-08-14, see
       `docs/ENGINEERING_ASSESSMENT.md` §1y. Two fixes: (1) added a
       `jailbreak` anchor class to `policies.json` — anchor layer previously

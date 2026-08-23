@@ -2870,24 +2870,73 @@ detector's number, without checking the fusion, is how organizations ship
 regressions). Both are recorded here as leads for the fusion-level
 rescore that closes this item for real.
 
+### The fusion-level validation this section originally deferred — now done
+
+Rather than stop at standalone-detector leads, the missing score-cache
+coverage was filled in (`scripts/fill_missing_detector_scores.py`, a new
+incremental filler — unlike `scripts/compare_detectors.py --refresh`,
+which rescores every row from scratch the moment even one id is
+missing, this only scores what's actually new, turning what would have
+been an hours-long full rescore into ~1 hour of bounded, targeted work
+across the four detectors that needed it). With full coverage,
+`scripts/analyze_multilingual_fusion.py`'s existing by-language
+methodology was run against the DEPLOYED 4-feature fusion for real, on
+the full 13,011-row suite this time instead of the original 6,933:
+
+```
+                AUC (OOF)               Recall@5%FPR budget    FPR @ deployed pooled threshold   Recall @ deployed pooled threshold
+en (n=7,335)    0.927 [0.920, 0.933]    74.5% [72.7, 76.5]      2.9%                               70.8%
+de (n=4,221)    0.671 [0.655, 0.686]    24.7% [22.3, 28.5]      8.2%                               30.6%
+other (n=1,455) 0.855 [0.829, 0.877]    58.2% [52.1, 65.2]      7.2%                               65.3%
+```
+
+The honest picture is better than the standalone `toxic_bert` number
+alone suggested, and worse than "no gap" would be:
+
+- **The fusion does NOT inherit `toxic_bert`'s catastrophic German FPR.**
+  Standalone, that one feature overshot its 5% budget by ~10x (48.6%).
+  In the fusion, German FPR is 8.2% — real overshoot (~1.6x budget,
+  decisively above English's 2.9%, CIs don't overlap), but nowhere near
+  what the standalone number implied. The trained logistic regression
+  evidently discounts `toxic_bert`'s unreliable German signal relative
+  to the other three features — exactly the caution stated above about
+  not shipping a fix on one feature's isolated number, now confirmed
+  with real data rather than left as a hedge.
+- **Recall is the bigger, decisive German gap**: 30.6% at the deployed
+  threshold vs 70.8% for English — less than half — and OOF AUC (0.671
+  vs 0.927) tells the same story: this is a real detection-quality gap,
+  not a threshold-calibration artefact alone. Even a perfectly-calibrated
+  German-specific threshold could not close a gap this size in the
+  underlying scores.
+
+This is now the actual, validated state of the roadmap item: the data
+blocker is closed, the standalone-detector alarm about `toxic_bert` is
+substantially (not fully) explained away by the fusion's own weighting,
+and the real remaining problem is recall, not just FPR — which points
+back toward the `deepset_injection`-vs-`protectai_injection` finding
+above (a genuine detection-quality difference, not a calibration one) as
+the more promising lever than a threshold change alone. Fixing this
+would mean either retraining the fusion with `deepset_injection`
+substituted or added, or a language-conditional feature weighting scheme
+— both real engineering work, appropriately left for a deliberate future
+pass with this evidence in hand, not decided at 3am on the strength of a
+single retrain.
+
 ### What this does not close
 
-This measures three detectors ALONE against THEIR OWN thresholds —
-not the deployed FUSION ensemble's actual German-language FPR, which is
-what the live system actually enforces. The fusion combines four
-features via a trained logistic regression (§1y); a feature miscalibrated
-in isolation does not necessarily miscalibrate the fusion output the same
-way, since the other three features may compensate or may not. The
-honest next step is a per-language breakdown of the DEPLOYED fusion
-ensemble's FPR (mirroring `scripts/analyze_multilingual_fusion.py`'s
-existing by-language methodology, now against the much larger German
-subset) — deliberately not done in this pass, both because it needs the
-full 4-detector rescore this section explains skipping, and because
-shipping a threshold change on one detector's standalone number, without
-checking whether the fusion already compensates, would be exactly the
-kind of premature fix this project's evidence discipline exists to
-prevent. Tracked as the concrete next step in `docs/ROADMAP_V2.md`, not
-merged to `main` until that validation happens.
+This still doesn't retrain or ship anything — every number above is a
+measurement of the CURRENTLY DEPLOYED fusion and its current inputs,
+scored against a larger suite; nothing about the live pipeline changed
+tonight. Fixing the recall gap (retraining with `deepset_injection`
+substituted or added, or language-conditional feature weighting) is real
+engineering work with its own decisions to make (does adding a 5th
+feature repeat §1x's `prompt_guard_2` experience of a real but
+non-decisive pooled gain; does a language-conditional weighting scheme
+need per-language routing infrastructure that doesn't exist yet) —
+deliberately not done in this pass. Tracked as the concrete next step in
+`docs/ROADMAP_V2.md`, not merged to `main` until a deliberate fusion
+retrain happens and is itself validated the same way this section
+validated the current one.
 
 ---
 
