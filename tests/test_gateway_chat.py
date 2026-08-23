@@ -236,3 +236,102 @@ def test_valid_key_authenticates_the_call(mock_assess, key_store):
             headers={"Authorization": f"Bearer {key}"},
         )
     assert response.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Token accounting (Phase 5): enforced against usage already recorded from
+# past calls, never a pre-flight estimate.
+# ---------------------------------------------------------------------------
+
+@patch("api.main.assess_risk", return_value=LOW_RISK)
+def test_quota_exceeded_returns_429_and_never_calls_the_provider(mock_assess, monkeypatch):
+    from core.token_quota import gateway_token_quota
+    monkeypatch.setattr("api.main.settings.GATEWAY_TOKEN_QUOTA_ENABLED", True)
+    monkeypatch.setattr("api.main.settings.GATEWAY_TOKEN_QUOTA_DAILY_DEFAULT", 100)
+    gateway_token_quota.reset()
+    gateway_token_quota.record("default", 150)
+    try:
+        with patch("core.llm_providers.OllamaProvider.complete") as mock_complete:
+            response = client.post("/api/v1/gateway/chat", json={"prompt": "hello"})
+            mock_complete.assert_not_called()
+        assert response.status_code == 429
+    finally:
+        gateway_token_quota.reset()
+
+
+@patch("api.main.assess_risk", return_value=LOW_RISK)
+def test_successful_call_records_usage_against_the_tenant_quota(mock_assess, monkeypatch):
+    from core.token_quota import gateway_token_quota
+    monkeypatch.setattr("api.main.settings.GATEWAY_TOKEN_QUOTA_ENABLED", True)
+    monkeypatch.setattr("api.main.settings.GATEWAY_TOKEN_QUOTA_DAILY_DEFAULT", 1000)
+    gateway_token_quota.reset()
+    mock_llm_response = LLMResponse(content="hi", model="m", provider="ollama",
+                                    usage={"total_tokens": 77})
+    try:
+        with patch("core.llm_providers.OllamaProvider.complete", return_value=mock_llm_response), \
+             patch("core.output_guardrails.assess_output", return_value=("ALLOW", {"clean_response": "hi"})):
+            response = client.post("/api/v1/gateway/chat", json={"prompt": "hello"})
+        assert response.status_code == 200
+        assert gateway_token_quota.usage_today("default") == 77
+    finally:
+        gateway_token_quota.reset()
+
+
+@patch("api.main.assess_risk", return_value=LOW_RISK)
+def test_quota_disabled_by_default_even_with_prior_usage(mock_assess, monkeypatch):
+    from core.token_quota import gateway_token_quota
+    monkeypatch.setattr("api.main.settings.GATEWAY_TOKEN_QUOTA_ENABLED", False)
+    gateway_token_quota.reset()
+    gateway_token_quota.record("default", 10_000_000)
+    mock_llm_response = LLMResponse(content="hi", model="m", provider="ollama")
+    try:
+        with patch("core.llm_providers.OllamaProvider.complete", return_value=mock_llm_response), \
+             patch("core.output_guardrails.assess_output", return_value=("ALLOW", {"clean_response": "hi"})):
+            response = client.post("/api/v1/gateway/chat", json={"prompt": "hello"})
+        assert response.status_code == 200
+    finally:
+        gateway_token_quota.reset()
+
+
+# ---------------------------------------------------------------------------
+# Cross-provider fallback (Phase 5): only when the caller left `provider`
+# unset -- an explicit choice is never second-guessed.
+# ---------------------------------------------------------------------------
+
+@patch("api.main.assess_risk", return_value=LOW_RISK)
+def test_fallback_provider_is_used_when_primary_fails(mock_assess, monkeypatch):
+    monkeypatch.setattr("api.main.settings.GATEWAY_FALLBACK_PROVIDERS", "openai_compatible")
+    fallback_response = LLMResponse(content="from fallback", model="gpt-4o-mini", provider="openai_compatible")
+    with patch("core.llm_providers.OllamaProvider.complete", side_effect=LLMProviderError("primary down")), \
+         patch("core.llm_providers.OpenAICompatibleProvider.complete", return_value=fallback_response), \
+         patch("core.output_guardrails.assess_output", return_value=("ALLOW", {"clean_response": "from fallback"})):
+        response = client.post("/api/v1/gateway/chat", json={"prompt": "hello"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["provider"] == "openai_compatible"
+    assert body["details"]["gateway_fallback_used"] is True
+    assert body["details"]["gateway_fallback_from"] == "ollama"
+
+
+@patch("api.main.assess_risk", return_value=LOW_RISK)
+def test_fallback_not_used_when_caller_explicitly_named_a_provider(mock_assess, monkeypatch):
+    monkeypatch.setattr("api.main.settings.GATEWAY_FALLBACK_PROVIDERS", "openai_compatible")
+    with patch("core.llm_providers.OllamaProvider.complete", side_effect=LLMProviderError("primary down")) as mock_ollama, \
+         patch("core.llm_providers.OpenAICompatibleProvider.complete") as mock_openai:
+        response = client.post("/api/v1/gateway/chat", json={"prompt": "hello", "provider": "ollama"})
+
+    mock_ollama.assert_called_once()
+    mock_openai.assert_not_called()
+    assert response.status_code == 502
+
+
+@patch("api.main.assess_risk", return_value=LOW_RISK)
+def test_all_providers_in_chain_failing_returns_the_last_error(mock_assess, monkeypatch):
+    monkeypatch.setattr("api.main.settings.GATEWAY_FALLBACK_PROVIDERS", "openai_compatible")
+    with patch("core.llm_providers.OllamaProvider.complete", side_effect=LLMProviderError("primary down")), \
+         patch("core.llm_providers.OpenAICompatibleProvider.complete", side_effect=LLMProviderError("fallback down too")):
+        response = client.post("/api/v1/gateway/chat", json={"prompt": "hello"})
+
+    assert response.status_code == 502
+    assert "fallback down too" in response.json()["detail"]

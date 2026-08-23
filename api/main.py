@@ -23,6 +23,7 @@ from core.logger import get_logger, log_event, log_output_event, log_gateway_eve
 from core.policy import policy_decision
 from core.review_queue import enqueue_review, get_review, list_pending_reviews, resolve_review
 from core.llm_providers import get_provider, LLMProviderError
+from core.token_quota import gateway_token_quota, extract_total_tokens, seconds_until_utc_midnight
 from core.config import settings, CAPABILITY_INTERNAL
 
 logger = get_logger("gatekeeper.api")
@@ -630,6 +631,28 @@ async def gateway_chat(req: GatewayChatRequest, request: Request, background_tas
         raise HTTPException(status_code=403, detail=f"Tenant '{principal.tenant}' is suspended.")
     _enforce_rate_limit(principal, request, tenant_config)
 
+    # 0b. TOKEN QUOTA (Phase 5: token accounting) — checked before the
+    # (comparatively expensive) input assessment runs at all, same
+    # cheapest-check-first ordering as rate limiting above. Enforced against
+    # usage ALREADY recorded from past calls, not this one — see
+    # core/token_quota.py's module docstring for why a pre-flight cost
+    # estimate isn't possible here.
+    if settings.GATEWAY_TOKEN_QUOTA_ENABLED:
+        quota = (
+            tenant_config.token_quota_daily
+            if tenant_config.token_quota_daily is not None
+            else settings.GATEWAY_TOKEN_QUOTA_DAILY_DEFAULT
+        )
+        if gateway_token_quota.would_exceed(principal.tenant, quota):
+            if settings.METRICS_ENABLED:
+                metrics.gateway_quota_rejections_total.labels(tenant=principal.tenant).inc()
+            raise HTTPException(
+                status_code=429,
+                detail=f"Tenant {principal.tenant!r} has exhausted its daily token "
+                       f"quota ({quota}). The provider was NOT called.",
+                headers={"Retry-After": str(int(seconds_until_utc_midnight()))},
+            )
+
     # 1. INPUT GUARDRAILS — before any external call. This is the actual
     #    architectural difference from a sidecar: Gatekeeper decides
     #    whether the provider is called at all, not just whether to trust
@@ -679,43 +702,86 @@ async def gateway_chat(req: GatewayChatRequest, request: Request, background_tas
             usage=None, review_id=review_id, details=details, process_time_ms=process_time_ms,
         )
 
-    # 2. FORWARD TO THE PROVIDER.
+    # 2. FORWARD TO THE PROVIDER, with fallback across a configured chain
+    #    (Phase 5: "Timeout/failure handling, fallback"). Fallback only
+    #    applies when the caller left `provider` unset — an explicit choice
+    #    is never second-guessed, see GATEWAY_FALLBACK_PROVIDERS's docstring
+    #    in core/config.py.
     provider_name = req.provider or settings.LLM_GATEWAY_DEFAULT_PROVIDER
-    try:
-        provider = get_provider(provider_name)
-    except KeyError:
-        raise HTTPException(status_code=422, detail=f"Unknown provider: {provider_name!r}")
+    fallback_chain = []
+    if req.provider is None and settings.GATEWAY_FALLBACK_PROVIDERS:
+        fallback_chain = [
+            p.strip() for p in settings.GATEWAY_FALLBACK_PROVIDERS.split(",")
+            if p.strip() and p.strip() != provider_name
+        ]
+    attempt_names = [provider_name] + fallback_chain
 
     messages = []
     if req.system_prompt:
         messages.append({"role": "system", "content": req.system_prompt})
     messages.append({"role": "user", "content": clean_query})
 
-    call_start = time.perf_counter()
-    try:
-        llm_response = await _run_gateway_bounded(provider.complete, messages, req.model)
-    except asyncio.TimeoutError:
-        latency_ms = round((time.perf_counter() - call_start) * 1000, 2)
-        log_gateway_event(principal.capability, provider_name, req.model, success=False,
-                          latency_ms=latency_ms, decision="BLOCK", error="timeout",
-                          tenant=principal.tenant, request_id=request.state.request_id)
-        if settings.METRICS_ENABLED:
-            metrics.gateway_call_total.labels(provider=provider_name, outcome="timeout").inc()
-        raise HTTPException(
-            status_code=503,
-            detail=f"The LLM provider did not respond within {settings.GATEWAY_TIMEOUT_SECONDS:g}s.",
-            headers={"Retry-After": "5"},
-        )
-    except LLMProviderError as e:
-        latency_ms = round((time.perf_counter() - call_start) * 1000, 2)
-        log_gateway_event(principal.capability, provider_name, req.model, success=False,
-                          latency_ms=latency_ms, decision="BLOCK", error=str(e),
-                          tenant=principal.tenant, request_id=request.state.request_id)
-        if settings.METRICS_ENABLED:
-            metrics.gateway_call_total.labels(provider=provider_name, outcome="failure").inc()
-        raise HTTPException(status_code=502, detail=f"The LLM provider call failed: {e}")
+    llm_response = None
+    used_provider_name = None
+    last_error_status = None
+    last_error_detail = None
 
-    latency_ms = round((time.perf_counter() - call_start) * 1000, 2)
+    for attempt_index, attempt_name in enumerate(attempt_names):
+        is_primary = attempt_index == 0
+        try:
+            provider = get_provider(attempt_name)
+        except KeyError:
+            if is_primary:
+                raise HTTPException(status_code=422, detail=f"Unknown provider: {attempt_name!r}")
+            logger.error(f"Configured fallback provider {attempt_name!r} is unknown; skipping it.")
+            continue
+
+        # A model name the caller gave is meant for the PRIMARY provider —
+        # forwarding it to a different fallback provider would silently
+        # request a model that provider may not have. Fallback attempts
+        # always use that provider's own configured default instead.
+        attempt_model = req.model if is_primary else None
+
+        call_start = time.perf_counter()
+        try:
+            llm_response = await _run_gateway_bounded(provider.complete, messages, attempt_model)
+            used_provider_name = attempt_name
+            latency_ms = round((time.perf_counter() - call_start) * 1000, 2)
+            break
+        except asyncio.TimeoutError:
+            latency_ms = round((time.perf_counter() - call_start) * 1000, 2)
+            log_gateway_event(principal.capability, attempt_name, attempt_model, success=False,
+                              latency_ms=latency_ms, decision="BLOCK", error="timeout",
+                              tenant=principal.tenant, request_id=request.state.request_id)
+            if settings.METRICS_ENABLED:
+                metrics.gateway_call_total.labels(provider=attempt_name, outcome="timeout").inc()
+            last_error_status = 503
+            last_error_detail = (f"The LLM provider did not respond within "
+                                 f"{settings.GATEWAY_TIMEOUT_SECONDS:g}s.")
+        except LLMProviderError as e:
+            latency_ms = round((time.perf_counter() - call_start) * 1000, 2)
+            log_gateway_event(principal.capability, attempt_name, attempt_model, success=False,
+                              latency_ms=latency_ms, decision="BLOCK", error=str(e),
+                              tenant=principal.tenant, request_id=request.state.request_id)
+            if settings.METRICS_ENABLED:
+                metrics.gateway_call_total.labels(provider=attempt_name, outcome="failure").inc()
+            last_error_status = 502
+            last_error_detail = f"The LLM provider call failed: {e}"
+
+    if llm_response is None:
+        # Every attempt in the chain (primary + fallbacks) failed or timed
+        # out — raise using the LAST attempt's error, the one closest to
+        # what actually stopped the request.
+        raise HTTPException(
+            status_code=last_error_status,
+            detail=last_error_detail,
+            headers={"Retry-After": "5"} if last_error_status == 503 else None,
+        )
+
+    provider_name = used_provider_name
+    if provider_name != (req.provider or settings.LLM_GATEWAY_DEFAULT_PROVIDER):
+        details["gateway_fallback_used"] = True
+        details["gateway_fallback_from"] = req.provider or settings.LLM_GATEWAY_DEFAULT_PROVIDER
 
     # 3. OUTPUT GUARDRAILS — same machinery as /api/v1/assess's combined path.
     from core.output_guardrails import assess_output
@@ -745,6 +811,15 @@ async def gateway_chat(req: GatewayChatRequest, request: Request, background_tas
                       tenant=principal.tenant, request_id=request.state.request_id)
     if settings.METRICS_ENABLED:
         metrics.gateway_call_total.labels(provider=provider_name, outcome="success").inc()
+
+    # Token accounting (Phase 5) — recorded AFTER the call, since usage is
+    # only known once the provider has answered. See core/token_quota.py's
+    # module docstring for why this can only ever gate the NEXT call.
+    tokens_used = extract_total_tokens(llm_response.usage)
+    if tokens_used > 0:
+        gateway_token_quota.record(principal.tenant, tokens_used)
+        if settings.METRICS_ENABLED:
+            metrics.gateway_tokens_total.labels(tenant=principal.tenant).inc(tokens_used)
 
     process_time_ms = round((time.perf_counter() - request.state.start_time) * 1000, 2)
     return GatewayChatResponse(

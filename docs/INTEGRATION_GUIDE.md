@@ -281,13 +281,36 @@ blocked response's text; that is enforcement, not a bug.
 **Failure modes distinct from a guardrail decision**: a `502` means the
 provider itself failed (bad API key, provider-side error) — not
 Gatekeeper's fault, not yours. A `503` means the provider didn't respond
-within `GATEWAY_TIMEOUT_SECONDS`. Neither fabricates a decision; both are
-retryable at your discretion.
+within `GATEWAY_TIMEOUT_SECONDS`. A `429` means your tenant has already
+used up its daily token quota (see below) — the provider was not called.
+None of these fabricate a decision; all are retryable at your discretion.
 
-**What this endpoint does not do yet**: no streaming, no enforced token
-quota (`usage` is passed through from the provider, not metered against
-anything), no automatic fallback to a second provider if the first one
-fails. See `docs/ROADMAP_V2.md` Phase 5 for current status.
+**Token quota**: if `GATEWAY_TOKEN_QUOTA_ENABLED` is on, each tenant has a
+daily token budget (`GATEWAY_TOKEN_QUOTA_DAILY_DEFAULT`, or a per-tenant
+override in `config/tenants.json`'s `token_quota_daily`). This is enforced
+against usage from calls that already completed, not a pre-flight
+estimate — there is no way to know a call's cost before making it, so the
+call that pushes you over the line always completes; only the *next* one
+is rejected. Usage is only tracked for providers that report it (OpenAI-
+and Anthropic-compatible do; Ollama does not).
+
+**Cross-provider fallback**: if `GATEWAY_FALLBACK_PROVIDERS` names an
+ordered list of backup providers and you did NOT set `provider` on your
+request, a failed or timed-out call automatically retries against the
+next provider in that list. If you DO set `provider` explicitly, fallback
+never applies — your choice is never silently overridden. A successful
+fallback shows up in the response as `details.gateway_fallback_used` and
+`details.gateway_fallback_from`.
+
+**Streaming is not supported, by design, not by omission**: this
+endpoint's guardrail checks (secrets detection, PII redaction, toxicity,
+system-prompt leakage) run against the complete response, because several
+of them are only meaningful over full text — a secret split across two
+chunks, or a leaked system prompt only recognisable once enough
+contiguous characters have arrived. Returning partial content before it
+has been checked would defeat the reason this endpoint exists. If your
+use case needs streaming, call your own LLM directly and use the sidecar
+pattern in §3a–§3d instead.
 
 If you already call your own LLM directly and only want Gatekeeper's
 guardrails around that call, use §3a–§3d instead — this endpoint is for
@@ -402,7 +425,8 @@ tenants rather than running separate deployments.
   "acme": {
     "display_name": "Acme Corp",
     "status": "active",
-    "rate_limit_rpm": 500
+    "rate_limit_rpm": 500,
+    "token_quota_daily": 200000
   },
   "acme-trial": {
     "display_name": "Acme Corp (trial)",
@@ -414,9 +438,13 @@ tenants rather than running separate deployments.
 `status: "suspended"` rejects every request for that tenant with `403`
 before any detection work runs. `rate_limit_rpm` overrides the global
 default (`RATE_LIMIT_AUTHENTICATED_RPM` from `.env`) for that tenant only —
-omit it to inherit the global value. A tenant not listed here (or a missing
-file entirely) resolves to a safe default tenant at the global rate limit —
-nothing breaks if you never touch this file.
+omit it to inherit the global value. `token_quota_daily` (used only by
+`/api/v1/gateway/chat`, see §3e) similarly overrides
+`GATEWAY_TOKEN_QUOTA_DAILY_DEFAULT` for that tenant — omit it to inherit
+the global default, or set it to `0` explicitly to make that tenant
+unlimited regardless of the global setting. A tenant not listed here (or a
+missing file entirely) resolves to a safe default tenant at the global
+rate limit and token quota — nothing breaks if you never touch this file.
 
 A caller's tenant comes from their API key's `tenant` field (§2), never from
 anything in the request body.

@@ -198,7 +198,7 @@ Original estimate: ~10–15h
 
 29 new tests, 478 passed overall (up from 449).
 
-## Phase 5 — Real LLM Gateway (3/6 done, 2 more partial — deliberately scoped down)
+## Phase 5 — Real LLM Gateway (5/6 done — streaming closed by design decision, not built)
 Original estimate: ~25–40h — **largest hardware risk on this machine**
 
 - [x] Provider abstraction (Ollama / OpenAI-compatible / Anthropic-compatible)
@@ -213,16 +213,27 @@ Original estimate: ~25–40h — **largest hardware risk on this machine**
       back through the Phase 2 output guardrails before being returned —
       a clean prompt does not guarantee a safe response, and the final
       decision reflects that.
-- [ ] Streaming support
-- [~] Token accounting, model selection — model selection done (`provider`/
-      `model` are caller-selectable on the new endpoint); token accounting
-      is NOT — `usage` is surfaced verbatim from the provider but not
-      metered against any quota. See §3e's "what this does not close".
-- [~] Timeout/failure handling, fallback — timeout done
-      (`GATEWAY_TIMEOUT_SECONDS`, 503 on expiry) and provider failure
-      handled cleanly (502, not a fabricated decision); cross-provider
-      fallback is NOT built — a failed provider is not retried against a
-      second one.
+- [x] Streaming support — CLOSED as an explicit architectural decision NOT
+      to build it, not left undone by oversight. See §3f: this gateway's
+      entire output-security value runs against the FULL assembled
+      response (secrets/PII/toxicity/leakage checks are only meaningful
+      over complete text), so real token-by-token streaming would hand
+      back content before the one step that is this project's actual
+      reason to exist. A "buffered pseudo-streaming" variant was
+      considered and rejected — zero real latency benefit, real added
+      complexity. Genuine streaming would need checkpointed re-inspection
+      mid-stream, a real scope of future work, not a flag to flip.
+- [x] Token accounting, model selection — done 2026-08-24, see §3f. New
+      `core/token_quota.py::TokenQuotaTracker`, per-tenant daily quota
+      (mirrors `rate_limit_rpm`'s override shape exactly), enforced
+      against usage already recorded from PAST calls (a token cost can't
+      be known before a call happens, so this can only ever gate the NEXT
+      one). Model selection was already done in §3e.
+- [x] Timeout/failure handling, fallback — done 2026-08-24, see §3f.
+      `GATEWAY_FALLBACK_PROVIDERS` tries an ordered chain after the
+      selected provider fails/times out — but ONLY when the caller left
+      `provider` unset; an explicit choice is never second-guessed.
+      Timeout half was already done in §3e.
 - [x] Audit trail for the proxied call itself — done 2026-08-24, see §3e.
       New `core/logger.py::log_gateway_event`, a third distinct
       `event_type` (`"gateway_call"`) alongside input/output assessment
@@ -230,10 +241,10 @@ Original estimate: ~25–40h — **largest hardware risk on this machine**
       provider failure; never fires when input was BLOCK/REVIEW (no call
       was attempted).
 
-34 new tests, 512 passed overall (up from 478). All mocked HTTP — no live
-network call or real API key needed for any of them; the first genuine
-live provider call remains unexercised (see §3e's "what this does not
-close").
+57 new tests total across §3d–§3f, 536 passed overall (up from 478 at the
+start of Phase 5). All mocked HTTP — no live network call or real API key
+needed for any of them; the first genuine live provider call remains
+unexercised (see §3f's "what this closes, honestly").
 
 This is the point where Gatekeeper stops being a sidecar you call before/after
 your own LLM call, and starts being infrastructure you route through — a

@@ -263,6 +263,37 @@ class Settings(BaseSettings):
     # the caller doesn't specify one explicitly.
     LLM_GATEWAY_DEFAULT_PROVIDER: str = "ollama"
 
+    # Ordered, comma-separated fallback providers tried in sequence when the
+    # one actually selected for this call fails or times out (Phase 5:
+    # "Timeout/failure handling, fallback"). Same comma-separated-string
+    # convention as CORS_ORIGINS, parsed the same way at the call site.
+    #
+    # Applies ONLY when the caller did not explicitly name a provider. A
+    # caller who names "openai_compatible" chose that provider on purpose —
+    # silently substituting a different one on failure would violate that
+    # choice, the same reasoning AssessRequest.model_config's extra="forbid"
+    # applies elsewhere in this codebase: an explicit input is never
+    # second-guessed by the gateway. Fallback exists for the DEFAULT-provider
+    # path, where "some working provider" is what the caller actually wants.
+    GATEWAY_FALLBACK_PROVIDERS: str = ""
+
+    # --- Token accounting (Phase 5: "Token accounting, model selection") ---
+    #
+    # Enforced PAST the fact, not predicted ahead of it: a provider's own
+    # response is the only place token usage is known, so this can only ever
+    # reject the NEXT call once a tenant's tracked usage has already crossed
+    # the line, not the call that put them over. That is the same shape as
+    # billing-usage caps on every commercial LLM API and is stated here so it
+    # is not mistaken for a pre-flight cost estimate this gateway does not
+    # (and cannot, without calling the provider first) perform.
+    GATEWAY_TOKEN_QUOTA_ENABLED: bool = False
+
+    # Applies to a tenant with no explicit TenantConfig.token_quota_daily
+    # override (core/tenancy.py). 0 means "unlimited" for that tenant even
+    # while enforcement is enabled globally — same "0 disables, don't fake it
+    # with a huge number" convention as the rate limiter's own settings.
+    GATEWAY_TOKEN_QUOTA_DAILY_DEFAULT: int = 0
+
     # Load every model during startup instead of on the first request.
     #
     # This is NOT an optimisation, it is a correctness fix for the timeout
@@ -331,6 +362,16 @@ class Settings(BaseSettings):
     def _validate_gateway_timeout(cls, v: float) -> float:
         if v <= 0:
             raise ValueError("GATEWAY_TIMEOUT_SECONDS must be positive.")
+        return v
+
+    @field_validator("GATEWAY_TOKEN_QUOTA_DAILY_DEFAULT")
+    @classmethod
+    def _validate_token_quota_default(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError(
+                "GATEWAY_TOKEN_QUOTA_DAILY_DEFAULT must be >= 0. Use 0 for "
+                "unlimited rather than a negative sentinel."
+            )
         return v
 
     @field_validator("AUTH_MODE")
