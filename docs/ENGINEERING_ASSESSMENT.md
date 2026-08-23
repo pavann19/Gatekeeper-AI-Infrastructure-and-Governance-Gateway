@@ -2819,9 +2819,60 @@ Two things this actually shows:
    this is worth fixing — but not on the strength of one standalone
    detector's number.
 
+### Follow-up: is protectai_injection uniquely bad at German, or is this systemic?
+
+Rather than stopping at one detector's number, the same script (now
+parametrized with `--detector`/`--attack-classes`, still targeted, still
+minutes not hours) was pointed at two more of the four deployed fusion
+features, each against the specific German subset it actually targets:
+
+```
+                        AUC (held-out)          Recall/FPR @ deployed    Recall/FPR @ German-specific
+deepset_injection       0.714 [0.691, 0.734]    44.7% / 20.4%            10.6% / 4.3%
+protectai_injection     0.621 [0.594, 0.647]    35.0% / 17.1%            19.8% / 4.6%
+toxic_bert              0.650 [0.622, 0.678]    68.7% / 48.6%            18.8% / 5.7%
+```
+
+Two findings, both decisive (non-overlapping CIs, not noise):
+
+1. **`deepset_injection` — not in the deployed ensemble — generalises to
+   German meaningfully better than `protectai_injection` — which IS in
+   the deployed ensemble** (0.714 vs 0.621, CIs do not overlap). The two
+   models share the same architecture family and the same excluded
+   training source, so this is not a contamination artefact; it is a
+   genuine difference in what each model learned. This is now a concrete
+   candidate for the fusion-level work this section defers: does
+   swapping `protectai_injection` for `deepset_injection`, or adding it
+   as a 5th feature, move the deployed ensemble's German performance the
+   way §1x's `prompt_guard_2` experiment tested and rejected a different
+   5th feature? Not answered here — flagged as the most promising lead
+   this session produced, for whoever picks this item up next.
+
+2. **`toxic_bert` is severely miscalibrated for German — not mildly, at
+   nearly 10x its FPR budget.** At its currently-cached pooled threshold,
+   German FPR is 48.6% against a 5% target: on this evidence, roughly
+   every second benign German prompt would be flagged toxic by this one
+   feature alone. `unitary/toxic-bert` is an English-trained model with
+   no German exposure declared; out-of-distribution text producing
+   inflated, uninformative scores is a known failure mode for toxicity
+   classifiers outside their training language, and this is a direct,
+   quantified instance of it. This is a stronger and more specific
+   finding than the pooled "protectai_injection alone" result above: it
+   names an actual likely contributor to any German FPR problem the
+   deployed fusion has, not just a symptom.
+
+Neither finding was chased further tonight (no fusion retrain, no
+detector swap) — both are single-detector standalone measurements, and
+committing a fusion change on the strength of these numbers alone would
+repeat the exact mistake this document's own discipline exists to avoid
+(§1e: "the thesis test" was built specifically because trusting a single
+detector's number, without checking the fusion, is how organizations ship
+regressions). Both are recorded here as leads for the fusion-level
+rescore that closes this item for real.
+
 ### What this does not close
 
-This measures `protectai_injection` ALONE against ITS OWN threshold —
+This measures three detectors ALONE against THEIR OWN thresholds —
 not the deployed FUSION ensemble's actual German-language FPR, which is
 what the live system actually enforces. The fusion combines four
 features via a trained logistic regression (§1y); a feature miscalibrated

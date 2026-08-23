@@ -54,9 +54,16 @@ Original estimate: ~20–30h
       budget (currently 17.1% at the pooled threshold) — a real, useful
       finding, but a single-detector standalone measurement, not yet
       validated against the deployed 4-feature FUSION ensemble, which is
-      what actually decides. Item stays open until that fusion-level
-      rescore happens; not rushed through on the strength of one
-      detector's number.
+      what actually decides. Two follow-up leads found the same night,
+      also standalone-only: (a) `deepset_injection` (not in the deployed
+      ensemble) generalises to German decisively better than
+      `protectai_injection` (AUC 0.714 vs 0.621, CIs don't overlap) — a
+      candidate swap/addition for the fusion; (b) `toxic_bert` measures
+      48.6% FPR on German at its deployed threshold, ~10x its 5% budget —
+      the single most likely concrete contributor to any German FPR
+      problem the live fusion has. Item stays open until a fusion-level
+      per-language rescore happens; not rushed through on the strength of
+      standalone detector numbers.
 - [x] Clean threat taxonomy — done 2026-08-14, see
       `docs/ENGINEERING_ASSESSMENT.md` §1y. Two fixes: (1) added a
       `jailbreak` anchor class to `policies.json` — anchor layer previously

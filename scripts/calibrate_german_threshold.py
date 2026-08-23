@@ -40,7 +40,10 @@ METHODOLOGY
 
 Usage:
     python -m scripts.calibrate_german_threshold
+    python -m scripts.calibrate_german_threshold --detector toxic_bert \\
+        --attack-classes benign harmful_content
 """
+import argparse
 import json
 import os
 import random
@@ -51,8 +54,6 @@ from evaluation.metrics import bootstrap_ci, fmt_ci, recall_at_fpr, roc_auc, thr
 SUITE_FILE = os.path.join("data", "eval_suite.jsonl")
 SCORES_DIR = os.path.join("_evidence", "detector_scores")
 COMPARISON_FILE = os.path.join("_evidence", "detector_comparison.json")
-REPORT_FILE = os.path.join("_evidence", "german_threshold_calibration.json")
-DETECTOR_NAME = "protectai_injection"
 SEED = 20260824
 FPR_BUDGET = 0.05
 N_BOOT = 1000
@@ -66,8 +67,8 @@ def load_suite():
     return rows
 
 
-def load_cache():
-    path = os.path.join(SCORES_DIR, f"{DETECTOR_NAME}.jsonl")
+def load_cache(detector_name):
+    path = os.path.join(SCORES_DIR, f"{detector_name}.jsonl")
     cache = {}
     if os.path.exists(path):
         with open(path, "r", encoding="utf-8") as f:
@@ -77,14 +78,14 @@ def load_cache():
     return cache
 
 
-def save_cache(cache):
-    path = os.path.join(SCORES_DIR, f"{DETECTOR_NAME}.jsonl")
+def save_cache(detector_name, cache):
+    path = os.path.join(SCORES_DIR, f"{detector_name}.jsonl")
     with open(path, "w", encoding="utf-8") as f:
         for rid, score in cache.items():
             f.write(json.dumps({"id": rid, "score": score}) + "\n")
 
 
-def score_missing(rows, cache, detector, batch_size=16):
+def score_missing(rows, cache, detector, detector_name, batch_size=16):
     missing = [r for r in rows if r["id"] not in cache]
     if not missing:
         print(f"  all {len(rows)} rows already cached")
@@ -99,12 +100,12 @@ def score_missing(rows, cache, detector, batch_size=16):
             print(f"    {min(i + batch_size, len(texts))}/{len(texts)}")
     for r, s in zip(missing, scores):
         cache[r["id"]] = s
-    save_cache(cache)
+    save_cache(detector_name, cache)
     return cache
 
 
-def load_deployed_threshold():
-    """Pulls the currently-deployed protectai_injection threshold from the
+def load_deployed_threshold(detector_name):
+    """Pulls the currently-deployed threshold for this detector from the
     most recent full detector comparison, if one exists -- so this script's
     finding is stated relative to what is actually live, not a number
     invented for this run."""
@@ -113,25 +114,37 @@ def load_deployed_threshold():
     with open(COMPARISON_FILE, "r", encoding="utf-8") as f:
         report = json.load(f)
     for entry in report.get("results", report if isinstance(report, list) else []):
-        if isinstance(entry, dict) and entry.get("detector") == DETECTOR_NAME:
+        if isinstance(entry, dict) and entry.get("detector") == detector_name:
             return entry.get("threshold")
     return None
 
 
 def main():
+    parser = argparse.ArgumentParser(description="German-specific threshold calibration for one detector")
+    parser.add_argument("--detector", default="protectai_injection")
+    parser.add_argument("--attack-classes", nargs="*", default=None,
+                        help="Restrict to these attack_class values plus benign "
+                             "(default: no restriction, use the binary label as-is).")
+    args = parser.parse_args()
+    detector_name = args.detector
+    report_file = os.path.join("_evidence", f"german_threshold_calibration_{detector_name}.json")
+
     random.seed(SEED)
     rows = load_suite()
-    detector = get_detector(DETECTOR_NAME)
+    detector = get_detector(detector_name)
     excluded = set(detector.trained_on)
 
     de_rows = [r for r in rows if r["language"] == "de" and r["source"] not in excluded]
+    if args.attack_classes:
+        keep = set(args.attack_classes) | {"benign"}
+        de_rows = [r for r in de_rows if r["attack_class"] in keep]
     labels_all = [r["label"] for r in de_rows]
     print(f"German rows (contamination-excluded): {len(de_rows)}  "
           f"attacks={sum(labels_all)}  benign={len(labels_all) - sum(labels_all)}")
 
-    cache = load_cache()
-    print(f"[{DETECTOR_NAME}]")
-    cache = score_missing(de_rows, cache, detector)
+    cache = load_cache(detector_name)
+    print(f"[{detector_name}]")
+    cache = score_missing(de_rows, cache, detector, detector_name)
 
     scores_all = [cache[r["id"]] for r in de_rows]
 
@@ -163,7 +176,7 @@ def main():
         eval_scores, eval_labels, lambda s, lab: recall_at_fpr(s, lab, budget=FPR_BUDGET), n_boot=N_BOOT
     )
 
-    deployed_threshold = load_deployed_threshold()
+    deployed_threshold = load_deployed_threshold(detector_name)
     print(f"\nGerman-specific threshold (fit on held-in half): {german_threshold:.4f}")
     if deployed_threshold is not None:
         print(f"Deployed (pooled, all-language) threshold:        {deployed_threshold:.4f}")
@@ -195,7 +208,8 @@ def main():
 
     report = {
         "seed": SEED,
-        "detector": DETECTOR_NAME,
+        "detector": detector_name,
+        "attack_classes_filter": args.attack_classes,
         "fpr_budget": FPR_BUDGET,
         "n_german_rows": len(de_rows),
         "n_german_attacks": sum(labels_all),
@@ -209,10 +223,10 @@ def main():
         "fpr_at_german_threshold": fpr_de_at_german_threshold,
         "comparison_to_deployed": result,
     }
-    os.makedirs(os.path.dirname(REPORT_FILE), exist_ok=True)
-    with open(REPORT_FILE, "w", encoding="utf-8") as f:
+    os.makedirs(os.path.dirname(report_file), exist_ok=True)
+    with open(report_file, "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2)
-    print(f"\nReport -> {REPORT_FILE}")
+    print(f"\nReport -> {report_file}")
 
 
 if __name__ == "__main__":
