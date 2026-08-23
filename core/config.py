@@ -128,6 +128,14 @@ class Settings(BaseSettings):
     POLICY_FILE: str = "policies.json"
     POLICY_RULES_FILE: str = "policy_rules.json"
 
+    # Where core/policy_versioning.py stores snapshots taken before each
+    # policy deploy (Phase 3, Policy-as-Code: versioning and rollback).
+    # Relative to cwd by default, matching AUDIT_LOG_PATH's own convention —
+    # a container deployment should point this at the same mounted volume,
+    # since a snapshot taken right before a container recreation is exactly
+    # the one an operator would want to roll back to.
+    POLICY_VERSIONS_DIR: str = "policy_versions"
+
     # Path to the JSONL audit log. Relative to cwd by default — unchanged
     # from before this setting existed. A container deployment should point
     # this at a mounted volume, since the audit record is this project's
@@ -298,3 +306,4 @@ EMBEDDING_MODEL = settings.EMBEDDING_MODEL
 SPACY_MODEL = settings.SPACY_MODEL
 POLICY_FILE = settings.POLICY_FILE
 POLICY_RULES_FILE = settings.POLICY_RULES_FILE
+POLICY_VERSIONS_DIR = settings.POLICY_VERSIONS_DIR

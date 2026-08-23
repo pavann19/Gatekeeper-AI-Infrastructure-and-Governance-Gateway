@@ -142,15 +142,35 @@ Original estimate: ~15–25h
 Note: PII detection, block/release decision, and the wiring into the request
 loop already existed (§1u) — this phase extended that, didn't start it.
 
-## Phase 3 — Policy-as-Code
+## Phase 3 — Policy-as-Code (4/4 done)
 Original estimate: ~15–25h
 
-- [ ] YAML/declarative policy format replacing the current
-      `policy_rules.json` capability/risk matrix
-- [ ] Validation step
-- [ ] Simulation (dry-run a policy change against historical traffic before
-      deploying it)
-- [ ] Versioning and rollback
+- [x] YAML/declarative policy format — done 2026-08-24, see
+      `docs/ENGINEERING_ASSESSMENT.md` §3b. Added ALONGSIDE the existing
+      JSON format (extension-dispatched), not a default-format migration —
+      `policy_rules.json` is referenced by name in `docker-compose.yml`,
+      `.dockerignore`, and `config/README.md`, so switching what a fresh
+      deployment loads by default would need to touch all three for a
+      readability win, not a capability one. New `policy_rules.yaml`
+      worked example. `yaml.safe_load` only (not `yaml.load` — a policy
+      file must not be a code-execution vector). Found PyYAML was an
+      undeclared transitive dependency; declared it explicitly.
+- [x] Validation step — done 2026-08-24, see §3b. New
+      `core/policy.py::validate_policy_file` + `scripts/validate_policy.py`
+      — reports EVERY problem in one pass, unlike the live loader which
+      silently drops one malformed tenant to keep serving its siblings.
+- [x] Simulation — done 2026-08-24, see §3b. New
+      `scripts/simulate_policy.py`, replays real historical decisions from
+      the audit log against a candidate policy with zero risk to live
+      enforcement (`policy_decision()` gained an optional `store` param).
+      Smoke-tested against this project's own real 6,801-record audit log.
+- [x] Versioning and rollback — done 2026-08-24, see §3b. New
+      `core/policy_versioning.py` + `scripts/manage_policy_versions.py`.
+      Filesystem-based, deliberately not git-based — versions the LIVE
+      deployed policy file, which git doesn't track in real time and which
+      an operator may have no git access to at all.
+
+32 new tests, 449 passed overall (up from 418).
 
 ## Phase 4 — Human Review
 Original estimate: ~10–15h

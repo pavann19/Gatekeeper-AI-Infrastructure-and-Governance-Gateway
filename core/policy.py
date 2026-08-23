@@ -54,6 +54,8 @@ import json
 import os
 from dataclasses import dataclass, field
 
+import yaml
+
 from core.config import settings
 from core.logger import get_logger
 
@@ -61,6 +63,32 @@ logger = get_logger(__name__)
 
 VALID_ACTIONS = ("BLOCK", "RESTRICT", "ALLOW")
 DEFAULT_TENANT_ID = "default"
+
+YAML_EXTENSIONS = (".yaml", ".yml")
+
+
+def _parse_policy_file(path: str) -> dict:
+    """
+    Parses a policy file, dispatching on extension: `.yaml`/`.yml` ->
+    yaml.safe_load, anything else -> json.load.
+
+    Phase 3 (Policy-as-Code): YAML support added alongside JSON, not instead
+    of it. Existing deployments pointing POLICY_RULES_FILE at a `.json` path
+    are unaffected -- only a `.yaml`/`.yml` extension opts into the new
+    parser. YAML's actual advantage over JSON here is comments: an operator
+    can annotate WHY a tenant's policy is stricter directly in the file that
+    defines it, which the JSON format has never been able to express.
+
+    yaml.safe_load, deliberately not yaml.load: safe_load refuses to
+    construct arbitrary Python objects from tags like `!!python/object`,
+    which full yaml.load would happily do -- a policy file that decides
+    ALLOW/BLOCK for every request must not also be a code-execution vector
+    for whoever can write to it.
+    """
+    with open(path, "r", encoding="utf-8") as f:
+        if os.path.splitext(path)[1].lower() in YAML_EXTENSIONS:
+            return yaml.safe_load(f)
+        return json.load(f)
 
 
 @dataclass(frozen=True)
@@ -132,8 +160,7 @@ class PolicyStore:
             return self
 
         try:
-            with open(self.path, "r", encoding="utf-8") as f:
-                raw = json.load(f)
+            raw = _parse_policy_file(self.path)
         except Exception as e:
             logger.error(f"Policy store unreadable ({e}); failing closed (BLOCK).")
             return self
@@ -237,16 +264,88 @@ class PolicyStore:
 _store = PolicyStore()
 
 
+def validate_policy_file(path: str) -> list[str]:
+    """
+    Reports EVERY problem in a candidate policy file, for the Phase 3
+    (Policy-as-Code) validation step -- `scripts/validate_policy.py`.
+
+    Deliberately NOT the same code path as PolicyStore.load(): the loader's
+    job is to keep serving a good tenant's policy when a SIBLING tenant's
+    entry is malformed (see the module docstring), so it silently drops one
+    bad entry and logs a warning rather than surfacing every problem at
+    once. That is the wrong behaviour for an operator validating a file
+    BEFORE deploying it -- they want the complete list of what is wrong,
+    not one warning at a time discovered by trial and error. Returns an
+    empty list when the file is fully valid.
+    """
+    errors: list[str] = []
+
+    if not os.path.exists(path):
+        return [f"File not found: {path}"]
+
+    try:
+        raw = _parse_policy_file(path)
+    except Exception as e:
+        return [f"File is not valid YAML/JSON: {type(e).__name__}: {e}"]
+
+    if not isinstance(raw, dict):
+        return ["Top level must be an object/mapping."]
+    if "tenants" not in raw:
+        errors.append("Missing required top-level key: 'tenants'.")
+        return errors
+
+    default_action = str(raw.get("default_action", "BLOCK")).upper()
+    if default_action not in VALID_ACTIONS:
+        errors.append(
+            f"default_action {raw.get('default_action')!r} is not one of {VALID_ACTIONS}."
+        )
+
+    tenants = raw["tenants"]
+    if not isinstance(tenants, dict):
+        errors.append("'tenants' must be an object/mapping of tenant_id -> policy.")
+        return errors
+
+    if DEFAULT_TENANT_ID not in tenants:
+        errors.append(f"Missing required tenant: {DEFAULT_TENANT_ID!r}.")
+
+    for tenant_id, entry in tenants.items():
+        prefix = f"tenants.{tenant_id}"
+        if not isinstance(entry, dict):
+            errors.append(f"{prefix}: must be an object, got {type(entry).__name__}.")
+            continue
+
+        policies = entry.get("policies")
+        if not isinstance(policies, dict) or not policies:
+            errors.append(f"{prefix}.policies: missing, empty, or not an object.")
+            continue
+
+        for capability, risk_map in policies.items():
+            cap_prefix = f"{prefix}.policies.{capability}"
+            if not isinstance(risk_map, dict) or not risk_map:
+                errors.append(f"{cap_prefix}: missing, empty, or not an object.")
+                continue
+            for risk_level, action in risk_map.items():
+                action_str = str(action).upper()
+                if action_str not in VALID_ACTIONS:
+                    errors.append(
+                        f"{cap_prefix}.{risk_level}: action {action!r} is not "
+                        f"one of {VALID_ACTIONS}."
+                    )
+
+    return errors
+
+
 def reload_policies():
     """Re-reads the policy store. Call after editing a tenant's policy."""
     return _store.load(force=True)
 
 
-def resolve_policy_set(tenant_id: str) -> PolicySet:
-    return _store.get(tenant_id)
+def resolve_policy_set(tenant_id: str, store: PolicyStore = None) -> PolicySet:
+    return (store or _store).get(tenant_id)
 
 
-def policy_decision(capability: str, risk: str, tenant_id: str = DEFAULT_TENANT_ID):
+def policy_decision(capability: str, risk: str, tenant_id: str = DEFAULT_TENANT_ID,
+                    store: PolicyStore = None):
     """
     Determines the enforcement action for (capability, risk) under a
     tenant's policy.
@@ -256,6 +355,12 @@ def policy_decision(capability: str, risk: str, tenant_id: str = DEFAULT_TENANT_
     module used to be — the same backward-compatibility shape core/fusion.py
     uses for a v1 policy artifact missing a `per_class` section.
 
+    `store` defaults to the live module-global policy store. Passing a
+    different `PolicyStore` instance (Phase 3, Policy-as-Code) is how
+    `scripts/simulate_policy.py` evaluates a CANDIDATE policy file against
+    historical audit records without touching what the running gateway is
+    actually enforcing — the live `_store` is never mutated by a simulation.
+
     Fail-safe default, preserved exactly from the pre-tenancy version: no
     usable policy data at all -> BLOCK. An undefined capability under an
     otherwise-usable policy -> that policy's own `default_action`, not a
@@ -264,7 +369,8 @@ def policy_decision(capability: str, risk: str, tenant_id: str = DEFAULT_TENANT_
     which tenant resolved, which is correct: it is a fail-safe backstop, not
     a per-tenant policy choice.
     """
-    policy_set = resolve_policy_set(tenant_id)
+    active_store = store or _store
+    policy_set = resolve_policy_set(tenant_id, store=active_store)
 
     if policy_set is FAIL_SAFE:
         return "BLOCK", "System Error: Policies not loaded"
@@ -280,7 +386,7 @@ def policy_decision(capability: str, risk: str, tenant_id: str = DEFAULT_TENANT_
 
     capability_policy = policy_set.policies.get(capability)
     if not capability_policy:
-        return _store.default_action, f"Role '{capability}' not defined for tenant '{tenant_note}'"
+        return active_store.default_action, f"Role '{capability}' not defined for tenant '{tenant_note}'"
 
-    action = capability_policy.get(risk, _store.default_action)
+    action = capability_policy.get(risk, active_store.default_action)
     return action, f"Policy applied for {capability} (Risk: {risk}, Tenant: {tenant_note})"
