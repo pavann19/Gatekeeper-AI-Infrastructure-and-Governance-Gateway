@@ -64,11 +64,18 @@ Original estimate: ~20–30h
       2.9%, but nowhere near 48.6%). The bigger, decisive gap is RECALL:
       30.6% for German vs 70.8% for English at the same threshold, and OOF
       AUC 0.671 vs 0.927 — a genuine detection-quality gap, not just a
-      calibration one. Item stays open: fixing recall means retraining the
-      fusion (swap/add `deepset_injection`, or language-conditional feature
-      weighting) — real engineering work, deliberately not done tonight,
-      not merged to `main` (this entire investigation lives on
-      `phase1-german-gap-and-experiments`).
+      calibration one. **A naive 1-for-1 swap of `deepset_injection` for
+      `protectai_injection` was tried immediately (free — scores already
+      cached) and DECISIVELY REJECTED**: pooled AUC regresses (0.846→0.815),
+      English recall@5%FPR drops 74.5%→64.7%, and German recall@5%FPR gets
+      WORSE not better (24.7%→12.3%) despite deepset_injection's standalone
+      edge — the standalone advantage does not transfer through an
+      unretrained fusion. Precise next step if pursued: add
+      `deepset_injection` as a 5th feature and retrain the full logistic
+      regression around all five (mirrors exactly how §1x tested
+      `prompt_guard_2`), not a substitution. Real engineering work,
+      deliberately not done tonight, not merged to `main` (this entire
+      investigation lives on `phase1-german-gap-and-experiments`).
 - [x] Clean threat taxonomy — done 2026-08-14, see
       `docs/ENGINEERING_ASSESSMENT.md` §1y. Two fixes: (1) added a
       `jailbreak` anchor class to `policies.json` — anchor layer previously

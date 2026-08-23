@@ -2922,6 +2922,44 @@ substituted or added, or a language-conditional feature weighting scheme
 pass with this evidence in hand, not decided at 3am on the strength of a
 single retrain.
 
+### The obvious next experiment, tried immediately, and rejected
+
+Since `deepset_injection`'s standalone AUC beat `protectai_injection`'s
+decisively, the cheapest possible follow-up — free, since every score
+needed was already cached, no model inference required — is a straight
+1-for-1 swap in the same fusion recipe. Result, pooled and by language:
+
+```
+                          pooled AUC              en AUC / recall@5%FPR      de AUC / recall@5%FPR
+DEPLOYED (protectai)      0.846 [0.838, 0.853]    0.927 / 74.5%              0.671 / 24.7%
+SWAPPED (deepset)         0.815 [0.807, 0.822]    0.880 / 64.7%              0.675 / 12.3%
+```
+
+Decisively worse, on every axis that matters:
+
+- Pooled AUC regresses (0.846→0.815, CIs don't overlap) — a straightforward
+  fusion-quality loss.
+- English recall@5%FPR drops from 74.5% to 64.7% — a large regression on
+  the majority-language traffic this gateway serves today.
+- German AUC is statistically unchanged (0.671 vs 0.675, CIs heavily
+  overlap) — the standalone advantage does NOT transfer — and German
+  recall@5%FPR gets WORSE, not better (24.7%→12.3%).
+
+This is the concrete lesson, not just a caveat: a detection-quality edge
+measured on one detector IN ISOLATION does not predict what happens when
+it replaces another feature inside an already-fitted fusion. The other
+three features' correlation structure with `protectai_injection`
+specifically (not `deepset_injection`) is presumably part of what the
+fusion's logistic regression already learned to exploit; swapping the
+input without retraining the weights around it is not a fair test of
+"would deepset_injection help the fusion" — it only tests "does dropping
+this specific piece of correlation structure, unreplaced, hurt", and the
+answer is yes. The honest next experiment, if this is pursued further, is
+adding `deepset_injection` as a 5TH feature (mirroring exactly how §1x
+tested `prompt_guard_2` as an addition, not a substitution) and
+retraining the full logistic regression around all five — not attempted
+tonight, and now precisely scoped for whoever does it next.
+
 ### What this does not close
 
 This still doesn't retrain or ship anything — every number above is a
