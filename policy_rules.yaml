@@ -48,8 +48,13 @@ tenants:
   #   policies:
   #     GENERAL:
   #       HIGH: BLOCK
-  #       MEDIUM: BLOCK   # Acme's compliance team requires MEDIUM-risk
+  #       MEDIUM: REVIEW  # Acme's compliance team requires MEDIUM-risk
   #                       # traffic reviewed by a human before release —
-  #                       # see their onboarding ticket #4471. Revisit if
-  #                       # they add per-tenant human review (Phase 4).
+  #                       # see their onboarding ticket #4471. A REVIEW
+  #                       # verdict queues the request (core/review_queue.py)
+  #                       # instead of auto-deciding; an INTERNAL-capability
+  #                       # reviewer resolves it via
+  #                       # POST /api/v1/review/{review_id}/resolve, and the
+  #                       # caller polls GET /api/v1/review/{review_id} for
+  #                       # the eventual ALLOW/BLOCK.
   #       LOW: ALLOW

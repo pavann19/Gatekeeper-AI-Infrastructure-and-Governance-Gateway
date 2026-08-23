@@ -172,13 +172,31 @@ Original estimate: ~15–25h
 
 32 new tests, 449 passed overall (up from 418).
 
-## Phase 4 — Human Review
+## Phase 4 — Human Review (3/3 done)
 Original estimate: ~10–15h
 
-- [ ] `REVIEW` as a distinct decision outcome (flagged open since the
-      original Phase 0 V2 audit)
-- [ ] Review queue: review ID, reason, requester, risk, timestamp
-- [ ] Approve/reject flow feeding back into the policy engine
+- [x] `REVIEW` as a distinct decision outcome — done 2026-08-24, see
+      `docs/ENGINEERING_ASSESSMENT.md` §3c. Added to `core/policy.py`'s
+      `VALID_ACTIONS`. Severity ordering for the combined call:
+      `BLOCK > REVIEW > RESTRICT > ALLOW` — output-guard assessment is
+      skipped when input is REVIEW, and REVIEW can never downgrade an
+      already-BLOCK decision.
+- [x] Review queue: review ID, reason, requester, risk, timestamp — done
+      2026-08-24, see §3c. New `core/review_queue.py` — a single mutable
+      JSON file (not the audit log's append-only convention), storing
+      only the prompt's SHA-256 hash, never the raw text, matching
+      `core/logger.py`'s own audit-record privacy convention exactly.
+- [x] Approve/reject flow feeding back into the policy engine — done
+      2026-08-24, see §3c. Three new endpoints: `GET /api/v1/review/
+      {review_id}` (status, auth-only), `GET /api/v1/review` (pending
+      list, `INTERNAL` capability), `POST /api/v1/review/{review_id}/
+      resolve` (`INTERNAL` capability). "Feeds back" means the resolution
+      becomes the request's final decision (APPROVED->ALLOW,
+      REJECTED->BLOCK), retrieved by the original caller — does NOT
+      retroactively affect future similar prompts (a deliberate privacy
+      trade-off, not an oversight — see §3c's "what this does not close").
+
+29 new tests, 478 passed overall (up from 449).
 
 ## Phase 5 — Real LLM Gateway
 Original estimate: ~25–40h — **largest hardware risk on this machine**

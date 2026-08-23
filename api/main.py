@@ -1,4 +1,5 @@
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
+import hashlib
 import time
 import asyncio
 import functools
@@ -8,7 +9,10 @@ from concurrent.futures import ThreadPoolExecutor
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from core import metrics
-from api.schemas import AssessRequest, AssessResponse, AssessOutputRequest, AssessOutputResponse
+from api.schemas import (
+    AssessRequest, AssessResponse, AssessOutputRequest, AssessOutputResponse,
+    ReviewStatusResponse, ReviewResolveRequest,
+)
 from core.auth import auth_required, resolve_principal
 from core.privacy import redact_pii
 from core.rate_limit import assess_rate_limiter, bucket_parameters
@@ -17,7 +21,8 @@ from core.risk import assess_risk
 from core.cache import flush_cache
 from core.logger import get_logger, log_event, log_output_event
 from core.policy import policy_decision
-from core.config import settings
+from core.review_queue import enqueue_review, get_review, list_pending_reviews, resolve_review
+from core.config import settings, CAPABILITY_INTERNAL
 
 logger = get_logger("gatekeeper.api")
 
@@ -389,16 +394,17 @@ async def assess_prompt(req: AssessRequest, request: Request, background_tasks: 
     #     Output Guard was a separate endpoint a caller had to remember to
     #     invoke correctly after generating a response. Only runs when the
     #     caller submitted response_text AND the input wasn't already
-    #     BLOCKed — checking the output of a prompt that was never allowed
-    #     through in the first place answers a question nobody asked.
+    #     BLOCKed or sent to REVIEW — checking the output of a prompt that
+    #     was never allowed through in the first place (or isn't allowed
+    #     through YET, pending a human) answers a question nobody asked.
     #
-    #     The final decision is the MORE SEVERE of the two (BLOCK > RESTRICT
-    #     > ALLOW): a clean prompt with a leaky or toxic response must still
-    #     BLOCK — that is the entire point of checking output at all, not an
-    #     edge case of it.
+    #     The final decision is the MORE SEVERE of the two
+    #     (BLOCK > REVIEW > RESTRICT > ALLOW): a clean prompt with a leaky
+    #     or toxic response must still BLOCK — that is the entire point of
+    #     checking output at all, not an edge case of it.
     output_decision = None
     output_details = None
-    if req.response_text is not None and decision != "BLOCK":
+    if req.response_text is not None and decision not in ("BLOCK", "REVIEW"):
         from core.output_guardrails import assess_output
 
         try:
@@ -423,8 +429,8 @@ async def assess_prompt(req: AssessRequest, request: Request, background_tasks: 
                 headers={"Retry-After": "5"},
             )
 
-        _SEVERITY = {"ALLOW": 0, "RESTRICT": 1, "BLOCK": 2}
-        if _SEVERITY.get(output_decision, 2) > _SEVERITY.get(decision, 0):
+        _SEVERITY = {"ALLOW": 0, "RESTRICT": 1, "REVIEW": 2, "BLOCK": 3}
+        if _SEVERITY.get(output_decision, 3) > _SEVERITY.get(decision, 0):
             decision = output_decision
 
     # Update details with reason and the identity the decision was made under.
@@ -434,6 +440,21 @@ async def assess_prompt(req: AssessRequest, request: Request, background_tasks: 
     details["tenant"] = principal.tenant
     if output_details is not None:
         details["output_assessment"] = output_details
+
+    # 3c. HUMAN REVIEW (Phase 4) — a REVIEW decision is neither an ALLOW nor
+    #     a BLOCK: it is queued for a human to resolve. No raw prompt text
+    #     is stored in the queue, only its hash — see core/review_queue.py's
+    #     docstring for why. The caller gets `review_id` back and polls
+    #     GET /api/v1/review/{review_id} for the eventual outcome.
+    review_id = None
+    if decision == "REVIEW":
+        review = enqueue_review(
+            reason=reason, capability=principal.capability, risk=risk_level,
+            tenant=principal.tenant, prompt_hash=hashlib.sha256(clean_query.encode("utf-8")).hexdigest(),
+            request_id=request.state.request_id,
+        )
+        review_id = review.review_id
+        details["review_id"] = review_id
 
     # 4. Audit Logging — the FINAL combined decision, not the pre-output-check
     #    input decision, so a record never shows "ALLOW" for a request that
@@ -479,6 +500,7 @@ async def assess_prompt(req: AssessRequest, request: Request, background_tasks: 
         output_decision=output_decision,
         output_details=output_details,
         clean_response=output_details.get("clean_response") if output_details else None,
+        review_id=review_id,
     )
 
 @app.post("/api/v1/assess_output", response_model=AssessOutputResponse)
@@ -557,6 +579,83 @@ async def assess_output_endpoint(req: AssessOutputRequest, request: Request):
 def flush_semantic_cache():
     flush_cache()
     return {"status": "success"}
+
+
+# --- Human Review (Phase 4) ---
+
+@app.get("/api/v1/review/{review_id}", response_model=ReviewStatusResponse)
+def get_review_status(review_id: str, request: Request):
+    """
+    Status check for a REVIEW decision. Any authenticated caller may poll
+    this — read access to "is my request still pending" is far less
+    sensitive than the ability to approve/reject one, so it is gated only
+    on authentication, not on capability (unlike the two endpoints below).
+    """
+    principal = resolve_principal(authorization=request.headers.get("Authorization"))
+    if auth_required() and not principal.authenticated:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required. Present a valid API key as "
+                   "'Authorization: Bearer <key>'.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    review = get_review(review_id)
+    if review is None:
+        raise HTTPException(status_code=404, detail=f"No such review: {review_id}")
+    return ReviewStatusResponse(**review)
+
+
+@app.get("/api/v1/review")
+def list_reviews(request: Request):
+    """
+    Lists PENDING reviews only — a reviewer's queue, not a full history.
+    Resolved reviews stay retrievable individually via the status-check
+    endpoint above; this endpoint is for "what needs my attention right
+    now", not an audit export (that is what audit.jsonl is for).
+
+    INTERNAL capability required — this is where a caller could otherwise
+    learn about OTHER tenants' pending requests, which GENERAL/ELEVATED
+    callers have no business seeing.
+    """
+    principal = resolve_principal(authorization=request.headers.get("Authorization"))
+    if principal.capability != CAPABILITY_INTERNAL:
+        raise HTTPException(
+            status_code=403,
+            detail="INTERNAL capability required to list pending reviews.",
+        )
+    return {"pending": list_pending_reviews()}
+
+
+@app.post("/api/v1/review/{review_id}/resolve", response_model=ReviewStatusResponse)
+def resolve_review_endpoint(review_id: str, req: ReviewResolveRequest, request: Request):
+    """
+    Approve or reject a pending review — "feeding back into the policy
+    engine" (Phase 4 roadmap item): the resolution becomes the request's
+    FINAL decision (APPROVED -> ALLOW, REJECTED -> BLOCK), retrievable via
+    the status-check endpoint above. Does NOT retroactively alter the
+    semantic cache for future identical prompts — see core/review_queue.py's
+    docstring for why (no raw prompt text is stored here to re-embed from,
+    a deliberate privacy choice, not an oversight).
+
+    INTERNAL capability required, same reasoning as listing above, and more
+    so: this is a write that changes what request actually gets enforced.
+    """
+    principal = resolve_principal(authorization=request.headers.get("Authorization"))
+    if principal.capability != CAPABILITY_INTERNAL:
+        raise HTTPException(
+            status_code=403,
+            detail="INTERNAL capability required to resolve a review.",
+        )
+
+    try:
+        record = resolve_review(review_id, req.outcome, reviewer=principal.key_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"No such review: {review_id}")
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+    return ReviewStatusResponse(**record)
 
 @app.get("/health")
 def health_check():

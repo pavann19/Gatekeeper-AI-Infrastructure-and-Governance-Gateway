@@ -239,7 +239,7 @@ not a lighter-weight bypass.
 
 | Field | Meaning |
 |---|---|
-| `decision` | What to do: `BLOCK` (stop, do not call your LLM / do not show the response), `RESTRICT` (proceed with caution — see your policy config), `ALLOW` (proceed). |
+| `decision` | What to do: `BLOCK` (stop, do not call your LLM / do not show the response), `RESTRICT` (proceed with caution — see your policy config), `ALLOW` (proceed), `REVIEW` (stop, a human must resolve this first — see §5a and `review_id`). |
 | `risk_level` | `HIGH` / `MEDIUM` / `LOW` — threat signal only. |
 | `topicality` | `IN_DOMAIN` / `OUT_OF_DOMAIN` / `UNKNOWN` — subject-domain scoping, independent of safety. `UNKNOWN` means the domain guardrail is disabled (`DOMAIN_GUARDRAIL_MODE=off`, the shipped default — see §8). |
 | `capability` | The tier your credential actually resolved to. Echoed back so you can verify your key is provisioned the way you expect. |
@@ -247,6 +247,7 @@ not a lighter-weight bypass.
 | `clean_prompt` | Your prompt after PII redaction — use this, not your original, if you log or forward the prompt anywhere downstream. |
 | `redacted_items` | What was stripped from the prompt (e.g. emails, phone numbers). |
 | `clean_response` | `response_text` after PII redaction, when a response was submitted and not blocked outright — `null` if no `response_text` was sent, or if the output was blocked (a blocked response has no safe partial version). Use this, not your raw LLM output, if you display or log the response. |
+| `review_id` | Set only when `decision` is `REVIEW` — `null` otherwise. Poll `GET /api/v1/review/{review_id}` for the eventual human decision (§5a). |
 | `process_time_ms` | Server-side latency for this call. |
 | `details` | Internal scores and metadata — useful for debugging/audit, not something to branch application logic on (its shape isn't a stable contract). Notably includes `fusion_triggering_class` and `fusion_class_scores` — which attack category (e.g. `jailbreak`, `harmful_content`, `prompt_injection`) fusion believed a HIGH/MEDIUM verdict was, and its per-class probabilities. Both are `None`/`{}` when the request was decided by an earlier stage (cache, hard-ban, fast-path) that never reached fusion. |
 
@@ -271,10 +272,60 @@ RESTRICT -> Proceed, but under whatever restriction your policy maps to for
             a disclaimer). What RESTRICT means operationally is up to your
             integration — Gatekeeper tells you the tier, not the UX.
 ALLOW    -> Proceed normally.
+REVIEW   -> Do not proceed yet. A human must resolve this first — see §5a.
 ```
 
 The mapping from `(capability, risk_level) -> decision` is your **policy**,
-configured per-tenant (§6.3) — not hardcoded in the gateway.
+configured per-tenant (§6.3) — not hardcoded in the gateway. `REVIEW` is
+opt-in per tenant (the shipped default policy never produces it) — see
+`policy_rules.yaml`'s commented example for how a tenant opts in.
+
+### 5a. Handling a REVIEW decision
+
+`decision: "REVIEW"` comes with a `review_id`. Nothing was auto-decided —
+a human needs to look at it. Your integration has two things to do:
+
+1. **Don't proceed yet.** Treat REVIEW like BLOCK for the purposes of "can
+   I call my LLM / show this response" until it resolves.
+2. **Poll for the outcome:**
+
+```bash
+curl http://localhost:8000/api/v1/review/<review_id> \
+  -H "Authorization: Bearer gk_..."
+```
+
+```json
+{
+  "review_id": "a1b2c3...",
+  "status": "PENDING",
+  "reason": "Policy applied for GENERAL (Risk: MEDIUM, Tenant: acme)",
+  "capability": "GENERAL", "risk": "MEDIUM", "tenant": "acme",
+  "final_decision": null
+}
+```
+
+Once a reviewer resolves it, `status` becomes `APPROVED`/`REJECTED` and
+`final_decision` becomes `ALLOW`/`BLOCK` — that final decision is what you
+should actually act on.
+
+**Resolving a review** (for whoever builds your reviewer-facing tooling,
+not the original caller) requires `INTERNAL` capability:
+
+```bash
+# List what needs attention right now:
+curl http://localhost:8000/api/v1/review -H "Authorization: Bearer <internal-key>"
+
+# Resolve one:
+curl -X POST http://localhost:8000/api/v1/review/<review_id>/resolve \
+  -H "Authorization: Bearer <internal-key>" -H "Content-Type: application/json" \
+  -d '{"outcome": "APPROVED"}'
+```
+
+**What this does not do:** resolving a review does not retroactively
+change how a future, similar prompt is handled — it only affects the one
+specific request that was queued. Gatekeeper does not store the raw prompt
+text in the review queue (only its hash), so there's nothing to
+automatically re-match a later request against.
 
 ---
 
