@@ -136,6 +136,14 @@ class Settings(BaseSettings):
     # the one an operator would want to roll back to.
     POLICY_VERSIONS_DIR: str = "policy_versions"
 
+    # core/review_queue.py's storage (Phase 4: Human Review). A single
+    # mutable JSON file, not the audit log's append-only convention — see
+    # that module's docstring for why. Same mounted-volume guidance as
+    # AUDIT_LOG_PATH and POLICY_VERSIONS_DIR applies for a container
+    # deployment: a pending review lost on container recreation is a review
+    # that silently never gets resolved.
+    REVIEW_QUEUE_FILE: str = "review_queue.json"
+
     # Path to the JSONL audit log. Relative to cwd by default — unchanged
     # from before this setting existed. A container deployment should point
     # this at a mounted volume, since the audit record is this project's

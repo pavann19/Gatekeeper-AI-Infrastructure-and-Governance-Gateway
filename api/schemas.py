@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Literal, Optional
 
 class AssessRequest(BaseModel):
     prompt: str = Field(
@@ -57,7 +57,11 @@ class AssessRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
 class AssessResponse(BaseModel):
-    decision: str = Field(..., description="BLOCK, RESTRICT, or ALLOW")
+    decision: str = Field(
+        ..., description="BLOCK, RESTRICT, ALLOW, or REVIEW. REVIEW means "
+                         "neither auto-allowed nor auto-blocked — see "
+                         "`review_id` and GET /api/v1/review/{review_id}."
+    )
     risk_level: str = Field(
         ...,
         description="Safety assessment: HIGH, MEDIUM, or LOW. Reflects threat "
@@ -104,6 +108,12 @@ class AssessResponse(BaseModel):
                     "None when response_text was omitted or the output was "
                     "blocked outright.",
     )
+    review_id: Optional[str] = Field(
+        None,
+        description="Set when decision is REVIEW. Poll "
+                    "GET /api/v1/review/{review_id} for the eventual "
+                    "human decision — None for every other decision value.",
+    )
 
 class AssessOutputRequest(BaseModel):
     # Bounded for the same reason AssessRequest.prompt is: this text is
@@ -140,3 +150,34 @@ class AssessOutputResponse(BaseModel):
                     "output was BLOCKed outright (secrets/toxicity/"
                     "hallucination have no safe partial version).",
     )
+
+
+# --- Human Review (Phase 4) ---
+
+class ReviewStatusResponse(BaseModel):
+    review_id: str
+    status: str = Field(..., description="PENDING, APPROVED, or REJECTED.")
+    reason: str = Field(..., description="Why this request was routed to review.")
+    capability: str
+    risk: str
+    tenant: str
+    request_id: str
+    created_at: str
+    resolved_at: Optional[str] = None
+    reviewer: Optional[str] = Field(
+        None, description="key_id of whoever resolved this — None while PENDING."
+    )
+    final_decision: Optional[str] = Field(
+        None, description="ALLOW if APPROVED, BLOCK if REJECTED — None while PENDING."
+    )
+
+
+class ReviewResolveRequest(BaseModel):
+    # Literal, not str -- an invalid value is rejected as a 422 by Pydantic
+    # itself, before it ever reaches core.review_queue.resolve_review's
+    # business logic. Keeps that function's own ValueError reserved for the
+    # one case that IS a business-logic conflict: resolving an
+    # already-resolved review.
+    outcome: Literal["APPROVED", "REJECTED"] = Field(..., description="APPROVED or REJECTED.")
+
+    model_config = {"extra": "forbid"}

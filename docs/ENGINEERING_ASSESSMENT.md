@@ -3248,3 +3248,118 @@ historical risk-level distributions can still be wrong if the traffic
 mix shifts.
 
 ---
+
+## 3c. Phase 4 — Human Review (2026-08-24)
+
+`docs/ROADMAP_V2.md` Phase 4. All three checklist items — `REVIEW` as a
+distinct decision outcome, a review queue, and an approve/reject flow —
+built together, since none of the three is independently useful without
+the other two.
+
+### 1. `REVIEW` as a distinct decision outcome
+
+`core/policy.py::VALID_ACTIONS` gained a fourth value:
+`("BLOCK", "RESTRICT", "ALLOW", "REVIEW")`. This flows through for free
+everywhere `VALID_ACTIONS` is the source of truth — `validate_policy_file`
+(§3b) accepts it in a tenant's policy, `PolicyStore` loads it, `scripts.
+simulate_policy` can replay a transition into or out of REVIEW like any
+other. `policy_rules.yaml`'s commented Acme example (§3b) — which
+literally said "Revisit if they add per-tenant human review (Phase 4)" —
+now demonstrates it for real.
+
+**Severity ordering, for the combined input+output call
+(`/api/v1/assess` with `response_text`):** `BLOCK > REVIEW > RESTRICT >
+ALLOW`. REVIEW sits above RESTRICT (an auto-proceed-with-constraints
+verdict) because a human hasn't looked yet, and below BLOCK (an
+unambiguous, certain deny) because REVIEW means "uncertain," not
+"certainly unsafe." Two consequences follow directly from this ordering
+and are both tested: output-guard assessment is skipped when the input
+decision is already REVIEW (§1u's "checking the output of a prompt that
+was never allowed through in the first place answers a question nobody
+asked" — REVIEW is "not allowed through yet," same category as BLOCK for
+this purpose), and a REVIEW-shaped output can never downgrade an
+already-BLOCK input.
+
+### 2. Review queue — new, `core/review_queue.py`
+
+A single mutable JSON file (`review_queue.json`), not the audit log's
+append-only convention — see the module's own docstring for why: a review
+record's whole point is that it changes exactly once (PENDING ->
+APPROVED/REJECTED), which a read-modify-write file serves more simply
+than an append-only log every reader would need to replay.
+
+**No raw prompt text is stored** — only its SHA-256 hash, via the exact
+same convention `core/logger.py::log_event` already established for the
+audit trail (`prompt_hash`, never the prompt). This was a deliberate
+constraint that shaped the "approve/reject" design below, not an
+oversight discovered afterward.
+
+### 3. Approve/reject flow — new, three endpoints in `api/main.py`
+
+- `GET /api/v1/review/{review_id}` — status check. Gated on authentication
+  only (not capability) — reading "is my own request still pending" is far
+  less sensitive than approving one.
+- `GET /api/v1/review` — lists PENDING reviews only (a reviewer's queue,
+  not a history — resolved reviews stay individually retrievable above).
+  **`INTERNAL` capability required** — otherwise a caller could enumerate
+  other tenants' pending requests.
+- `POST /api/v1/review/{review_id}/resolve` — `{"outcome": "APPROVED"|
+  "REJECTED"}`, typed as a Pydantic `Literal` so an invalid value is
+  rejected as a 422 before it ever reaches `core.review_queue.resolve_
+  review`'s business logic, keeping that function's own `ValueError`
+  reserved for the one case that IS a conflict: resolving an
+  already-resolved review (409, tested explicitly against a
+  double-resolve). **`INTERNAL` capability required** — this is a write
+  that changes what a request actually gets enforced.
+
+**"Feeding back into the policy engine"** (the roadmap's own phrasing)
+means exactly this: resolving a review sets `final_decision` (`APPROVED`
+-> `ALLOW`, `REJECTED` -> `BLOCK`) on the record, and that IS the policy
+engine's final answer for that specific request — the original caller
+retrieves it via the status-check endpoint. What it deliberately does
+**not** do is described below.
+
+Neither review endpoint repeats a real, separate, PRE-EXISTING gap this
+pass noticed in passing: `/api/v1/cache/flush` has no authentication
+check at all. Not fixed here (out of scope for Phase 4), but noted so it
+isn't mistaken for a pattern the review endpoints also follow — they
+don't.
+
+### Verified
+
+- `tests/test_review_queue.py` (11 tests): enqueue, no raw prompt text
+  stored, list-pending excludes resolved, both resolution outcomes set
+  the correct `final_decision`, double-resolve raises, invalid outcome
+  raises, state persists across separate `ReviewQueue` instances pointed
+  at the same file, and a corrupt queue file fails to empty rather than
+  crashing (matching `KeyStore`/`TenantStore`/`PolicyStore`'s own
+  established fail-closed-not-crash discipline).
+- `tests/test_review_endpoints.py` (18 tests): a MEDIUM-risk request
+  under a REVIEW-mapped policy actually returns `decision: "REVIEW"` with
+  a `review_id`; `review_id` stays `None` for every other decision;
+  output-guard assessment is provably skipped when input resolves to
+  REVIEW; REVIEW never downgrades an already-BLOCK combined decision; all
+  three endpoints' capability gates (auth-only for status, `INTERNAL` for
+  list/resolve); the full approve -> ALLOW and reject -> BLOCK feedback
+  loop; and the 404/409/422 error paths.
+- One existing test's parameter-set assertion needed no change here (the
+  `store=` addition was §3b's, not this pass's), but this section's
+  `_SEVERITY` dict change to `api/main.py` was re-verified against
+  `tests/test_combined_assessment.py`'s existing severity-ordering
+  coverage — still green.
+- Full suite: 478 passed (up from 449 after Phase 3).
+
+### What this does not close
+
+Resolving a review does **not** retroactively alter how a future,
+similar prompt is handled — it affects only the one specific request that
+was queued. This was a deliberate consequence of not storing raw prompt
+text (privacy) rather than an oversight: doing so would need either
+storing the prompt/embedding after all, or re-embedding from nothing at
+resolution time, and this pass chose not to make that privacy trade
+silently. A deployment wanting "approve once, auto-allow similar prompts
+going forward" would need to explicitly opt into storing embeddings in
+the review queue — a real, separate design decision, not attempted here.
+The pre-existing `/api/v1/cache/flush` auth gap noted above remains open.
+
+---

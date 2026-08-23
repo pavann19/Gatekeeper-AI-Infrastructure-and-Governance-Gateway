@@ -61,7 +61,7 @@ from core.logger import get_logger
 
 logger = get_logger(__name__)
 
-VALID_ACTIONS = ("BLOCK", "RESTRICT", "ALLOW")
+VALID_ACTIONS = ("BLOCK", "RESTRICT", "ALLOW", "REVIEW")
 DEFAULT_TENANT_ID = "default"
 
 YAML_EXTENSIONS = (".yaml", ".yml")
