@@ -198,15 +198,23 @@ Original estimate: ~10–15h
 
 29 new tests, 478 passed overall (up from 449).
 
-## Phase 5 — Real LLM Gateway
+## Phase 5 — Real LLM Gateway (1/6 done — deliberately scoped down)
 Original estimate: ~25–40h — **largest hardware risk on this machine**
 
-- [ ] Provider abstraction (Ollama / OpenAI-compatible / Anthropic-compatible)
+- [x] Provider abstraction (Ollama / OpenAI-compatible / Anthropic-compatible)
+      — done 2026-08-24, see `docs/ENGINEERING_ASSESSMENT.md` §3d. New
+      `core/llm_providers.py`: one `LLMProvider.complete()` interface, three
+      concrete backends, normalised `LLMResponse`. Deliberately stops there
+      — no gateway endpoint, no streaming, no audit trail yet; see below
+      for why those are separate items, not omissions.
 - [ ] Request forwarding + response interception
 - [ ] Streaming support
 - [ ] Token accounting, model selection
 - [ ] Timeout/failure handling, fallback
 - [ ] Audit trail for the proxied call itself
+
+20 new tests, 498 passed overall (up from 478). All mocked HTTP — no live
+network call or real API key needed for any of them.
 
 This is the point where Gatekeeper stops being a sidecar you call before/after
 your own LLM call, and starts being infrastructure you route through — a

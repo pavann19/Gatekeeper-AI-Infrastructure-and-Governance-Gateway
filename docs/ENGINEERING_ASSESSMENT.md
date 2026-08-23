@@ -3363,3 +3363,92 @@ the review queue — a real, separate design decision, not attempted here.
 The pre-existing `/api/v1/cache/flush` auth gap noted above remains open.
 
 ---
+
+## 3d. Phase 5 — Real LLM Gateway, scoped to provider abstraction only (2026-08-24)
+
+`docs/ROADMAP_V2.md` Phase 5. This phase carries the roadmap's own
+"largest hardware risk on this machine" flag, and this machine has
+already demonstrated real RAM/thermal strain running Ollama plus the
+fusion detectors together (§1v, §2b). Rather than build the full phase in
+one push — provider abstraction, request forwarding, streaming, token
+accounting, timeout/fallback, and an audit trail, all at once — this pass
+deliberately does the first item only, at the user's explicit direction,
+and stops.
+
+### What "provider abstraction" means here, and why the boundary is exactly here
+
+New `core/llm_providers.py`: one interface, `LLMProvider.complete
+(messages, model=None) -> LLMResponse`, implemented by three backends —
+`OllamaProvider` (Ollama's native `/api/chat`), `OpenAICompatibleProvider`
+(any backend speaking OpenAI's `/chat/completions` wire format — real
+OpenAI, Groq, Together, a local vLLM/LM Studio server, by pointing
+`base_url` elsewhere), and `AnthropicCompatibleProvider` (Anthropic's
+`/messages` endpoint, including the one real wire-format difference this
+abstraction has to paper over — Anthropic takes `system` as a top-level
+field, not a `role: system` message in the list, so `complete()` splits
+that out transparently).
+
+Raw `requests`, not vendor SDKs — matches this project's own established
+convention (`core/semantic_judge.py` talks to Ollama the same way) and
+avoids three new dependencies for what is, per provider, one HTTP POST
+with a JSON body.
+
+**Nothing here is wired into `api/main.py`.** No `/api/v1/*` route calls
+any of this, no audit event is written for a call through it, no
+streaming exists. That is the actual scope boundary the roadmap's own
+item list draws — "provider abstraction" and "request forwarding" are
+listed as separate items for a reason: this piece is independently
+testable (every provider tested against mocked HTTP responses, zero live
+network calls, zero API keys needed) and independently useful before a
+gateway endpoint exists to call it. Building further without a live
+endpoint to exercise it would mean speculative code with nothing
+real driving its design — exactly the pattern this project has
+consistently avoided (§1b onward).
+
+### Error model, deliberately simple
+
+One exception type, `LLMProviderError`, for every failure mode — network
+error, timeout, non-2xx, or an unparseable body. No retry, no circuit
+breaker, no per-provider exception hierarchy. That resilience logic is
+what the roadmap's separate "Timeout/failure handling, fallback" item is
+for, and it belongs at the GATEWAY level, once there is a gateway
+choosing between multiple provider attempts — building partial
+resilience into the provider block itself, with no caller yet to
+exercise it correctly, would be exactly the kind of untested abstraction
+this project's testing discipline exists to prevent.
+
+`LLMResponse.usage` is passed through verbatim from whichever provider
+returns it, unconsumed by anything — present only because it costs
+nothing to surface what the provider already sent, and is exactly the
+raw material the roadmap's separate "Token accounting" item would later
+build a policy on top of.
+
+### Verified
+
+- `tests/test_llm_providers.py` (20 tests, all mocked): each provider's
+  success path, missing-API-key and missing-model failures (raised
+  *before* any network call, asserted explicitly via
+  `mock_post.assert_not_called()`), non-2xx responses, malformed response
+  bodies, and a network exception being re-raised as `LLMProviderError`
+  rather than leaking `requests`' own exception type to callers. The
+  Anthropic system-message extraction is tested directly (both with and
+  without a system message present). A final cross-provider test
+  confirms all three produce the same `LLMResponse` shape from
+  differently-shaped raw provider payloads.
+- `ruff check core/ api/` run locally before committing — the previous
+  Phase 4 push failed CI on exactly this (an unused import ruff would
+  have caught locally in seconds); not repeating that miss here.
+- Full suite: 498 passed (up from 478 after Phase 4).
+
+### What this does not close
+
+Everything else in Phase 5's checklist: request forwarding (no endpoint
+exists), streaming, token accounting as an enforced policy (not just a
+passed-through field), timeout/fallback across multiple providers, and
+an audit trail for a proxied call. All deliberately deferred, not
+discovered gaps — see the roadmap boundary discussion above. No live
+provider has been exercised end-to-end (every test mocks the HTTP layer);
+the first real integration test against an actual endpoint should happen
+alongside whichever of those items gets built next, not in isolation now.
+
+---

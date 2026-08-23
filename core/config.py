@@ -123,7 +123,25 @@ class Settings(BaseSettings):
     # asked Ollama for a model this project stopped validating against.
     OLLAMA_MODEL: str = "llama-guard3"
     EMBEDDING_MODEL: str = "all-mpnet-base-v2"
-    
+
+    # --- Phase 5 (Real LLM Gateway), scoped down to provider abstraction
+    # only for this pass — core/llm_providers.py. No request-forwarding
+    # endpoint consumes these yet; they exist so a provider can be
+    # constructed from configuration rather than only via explicit
+    # constructor arguments (matching how OLLAMA_API_URL/OLLAMA_MODEL
+    # already work). Empty-string API key defaults are deliberate: a
+    # provider requiring one fails loudly at call time
+    # (LLMProviderError), not at import time, so importing this module
+    # never requires every provider to be configured.
+    OLLAMA_CHAT_URL: str = "http://localhost:11434/api/chat"
+    OPENAI_API_KEY: str = ""
+    OPENAI_BASE_URL: str = "https://api.openai.com/v1"
+    OPENAI_MODEL: str = ""
+    ANTHROPIC_API_KEY: str = ""
+    ANTHROPIC_BASE_URL: str = "https://api.anthropic.com/v1"
+    ANTHROPIC_MODEL: str = ""
+    ANTHROPIC_VERSION: str = "2023-06-01"
+
     # File Paths
     POLICY_FILE: str = "policies.json"
     POLICY_RULES_FILE: str = "policy_rules.json"
