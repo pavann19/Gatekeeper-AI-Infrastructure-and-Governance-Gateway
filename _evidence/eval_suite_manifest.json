@@ -1,23 +1,26 @@
 {
   "seed": 20260723,
-  "total": 6933,
-  "attacks": 1925,
-  "benign": 5008,
-  "duplicates_dropped": 174,
+  "total": 13011,
+  "attacks": 4464,
+  "benign": 8547,
+  "duplicates_dropped": 1873,
   "benign_cap": null,
   "by_attack_class": {
-    "benign": 5008,
-    "prompt_injection": 979,
-    "jailbreak": 692,
-    "harmful_content": 254
+    "benign": 8547,
+    "prompt_injection": 2504,
+    "harmful_content": 1268,
+    "jailbreak": 692
   },
   "by_language": {
-    "en": 6458,
-    "other": 241,
-    "de": 234
+    "en": 7335,
+    "de": 4221,
+    "other": 1455
   },
   "by_source": {
+    "philschmid/germeval18": 3000,
     "lmsys/toxic-chat": 2939,
+    "rikka-snow/prompt-injection-multilingual": 1716,
+    "Octavio-Santana/prompt-injection-attack-detection-multilingual": 1362,
     "jackhhao/jailbreak-classification": 1269,
     "tatsu-lab/alpaca": 1200,
     "lakera/gandalf_ignore_instructions": 776,
@@ -27,24 +30,24 @@
   },
   "class_by_language": {
     "prompt_injection": {
-      "en": 872,
-      "other": 33,
-      "de": 74
+      "en": 1413,
+      "de": 653,
+      "other": 438
     },
     "benign": {
-      "de": 158,
-      "en": 4644,
-      "other": 206
+      "en": 4976,
+      "de": 2566,
+      "other": 1005
     },
     "harmful_content": {
-      "en": 252,
-      "de": 1,
-      "other": 1
+      "de": 1001,
+      "en": 256,
+      "other": 11
     },
     "jailbreak": {
       "en": 690,
-      "de": 1,
-      "other": 1
+      "other": 1,
+      "de": 1
     }
   },
   "sources": [
@@ -117,6 +120,36 @@
       "duplicates_dropped": 0,
       "cap": 1200,
       "note": "Ordinary instruction traffic. Anchors the false-positive rate."
+    },
+    {
+      "source": "rikka-snow/prompt-injection-multilingual",
+      "status": "ok",
+      "raw_rows": 7282,
+      "sampled": 3000,
+      "kept": 1716,
+      "duplicates_dropped": 621,
+      "cap": 3000,
+      "note": "Multilingual (de/en/other) injection + matched benign, added to close the German-specific detection gap."
+    },
+    {
+      "source": "Octavio-Santana/prompt-injection-attack-detection-multilingual",
+      "status": "ok",
+      "raw_rows": 6339,
+      "sampled": 3000,
+      "kept": 1362,
+      "duplicates_dropped": 1078,
+      "cap": 3000,
+      "note": "Second independent multilingual injection + benign source, same purpose."
+    },
+    {
+      "source": "philschmid/germeval18",
+      "status": "ok",
+      "raw_rows": 8407,
+      "sampled": 3000,
+      "kept": 3000,
+      "duplicates_dropped": 0,
+      "cap": 3000,
+      "note": "German-only offensive-language classification. German harmful_content and benign volume, near-absent before this source."
     }
   ],
   "excluded_sources": {

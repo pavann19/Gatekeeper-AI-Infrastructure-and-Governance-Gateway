@@ -171,6 +171,63 @@ def _src_jbb_behaviors(load):
                 yield text, label, cls
 
 
+def _src_rikka_snow_multilingual(load):
+    """
+    Genuinely multilingual (de/en, plus others) prompt-injection dataset with
+    a matched benign class in each language -- added specifically to close
+    the "German-specific detection gap" roadmap item (docs/ROADMAP_V2.md
+    Phase 1), which was blocked on data volume: the original suite had only
+    234 German rows (74 attacks) total, too thin to fit a dedicated
+    threshold. Sampled at build_eval_suite.py's own detect_language() shows
+    ~2500 of this source's rows are German, roughly 10x this suite's prior
+    German attack volume on its own.
+    """
+    for split in ("train", "test"):
+        ds = load("rikka-snow/prompt-injection-multilingual", split=split)
+        for row in ds:
+            text = (row.get("text") or "").strip()
+            if not text:
+                continue
+            is_attack = int(row["label"]) == 1
+            yield text, int(is_attack), (CLASS_INJECTION if is_attack else CLASS_BENIGN)
+
+
+def _src_octavio_multilingual(load):
+    """
+    A second, independently-sourced multilingual injection/benign dataset
+    (~1,700 German rows by this suite's own language heuristic). Kept
+    separate from rikka-snow above rather than merged at the adapter level
+    so each source's provenance stays traceable in the manifest -- exactly
+    the reasoning the module docstring gives for per-source dedup tracking.
+    """
+    ds = load("Octavio-Santana/prompt-injection-attack-detection-multilingual", split="train")
+    for row in ds:
+        text = (row.get("text") or "").strip()
+        if not text:
+            continue
+        is_attack = int(row["label"]) == 1
+        yield text, int(is_attack), (CLASS_INJECTION if is_attack else CLASS_BENIGN)
+
+
+def _src_germeval18(load):
+    """
+    German-only offensive-language classification (GermEval 2018 shared
+    task). Not a prompt-injection dataset -- it contributes German
+    `harmful_content` and German `benign` volume, both of which the suite
+    had almost none of (1 and 158 rows respectively before this source).
+    OFFENSE maps to harmful_content, matching how lmsys/toxic-chat's own
+    toxicity flag is already mapped in this taxonomy.
+    """
+    for split in ("train", "test"):
+        ds = load("philschmid/germeval18", split=split)
+        for row in ds:
+            text = (row.get("text") or "").strip()
+            if not text:
+                continue
+            is_offense = str(row.get("binary", "")).strip().upper() == "OFFENSE"
+            yield text, int(is_offense), (CLASS_HARMFUL if is_offense else CLASS_BENIGN)
+
+
 def _src_alpaca(load):
     """
     General benign instructions. Included because every attack-focused dataset
@@ -199,6 +256,15 @@ SOURCES = [
      "note": "Harmful-behaviour goals paired with benign controls."},
     {"name": "tatsu-lab/alpaca", "fn": _src_alpaca, "cap": 1200,
      "note": "Ordinary instruction traffic. Anchors the false-positive rate."},
+    {"name": "rikka-snow/prompt-injection-multilingual", "fn": _src_rikka_snow_multilingual,
+     "cap": 3000, "note": "Multilingual (de/en/other) injection + matched benign, added "
+                          "to close the German-specific detection gap."},
+    {"name": "Octavio-Santana/prompt-injection-attack-detection-multilingual",
+     "fn": _src_octavio_multilingual, "cap": 3000,
+     "note": "Second independent multilingual injection + benign source, same purpose."},
+    {"name": "philschmid/germeval18", "fn": _src_germeval18, "cap": 3000,
+     "note": "German-only offensive-language classification. German harmful_content "
+             "and benign volume, near-absent before this source."},
 ]
 
 # Sources deliberately not included, recorded so the omission is explicit.
