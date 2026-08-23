@@ -28,7 +28,10 @@ def test_policy_decision_has_no_topicality_parameter():
     import inspect
     params = set(inspect.signature(policy_decision).parameters)
     assert "topicality" not in params
-    assert params == {"capability", "risk", "tenant_id"}
+    # `store` was added for Phase 3 (Policy-as-Code) simulation --
+    # scripts/simulate_policy.py evaluates a candidate policy file without
+    # touching the live global store. It carries no topicality concept.
+    assert params == {"capability", "risk", "tenant_id", "store"}
 
 
 def test_record_assessment_metric_is_identical_regardless_of_topicality():

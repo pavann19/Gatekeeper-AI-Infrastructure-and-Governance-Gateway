@@ -1,0 +1,55 @@
+# Gatekeeper policy, YAML format (Phase 3, Policy-as-Code).
+#
+# Equivalent to policy_rules.json — same schema, loaded by the same
+# core/policy.py::PolicyStore (core/policy.py::_parse_policy_file dispatches
+# on file extension: .yaml/.yml -> YAML, anything else -> JSON). Point
+# POLICY_RULES_FILE at this file to use it instead of the JSON default.
+#
+# YAML's actual advantage over JSON here: comments. A policy file is where
+# an operator's REASONING for a tenant's strictness should live, next to
+# the rule itself, not in a separate change-log an auditor has to go find.
+#
+# Validate before deploying:
+#   python -m scripts.validate_policy policy_rules.yaml
+# See what would change against real traffic before deploying:
+#   python -m scripts.simulate_policy policy_rules.yaml
+# Deploy (snapshots the current live policy first, for rollback):
+#   python -m scripts.manage_policy_versions deploy policy_rules.yaml
+
+# Fail-safe backstop only — fires when a capability tier itself is
+# undefined for a resolved tenant, which should be rare (there are exactly
+# three tiers). Not a per-tenant setting; see core/policy.py's module
+# docstring for why default_action is intentionally global.
+default_action: BLOCK
+
+tenants:
+  # Every deployment must define "default" — an unconfigured or unknown
+  # tenant_id resolves here. core/policy.py fails closed (BLOCK everything)
+  # if this entry is missing or invalid.
+  default:
+    policies:
+      GENERAL:
+        HIGH: BLOCK
+        MEDIUM: RESTRICT
+        LOW: ALLOW
+      ELEVATED:
+        HIGH: BLOCK
+        MEDIUM: ALLOW
+        LOW: ALLOW
+      INTERNAL:
+        HIGH: ALLOW
+        MEDIUM: ALLOW
+        LOW: ALLOW
+
+  # Example of a stricter tenant, with the reasoning documented right here
+  # rather than in a commit message an auditor has to go dig up:
+  #
+  # acme:
+  #   policies:
+  #     GENERAL:
+  #       HIGH: BLOCK
+  #       MEDIUM: BLOCK   # Acme's compliance team requires MEDIUM-risk
+  #                       # traffic reviewed by a human before release —
+  #                       # see their onboarding ticket #4471. Revisit if
+  #                       # they add per-tenant human review (Phase 4).
+  #       LOW: ALLOW

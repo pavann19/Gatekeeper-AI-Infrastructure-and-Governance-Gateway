@@ -3111,3 +3111,140 @@ items per the roadmap: none — all five checklist items are addressed
 (one, item 3, by confirming existing coverage rather than new code).
 
 ---
+
+## 3b. Phase 3 — Policy-as-Code (2026-08-24)
+
+`docs/ROADMAP_V2.md` Phase 3. Four checklist items, all against the
+existing `core/policy.py` (capability, risk_level) -> action model — not
+the larger, tool/output-category-aware policy language sketched in the
+original external scoping proposal (`docs/ROADMAP_V2.md`'s header), which
+would need a Tool Gateway (Phase 6, unbuilt) to actually enforce. Building
+config syntax for enforcement that doesn't exist yet would be exactly the
+kind of decorative surface this project has consistently avoided (§1b
+onward) — scoped to what's real.
+
+### 1. YAML/declarative format — added alongside JSON, not instead of it
+
+`core/policy.py::_parse_policy_file` dispatches on file extension
+(`.yaml`/`.yml` -> `yaml.safe_load`, anything else -> `json.load`).
+Deliberately **not** a default-format migration: `policy_rules.json` is
+referenced by name in `docker-compose.yml`, `.dockerignore`, and
+`config/README.md`, and changing what a fresh deployment loads by default
+would touch all three for a readability improvement, not a capability
+one. An existing deployment pointing `POLICY_RULES_FILE` at a `.json`
+path is completely unaffected. `policy_rules.yaml` (new) is the worked
+example — same content as `policy_rules.json`, but with the actual
+advantage YAML has here made concrete: comments, so an operator's
+reasoning for a tenant's strictness can live next to the rule itself
+instead of in a commit message an auditor has to go find.
+
+`yaml.safe_load`, deliberately not `yaml.load`: a policy file decides
+ALLOW/BLOCK for every request, so it must not also be a code-execution
+vector (`!!python/object/apply:...` tags) for whoever can write to it —
+tested explicitly (`test_yaml_safe_load_used_not_full_load`).
+
+PyYAML was already an installed transitive dependency (pulled in by
+something else, likely spaCy) but not declared anywhere — added
+explicitly to `requirements.txt`, `requirements-api.txt`, and
+`requirements-ci.txt` rather than continuing to rely on an undeclared
+transitive dependency for a capability the codebase now uses directly.
+
+### 2. Validation step — new, `core/policy.py::validate_policy_file` + `scripts/validate_policy.py`
+
+Deliberately **not** the same code path as `PolicyStore.load()`. The
+live loader's job is availability: one malformed tenant must not take
+down its siblings, so it logs a warning and silently drops just that
+entry (see the module docstring). That is the wrong behaviour for an
+operator checking a candidate file before it goes near the running
+gateway — they want every problem at once, not one discovered per
+fix-and-rerun cycle. `validate_policy_file` reuses the same structural
+checks but collects into a list and never drops silently.
+
+### 3. Simulation — new, `scripts/simulate_policy.py`
+
+Replays real historical decisions against a candidate policy without
+touching what the gateway is actually enforcing. This works because
+`core/logger.py::log_event`'s audit schema already carries exactly the
+three inputs `policy_decision()` needs — `capability`, `risk`, `tenant`
+— for every input-assessment record; nothing new needed to be logged to
+make this possible. `policy_decision()` gained an optional `store`
+parameter (default: the live global store) so a simulation can evaluate
+a `PolicyStore` built from the candidate file entirely in-memory, with
+zero risk of a bug in the simulation path mutating live enforcement.
+Output-assessment audit records (no `risk` field) are skipped —
+this simulates input policy only, matching what `core/policy.py` governs.
+
+Refuses to simulate an invalid candidate file (calls
+`validate_policy_file` first) rather than producing a confusing partial
+replay against a policy that would fail closed in production anyway.
+
+**Smoke-tested against this project's own real audit log** (6,801
+usable historical records, `audit.jsonl`): a deliberately stricter
+candidate (`GENERAL/MEDIUM: RESTRICT -> BLOCK`) correctly reported 225
+changed decisions (128 stricter, 97 looser — the looser ones from other
+audit-log tenants whose policy the edit didn't target), broken down by
+tenant and by transition type. Real output against real data, not a
+synthetic fixture.
+
+### 4. Versioning and rollback — new, `core/policy_versioning.py` + `scripts/manage_policy_versions.py`
+
+Filesystem-based, deliberately **not** built on git — see the module's
+own docstring for why: `policy_rules.json`/`.yaml` sitting in this repo
+already has git as its version history; what git does NOT cover is the
+file as it exists on a **running deployment**, which `reload_policies()`
+already supports hot-swapping without a restart, and which an operator
+may have no git access to at all (a mounted volume, or a policy pushed
+by a separate tenant-management tool that never goes through a commit).
+
+Every snapshot is a full copy, named
+`<timestamp>__<sha256[:12]>.<ext>` in `POLICY_VERSIONS_DIR` (new setting,
+default `policy_versions/`, mirroring `AUDIT_LOG_PATH`'s own
+mount-a-volume guidance) — no metadata database; the directory listing
+is the version history, inspectable with plain filesystem tools if this
+module is ever unavailable. `deploy_policy()` is the safe entrypoint:
+snapshot current -> copy in the new file -> reload, returning the exact
+snapshot name to roll back to. `rollback_to()` itself snapshots what it's
+about to overwrite first — a rollback is itself a policy change and must
+not destroy the ability to undo it.
+
+### Verified
+
+- `tests/test_policy_yaml.py` (6 tests): both extensions load, YAML and
+  JSON produce byte-identical decisions for equivalent content, the
+  `safe_load` code-execution guard, the real shipped `policy_rules.yaml`
+  loads cleanly.
+- `tests/test_policy_validation.py` (10 tests): every structural failure
+  mode reports its specific path (e.g.
+  `tenants.default.policies.GENERAL.HIGH`), and multiple simultaneous
+  problems are all reported in one pass, not one per rerun.
+- `tests/test_policy_versioning.py` (11 tests): snapshot/list/rollback/
+  deploy, including that a rollback reloads the live store immediately,
+  that rolling back is itself snapshotted, and that the very first
+  deploy (no prior policy to snapshot) doesn't error.
+- `tests/test_simulate_policy.py` (5 tests): output-assessment records
+  correctly excluded, malformed audit lines skipped rather than crashing
+  the whole replay, and the core replay comparison for both a changed
+  and an unchanged decision.
+- One existing test updated: `test_policy_decision_has_no_topicality_parameter`
+  (`tests/test_risk_topicality_separation.py`, §2a) asserted the exact
+  parameter set on `policy_decision` — updated to include the new
+  `store` parameter, which carries no topicality concept, rather than
+  weakening the guard to stop checking the full set.
+- Full suite: 449 passed (up from 418 after Phase 2).
+
+### What this does not close
+
+No API endpoint exposes deploy/rollback yet — `scripts/manage_policy_
+versions.py` requires shell access to the deployment. `core/policy_
+versioning.py`'s functions are ready to be wired into an admin endpoint
+if that becomes worth doing, not attempted here. The YAML format has no
+migration tooling to convert an existing tenant's hand-edited JSON policy
+automatically — an operator wanting YAML today hand-authors it (or the
+two formats are trivially interconvertible via `json.load`/`yaml.dump`,
+not scripted here since neither format is being deprecated). Simulation
+answers "what would change under this policy against past traffic," not
+"is this policy change safe" — a policy that looks fine against
+historical risk-level distributions can still be wrong if the traffic
+mix shifts.
+
+---
