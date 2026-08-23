@@ -2728,6 +2728,118 @@ context).
 
 ---
 
+## 1aa. German-specific detection gap — data blocker closed, threshold experiment gives an honest negative (2026-08-24, `phase1-german-gap-and-experiments` branch)
+
+This roadmap item (§ above, "German-specific detection gap") was
+explicitly blocked on data: "only 234 German rows (76 attacks) in the
+current suite, thin for a dedicated fit." Done on a separate branch, not
+main, at the user's explicit instruction to keep this exploratory work
+isolated until they choose to merge it.
+
+### Closing the data blocker
+
+`scripts/build_eval_suite.py` gained three new sources, chosen
+specifically for German coverage rather than generic volume:
+
+- `rikka-snow/prompt-injection-multilingual` and
+  `Octavio-Santana/prompt-injection-attack-detection-multilingual` — both
+  genuinely multilingual injection/benign datasets with real German rows
+  (not machine-translated English), found by searching the Hub for
+  multilingual prompt-injection datasets and verifying German content
+  with this project's own `detect_language` heuristic before committing
+  to either source.
+- `philschmid/germeval18` — a German-only offensive-language dataset,
+  covering German `harmful_content` and `benign` volume that was nearly
+  absent (1 and 158 rows respectively) before this.
+
+Suite grows from 6,933 to 13,011 rows after dedup (1,873 duplicates
+dropped, mostly overlap between the two new multilingual sources). German
+rows grow from 234 to 4,221 — `prompt_injection`: 74→653,
+`harmful_content`: 1→1,001, `benign`: 158→2,566. This alone is a ~10x-plus
+increase in exactly the class the roadmap identified as too thin to fit a
+threshold against.
+
+### The threshold experiment — and why it wasn't a full ensemble rescore
+
+The roadmap names the exact next step: "a calibrated German-specific
+threshold on `protectai_injection` alone." Rescoring the entire deployed
+4-feature fusion ensemble against all ~13k rows to answer a question that
+only needs one detector, on one language subset (~4,200 rows), was
+started and then deliberately abandoned partway through — measured at
+~4.5s/batch for `protectai_injection` alone, a full 4-detector run
+against the full suite would have taken multiple hours of CPU-bound
+transformer inference for a question `scripts/calibrate_german_threshold.py`
+answers in under 10 minutes by scoring only the German subset, reusing
+already-cached scores for rows that hadn't changed. This is the
+distinction the user drew explicitly when steering this session away
+from "pointless benchmarking" toward targeted, hypothesis-driven checks.
+
+New `scripts/calibrate_german_threshold.py`: loads only the German,
+contamination-excluded rows (`deepset/prompt-injections` is
+`protectai_injection`'s declared `trained_on` source, same exclusion
+discipline as `scripts/compare_detectors.py`), fits a threshold at the 5%
+FPR budget on half the German population, evaluates on the other half,
+and compares against the detector's already-published pooled (mostly
+English) threshold.
+
+### The result is a real, honest negative — not what was hoped for
+
+```
+German rows (contamination-excluded): 4,221  attacks=1,655  benign=2,566
+AUC (held-out German half):            0.621 [0.594, 0.647]
+Recall @ deployed pooled threshold:    35.0%   FPR: 17.1%
+Recall @ German-specific threshold:    19.8%   FPR: 4.6%
+```
+
+Two things this actually shows:
+
+1. **The previously-published "German AUC 0.872 standalone" does not
+   replicate at scale.** That number came from the original 234-row
+   German sample, which was dominated by one attack style
+   (`deepset/prompt-injections`' instruction-override pattern — now
+   excluded here as contamination anyway, since it's this detector's own
+   training data). Against a larger, stylistically diverse German attack
+   population, `protectai_injection` measures well above chance
+   (CI excludes 0.5) but far below what the old, narrow sample suggested.
+   The old number was real for the data it was measured on; it was never
+   representative of "German attacks" as a category, and this project's
+   own evidence discipline requires saying so once better data exists to
+   show it, rather than quietly forgetting the old figure was ever
+   published (§1x already used the phrase "no encoder swap needed" based
+   on that same 0.872 figure — this finding narrows, but does not
+   reverse, that conclusion, since the encoder-swap question was about
+   the pooled ensemble, not this detector alone).
+
+2. **The currently-cached pooled threshold badly overshoots FPR on
+   German traffic specifically** — 17.1% against a 5% budget, more than
+   3x over. A German-specific cut fixes that (4.6%, within budget) at a
+   real recall cost (35%→20%). Given this project's repeatedly-stated
+   position that FPR is the hard constraint (§2b: "FPR ... is untouched")
+   and this is a hard constraint being missed by 3x for a whole language,
+   this is worth fixing — but not on the strength of one standalone
+   detector's number.
+
+### What this does not close
+
+This measures `protectai_injection` ALONE against ITS OWN threshold —
+not the deployed FUSION ensemble's actual German-language FPR, which is
+what the live system actually enforces. The fusion combines four
+features via a trained logistic regression (§1y); a feature miscalibrated
+in isolation does not necessarily miscalibrate the fusion output the same
+way, since the other three features may compensate or may not. The
+honest next step is a per-language breakdown of the DEPLOYED fusion
+ensemble's FPR (mirroring `scripts/analyze_multilingual_fusion.py`'s
+existing by-language methodology, now against the much larger German
+subset) — deliberately not done in this pass, both because it needs the
+full 4-detector rescore this section explains skipping, and because
+shipping a threshold change on one detector's standalone number, without
+checking whether the fusion already compensates, would be exactly the
+kind of premature fix this project's evidence discipline exists to
+prevent. Tracked as the concrete next step in `docs/ROADMAP_V2.md`, not
+merged to `main` until that validation happens.
+
+---
+
 ## 2a. Separate `risk` from `topicality` in practice — already correct, now guarded (2026-08-15)
 
 Phase 1 of `docs/ROADMAP_V2.md`. The roadmap item read "confirm it's

@@ -39,15 +39,24 @@ Original estimate: ~20–30h
       closed; a real, decisive residual gap remains (0.950 vs 0.819 AUC,
       84.7% vs 47.4% recall@5%FPR, English vs German) — replaced below
       with the honestly-scoped follow-up.
-- [ ] German-specific detection gap (renamed from "multilingual encoder"
-      per the above): investigate a language-aware threshold or per-
-      language policy (mirrors the per-class mechanism §1w already
-      surfaces) rather than another pooled feature — likely starting point
-      is a calibrated German-specific threshold on `protectai_injection`
-      alone (German AUC 0.872 standalone, higher than the 0.819 it
-      contributes diluted inside the pooled ensemble). Blocked on data
-      volume: only 234 German rows (76 attacks) in the current suite, thin
-      for a dedicated fit — may need more German-labelled data first.
+- [~] German-specific detection gap (renamed from "multilingual encoder"
+      per the above): data-volume blocker CLOSED 2026-08-24 on
+      `phase1-german-gap-and-experiments` (not yet merged to main) — see
+      `docs/ENGINEERING_ASSESSMENT.md` §1aa. Suite grew from 234 to 4,221
+      German rows via three new sources. The calibrated-threshold
+      experiment this unblocked produced an honest NEGATIVE result: on the
+      larger, more diverse German set, `protectai_injection` standalone
+      measures AUC 0.621 [0.594, 0.647] held-out — far below the earlier
+      0.872 figure, which turns out to have been an artifact of the old
+      234-row German sample's narrow attack-style diversity, not a
+      property of the detector. A German-specific threshold trades 15
+      points of recall (35%→20%) to bring German FPR back to the 5%
+      budget (currently 17.1% at the pooled threshold) — a real, useful
+      finding, but a single-detector standalone measurement, not yet
+      validated against the deployed 4-feature FUSION ensemble, which is
+      what actually decides. Item stays open until that fusion-level
+      rescore happens; not rushed through on the strength of one
+      detector's number.
 - [x] Clean threat taxonomy — done 2026-08-14, see
       `docs/ENGINEERING_ASSESSMENT.md` §1y. Two fixes: (1) added a
       `jailbreak` anchor class to `policies.json` — anchor layer previously
