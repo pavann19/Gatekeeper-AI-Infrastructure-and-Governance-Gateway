@@ -1,0 +1,34 @@
+{
+  "seed": 20260824,
+  "detector": "protectai_injection",
+  "fpr_budget": 0.05,
+  "n_german_rows": 4221,
+  "n_german_attacks": 1655,
+  "n_fit": 2110,
+  "n_eval": 2111,
+  "german_threshold": 0.12604673206806183,
+  "deployed_threshold": 0.0006233625463210046,
+  "auc_on_held_out_german_half": {
+    "point": 0.6207574148753111,
+    "lo": 0.594271625473029,
+    "hi": 0.6467485535426349,
+    "n": 2111,
+    "n_boot_effective": 1000,
+    "ci_level": 0.95
+  },
+  "recall_at_fpr_budget_held_out": {
+    "point": 0.20772946859903382,
+    "lo": 0.17412333736396615,
+    "hi": 0.2569620253164557,
+    "n": 2111,
+    "n_boot_effective": 1000,
+    "ci_level": 0.95
+  },
+  "recall_at_german_threshold": 0.19806763285024154,
+  "fpr_at_german_threshold": 0.04598597038191738,
+  "comparison_to_deployed": {
+    "recall_at_deployed_threshold": 0.3502415458937198,
+    "fpr_at_deployed_threshold": 0.17069368667186283,
+    "recall_delta": -0.15217391304347827
+  }
+}
