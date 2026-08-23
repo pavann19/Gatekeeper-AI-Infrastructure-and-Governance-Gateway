@@ -1,0 +1,23 @@
+{
+  "experiment": "1-for-1 swap of deepset_injection for protectai_injection in the deployed fusion recipe, unretrained weights not applicable (fresh 5-fold OOF logistic regression fit both times)",
+  "n_rows": 13011,
+  "deployed": {
+    "features": ["anchors", "protectai_injection", "madhurjindal_jailbreak", "toxic_bert"],
+    "pooled_auc": {"point": 0.846, "lo": 0.838, "hi": 0.853},
+    "by_language": {
+      "en": {"auc": {"point": 0.927, "lo": 0.920, "hi": 0.933}, "recall_at_5pct_fpr": {"point": 0.745, "lo": 0.727, "hi": 0.765}},
+      "de": {"auc": {"point": 0.671, "lo": 0.655, "hi": 0.686}, "recall_at_5pct_fpr": {"point": 0.247, "lo": 0.223, "hi": 0.285}},
+      "other": {"auc": {"point": 0.855, "lo": 0.829, "hi": 0.877}, "recall_at_5pct_fpr": {"point": 0.582, "lo": 0.521, "hi": 0.652}}
+    }
+  },
+  "swapped": {
+    "features": ["anchors", "deepset_injection", "madhurjindal_jailbreak", "toxic_bert"],
+    "pooled_auc": {"point": 0.815, "lo": 0.807, "hi": 0.822},
+    "by_language": {
+      "en": {"auc": {"point": 0.880, "lo": 0.871, "hi": 0.889}, "recall_at_5pct_fpr": {"point": 0.647, "lo": 0.624, "hi": 0.668}},
+      "de": {"auc": {"point": 0.675, "lo": 0.659, "hi": 0.690}, "recall_at_5pct_fpr": {"point": 0.123, "lo": 0.101, "hi": 0.150}},
+      "other": {"auc": {"point": 0.911, "lo": 0.896, "hi": 0.926}, "recall_at_5pct_fpr": {"point": 0.462, "lo": 0.362, "hi": 0.541}}
+    }
+  },
+  "verdict": "REJECTED - decisive pooled and English regression; German AUC statistically unchanged (CIs overlap) and German recall@5%FPR got WORSE, not better. A standalone detection-quality edge does not transfer through an unretrained fusion substitution. Next step if pursued: add as a 5th feature and retrain, not substitute."
+}
