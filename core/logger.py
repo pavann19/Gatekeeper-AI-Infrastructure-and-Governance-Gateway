@@ -128,3 +128,45 @@ def log_output_event(capability, response_text, decision, metadata=None, tenant=
 
     audit_logger = logging.getLogger("gatekeeper.audit")
     audit_logger.info("Output Governance Decision", extra=log_entry)
+
+
+def log_gateway_event(capability, provider, model, success, latency_ms, decision,
+                      usage=None, error=None, tenant="unset", request_id="unset"):
+    """
+    Audit record for a PROXIED CALL through the LLM gateway (Phase 5: Real
+    LLM Gateway, "Audit trail for the proxied call itself" roadmap item) —
+    a THIRD distinct event_type alongside log_event's "input_assessment"
+    and log_output_event's "output_assessment", for the same reason those
+    two are separate from each other: this answers a third, different
+    question ("did the call to the external provider succeed, and what did
+    it cost?") that neither the input nor output assessment records answer.
+
+    Deliberately does not duplicate the input/output governance verdicts —
+    those are already fully recorded by log_event/log_output_event for the
+    same request_id, joinable on it. `decision` here is the FINAL combined
+    decision the gateway returned to the caller (ALLOW/BLOCK/etc.), present
+    for a quick "did this proxied call actually go through" filter without
+    needing to join, not a duplicate source of truth for WHY.
+
+    No prompt or response content is logged here either — same privacy
+    discipline as every other audit event in this codebase. `usage` is
+    whatever the provider returned (core.llm_providers.LLMResponse.usage),
+    logged verbatim since it is already just token counts, not content.
+    """
+    log_entry = {
+        "timestamp": datetime.now().isoformat(),
+        "event_type": "gateway_call",
+        "request_id": request_id,
+        "tenant": tenant,
+        "capability": capability,
+        "provider": provider,
+        "model": model,
+        "success": success,
+        "latency_ms": latency_ms,
+        "decision": decision,
+        "usage": usage,
+        "error": error,
+    }
+
+    audit_logger = logging.getLogger("gatekeeper.audit")
+    audit_logger.info("Gateway Call", extra=log_entry)

@@ -11,7 +11,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from core import metrics
 from api.schemas import (
     AssessRequest, AssessResponse, AssessOutputRequest, AssessOutputResponse,
-    ReviewStatusResponse, ReviewResolveRequest,
+    ReviewStatusResponse, ReviewResolveRequest, GatewayChatRequest, GatewayChatResponse,
 )
 from core.auth import auth_required, resolve_principal
 from core.privacy import redact_pii
@@ -19,9 +19,10 @@ from core.rate_limit import assess_rate_limiter, bucket_parameters
 from core.tenancy import resolve_tenant
 from core.risk import assess_risk
 from core.cache import flush_cache
-from core.logger import get_logger, log_event, log_output_event
+from core.logger import get_logger, log_event, log_output_event, log_gateway_event
 from core.policy import policy_decision
 from core.review_queue import enqueue_review, get_review, list_pending_reviews, resolve_review
+from core.llm_providers import get_provider, LLMProviderError
 from core.config import settings, CAPABILITY_INTERNAL
 
 logger = get_logger("gatekeeper.api")
@@ -91,6 +92,29 @@ async def _run_bounded(func, *args):
         return await asyncio.wait_for(future, timeout=settings.ASSESS_TIMEOUT_SECONDS)
     finally:
         metrics.assessments_in_flight.dec()
+
+
+# Separate pool from _assess_pool (Phase 5: Real LLM Gateway) — see
+# core/config.py's GATEWAY_MAX_CONCURRENCY docstring for why sharing the
+# assessment pool with proxied provider calls would be the wrong coupling.
+_gateway_pool = ThreadPoolExecutor(
+    max_workers=settings.GATEWAY_MAX_CONCURRENCY,
+    thread_name_prefix="gateway",
+)
+
+
+async def _run_gateway_bounded(func, *args):
+    """Same shape as `_run_bounded`, on the separate gateway pool and with
+    GATEWAY_TIMEOUT_SECONDS instead of ASSESS_TIMEOUT_SECONDS — a
+    non-streaming LLM completion routinely needs more headroom than this
+    project's own local detector pipeline."""
+    loop = asyncio.get_running_loop()
+    metrics.gateway_calls_in_flight.inc()
+    try:
+        future = loop.run_in_executor(_gateway_pool, functools.partial(func, *args))
+        return await asyncio.wait_for(future, timeout=settings.GATEWAY_TIMEOUT_SECONDS)
+    finally:
+        metrics.gateway_calls_in_flight.dec()
 
 
 _REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]+$")
@@ -574,6 +598,166 @@ async def assess_output_endpoint(req: AssessOutputRequest, request: Request):
         process_time_ms=process_time_ms,
         clean_response=details.get("clean_response"),
     )
+
+
+@app.post("/api/v1/gateway/chat", response_model=GatewayChatResponse)
+async def gateway_chat(req: GatewayChatRequest, request: Request, background_tasks: BackgroundTasks):
+    """
+    Real LLM Gateway (Phase 5) — request forwarding + response
+    interception. Unlike /api/v1/assess (a sidecar the caller submits an
+    ALREADY-GENERATED response to), this endpoint decides whether the call
+    to the real LLM happens AT ALL: input guardrails run first, and the
+    provider is only ever called if they allow it.
+
+    Order: input assessment -> policy decision -> (BLOCK/REVIEW stops here,
+    no provider call) -> forward to the provider -> output assessment on
+    what it returned -> final combined decision, same severity ordering as
+    /api/v1/assess (BLOCK > REVIEW > RESTRICT > ALLOW).
+    """
+    request.state.start_time = time.perf_counter()
+
+    # 0. AUTH + TENANT + RATE LIMIT — identical boundary to /api/v1/assess.
+    principal = resolve_principal(authorization=request.headers.get("Authorization"))
+    if auth_required() and not principal.authenticated:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required. Present a valid API key as "
+                   "'Authorization: Bearer <key>'.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    tenant_config = resolve_tenant(principal.tenant)
+    if tenant_config.suspended:
+        raise HTTPException(status_code=403, detail=f"Tenant '{principal.tenant}' is suspended.")
+    _enforce_rate_limit(principal, request, tenant_config)
+
+    # 1. INPUT GUARDRAILS — before any external call. This is the actual
+    #    architectural difference from a sidecar: Gatekeeper decides
+    #    whether the provider is called at all, not just whether to trust
+    #    a response the caller already obtained.
+    clean_query, redacted_info = redact_pii(req.prompt)
+    try:
+        risk_level, details = await _run_bounded(assess_risk, clean_query, background_tasks.add_task)
+    except asyncio.TimeoutError:
+        metrics.assessment_timeouts_total.labels(endpoint="/api/v1/gateway/chat (input)").inc()
+        raise HTTPException(
+            status_code=503,
+            detail=f"Input assessment did not complete within {settings.ASSESS_TIMEOUT_SECONDS:g}s. "
+                   f"The provider was NOT called.",
+            headers={"Retry-After": "5"},
+        )
+
+    decision, reason = policy_decision(principal.capability, risk_level, principal.tenant)
+    details["policy_reason"] = reason
+    details["principal"] = principal.to_audit()
+    details["request_id"] = request.state.request_id
+    details["tenant"] = principal.tenant
+
+    review_id = None
+    if decision == "REVIEW":
+        review = enqueue_review(
+            reason=reason, capability=principal.capability, risk=risk_level,
+            tenant=principal.tenant, prompt_hash=hashlib.sha256(clean_query.encode("utf-8")).hexdigest(),
+            request_id=request.state.request_id,
+        )
+        review_id = review.review_id
+        details["review_id"] = review_id
+
+    log_event(principal.capability, clean_query, risk_level, decision, details)
+
+    # BLOCK/REVIEW stop here — the provider is never called. Same reasoning
+    # as /api/v1/assess skipping output assessment for these two: a prompt
+    # that isn't allowed through (yet, or at all) has no response to forward.
+    if decision in ("BLOCK", "REVIEW"):
+        if settings.METRICS_ENABLED:
+            metrics.gateway_call_total.labels(
+                provider=req.provider or settings.LLM_GATEWAY_DEFAULT_PROVIDER,
+                outcome="blocked" if decision == "BLOCK" else "review",
+            ).inc()
+        process_time_ms = round((time.perf_counter() - request.state.start_time) * 1000, 2)
+        return GatewayChatResponse(
+            decision=decision, content=None, provider=None, model=None,
+            usage=None, review_id=review_id, details=details, process_time_ms=process_time_ms,
+        )
+
+    # 2. FORWARD TO THE PROVIDER.
+    provider_name = req.provider or settings.LLM_GATEWAY_DEFAULT_PROVIDER
+    try:
+        provider = get_provider(provider_name)
+    except KeyError:
+        raise HTTPException(status_code=422, detail=f"Unknown provider: {provider_name!r}")
+
+    messages = []
+    if req.system_prompt:
+        messages.append({"role": "system", "content": req.system_prompt})
+    messages.append({"role": "user", "content": clean_query})
+
+    call_start = time.perf_counter()
+    try:
+        llm_response = await _run_gateway_bounded(provider.complete, messages, req.model)
+    except asyncio.TimeoutError:
+        latency_ms = round((time.perf_counter() - call_start) * 1000, 2)
+        log_gateway_event(principal.capability, provider_name, req.model, success=False,
+                          latency_ms=latency_ms, decision="BLOCK", error="timeout",
+                          tenant=principal.tenant, request_id=request.state.request_id)
+        if settings.METRICS_ENABLED:
+            metrics.gateway_call_total.labels(provider=provider_name, outcome="timeout").inc()
+        raise HTTPException(
+            status_code=503,
+            detail=f"The LLM provider did not respond within {settings.GATEWAY_TIMEOUT_SECONDS:g}s.",
+            headers={"Retry-After": "5"},
+        )
+    except LLMProviderError as e:
+        latency_ms = round((time.perf_counter() - call_start) * 1000, 2)
+        log_gateway_event(principal.capability, provider_name, req.model, success=False,
+                          latency_ms=latency_ms, decision="BLOCK", error=str(e),
+                          tenant=principal.tenant, request_id=request.state.request_id)
+        if settings.METRICS_ENABLED:
+            metrics.gateway_call_total.labels(provider=provider_name, outcome="failure").inc()
+        raise HTTPException(status_code=502, detail=f"The LLM provider call failed: {e}")
+
+    latency_ms = round((time.perf_counter() - call_start) * 1000, 2)
+
+    # 3. OUTPUT GUARDRAILS — same machinery as /api/v1/assess's combined path.
+    from core.output_guardrails import assess_output
+    try:
+        output_decision, output_details = await _run_bounded(
+            assess_output, llm_response.content, req.system_prompt
+        )
+    except asyncio.TimeoutError:
+        metrics.assessment_timeouts_total.labels(endpoint="/api/v1/gateway/chat (output)").inc()
+        raise HTTPException(
+            status_code=503,
+            detail=f"Output assessment did not complete within {settings.ASSESS_TIMEOUT_SECONDS:g}s. "
+                   f"The provider responded but its output was NOT assessed and must not be shown.",
+            headers={"Retry-After": "5"},
+        )
+
+    _SEVERITY = {"ALLOW": 0, "RESTRICT": 1, "REVIEW": 2, "BLOCK": 3}
+    final_decision = decision
+    if _SEVERITY.get(output_decision, 3) > _SEVERITY.get(final_decision, 0):
+        final_decision = output_decision
+
+    details["output_assessment"] = output_details
+    log_output_event(principal.capability, llm_response.content, output_decision, output_details,
+                     tenant=principal.tenant, request_id=request.state.request_id)
+    log_gateway_event(principal.capability, provider_name, llm_response.model, success=True,
+                      latency_ms=latency_ms, decision=final_decision, usage=llm_response.usage,
+                      tenant=principal.tenant, request_id=request.state.request_id)
+    if settings.METRICS_ENABLED:
+        metrics.gateway_call_total.labels(provider=provider_name, outcome="success").inc()
+
+    process_time_ms = round((time.perf_counter() - request.state.start_time) * 1000, 2)
+    return GatewayChatResponse(
+        decision=final_decision,
+        content=output_details.get("clean_response") if final_decision != "BLOCK" else None,
+        provider=llm_response.provider,
+        model=llm_response.model,
+        usage=llm_response.usage,
+        review_id=None,
+        details=details,
+        process_time_ms=process_time_ms,
+    )
+
 
 @app.post("/api/v1/cache/flush")
 def flush_semantic_cache():

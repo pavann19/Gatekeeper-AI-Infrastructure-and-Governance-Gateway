@@ -198,7 +198,7 @@ Original estimate: ~10–15h
 
 29 new tests, 478 passed overall (up from 449).
 
-## Phase 5 — Real LLM Gateway (1/6 done — deliberately scoped down)
+## Phase 5 — Real LLM Gateway (3/6 done, 2 more partial — deliberately scoped down)
 Original estimate: ~25–40h — **largest hardware risk on this machine**
 
 - [x] Provider abstraction (Ollama / OpenAI-compatible / Anthropic-compatible)
@@ -207,14 +207,33 @@ Original estimate: ~25–40h — **largest hardware risk on this machine**
       concrete backends, normalised `LLMResponse`. Deliberately stops there
       — no gateway endpoint, no streaming, no audit trail yet; see below
       for why those are separate items, not omissions.
-- [ ] Request forwarding + response interception
+- [x] Request forwarding + response interception — done 2026-08-24, see
+      §3e. New `POST /api/v1/gateway/chat`: input guardrails gate the
+      provider call (BLOCK/REVIEW never reach it), the response is run
+      back through the Phase 2 output guardrails before being returned —
+      a clean prompt does not guarantee a safe response, and the final
+      decision reflects that.
 - [ ] Streaming support
-- [ ] Token accounting, model selection
-- [ ] Timeout/failure handling, fallback
-- [ ] Audit trail for the proxied call itself
+- [~] Token accounting, model selection — model selection done (`provider`/
+      `model` are caller-selectable on the new endpoint); token accounting
+      is NOT — `usage` is surfaced verbatim from the provider but not
+      metered against any quota. See §3e's "what this does not close".
+- [~] Timeout/failure handling, fallback — timeout done
+      (`GATEWAY_TIMEOUT_SECONDS`, 503 on expiry) and provider failure
+      handled cleanly (502, not a fabricated decision); cross-provider
+      fallback is NOT built — a failed provider is not retried against a
+      second one.
+- [x] Audit trail for the proxied call itself — done 2026-08-24, see §3e.
+      New `core/logger.py::log_gateway_event`, a third distinct
+      `event_type` (`"gateway_call"`) alongside input/output assessment
+      events, joinable on `request_id`. Fires on both success and
+      provider failure; never fires when input was BLOCK/REVIEW (no call
+      was attempted).
 
-20 new tests, 498 passed overall (up from 478). All mocked HTTP — no live
-network call or real API key needed for any of them.
+34 new tests, 512 passed overall (up from 478). All mocked HTTP — no live
+network call or real API key needed for any of them; the first genuine
+live provider call remains unexercised (see §3e's "what this does not
+close").
 
 This is the point where Gatekeeper stops being a sidecar you call before/after
 your own LLM call, and starts being infrastructure you route through — a

@@ -181,6 +181,23 @@ judge_invocations_total = Counter(
     "Ambiguous-zone arbitrations that actually reached a judge backend.",
 )
 
+# --- Phase 5 (Real LLM Gateway): the proxied call, kept separate from the
+# assessment metrics above -- a slow or failing external provider is a
+# different failure mode than a slow local assessment, and conflating them
+# would hide which one is actually degraded.
+gateway_calls_in_flight = Gauge(
+    "gatekeeper_gateway_calls_in_flight",
+    "Proxied LLM calls currently executing or queued for the gateway's "
+    "bounded worker pool. Sustained values at or above "
+    "GATEWAY_MAX_CONCURRENCY mean calls are queueing.",
+)
+
+gateway_call_total = Counter(
+    "gatekeeper_gateway_call_total",
+    "Proxied LLM calls, by provider and outcome (success/failure/timeout/blocked).",
+    ["provider", "outcome"],
+)
+
 circuit_breaker_open = Gauge(
     "gatekeeper_circuit_breaker_open",
     "1 while a judge backend's circuit breaker is open (failing fast).",

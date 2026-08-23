@@ -233,6 +233,66 @@ curl -X POST http://localhost:8000/api/v1/assess_output \
 This endpoint enforces the same auth and rate limiting as `/assess` — it is
 not a lighter-weight bypass.
 
+### 3e. Route your LLM call through Gatekeeper instead of calling it yourself
+
+Every endpoint above is a **sidecar**: you call your own LLM, and you call
+Gatekeeper separately, before and/or after. `POST /api/v1/gateway/chat` is
+different — Gatekeeper makes the LLM call for you, with input guardrails
+gating the call and output guardrails checked on what comes back, in one
+request:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/gateway/chat \
+  -H "Authorization: Bearer gk_..." -H "Content-Type: application/json" \
+  -d '{
+        "prompt": "Summarize our refund policy for a customer.",
+        "system_prompt": "You are a support agent for Acme Corp.",
+        "provider": "ollama",
+        "model": "llama3.2"
+      }'
+```
+
+```json
+{
+  "decision": "ALLOW",
+  "content": "Our refund policy allows...",
+  "provider": "ollama",
+  "model": "llama3.2",
+  "usage": { "total_tokens": 142 },
+  "review_id": null,
+  "details": { "...": "..." },
+  "process_time_ms": 812.4
+}
+```
+
+`provider` and `model` are both optional — they default to
+`LLM_GATEWAY_DEFAULT_PROVIDER` and that provider's own configured default
+model. Supported providers: `ollama`, `openai_compatible` (any backend
+speaking the OpenAI chat-completions wire format — real OpenAI, Groq,
+Together, a local vLLM/LM Studio server), `anthropic_compatible`. An
+unrecognized `provider` value returns `422` before any network call is
+attempted.
+
+`content` is `null` whenever `decision` is `BLOCK` or `REVIEW` — either
+your input was stopped before the LLM was ever called, or the LLM's own
+response was stopped after the call. There is no way to retrieve a
+blocked response's text; that is enforcement, not a bug.
+
+**Failure modes distinct from a guardrail decision**: a `502` means the
+provider itself failed (bad API key, provider-side error) — not
+Gatekeeper's fault, not yours. A `503` means the provider didn't respond
+within `GATEWAY_TIMEOUT_SECONDS`. Neither fabricates a decision; both are
+retryable at your discretion.
+
+**What this endpoint does not do yet**: no streaming, no enforced token
+quota (`usage` is passed through from the provider, not metered against
+anything), no automatic fallback to a second provider if the first one
+fails. See `docs/ROADMAP_V2.md` Phase 5 for current status.
+
+If you already call your own LLM directly and only want Gatekeeper's
+guardrails around that call, use §3a–§3d instead — this endpoint is for
+the case where you want Gatekeeper to own the call itself.
+
 ---
 
 ## 4. Interpreting the response

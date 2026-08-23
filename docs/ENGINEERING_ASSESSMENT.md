@@ -3451,4 +3451,108 @@ provider has been exercised end-to-end (every test mocks the HTTP layer);
 the first real integration test against an actual endpoint should happen
 alongside whichever of those items gets built next, not in isolation now.
 
+## 3e. Phase 5 continued — request forwarding, response interception, audit trail (2026-08-24)
+
+`docs/ROADMAP_V2.md` Phase 5, continuing directly from §3d at the user's
+explicit direction ("proceed to Phase 5 items first"). RAM/thermal
+checked again before starting, per the same caution this machine has
+required since §1v/§2b.
+
+### The endpoint: `POST /api/v1/gateway/chat`
+
+The first route that actually calls a provider. It composes the two
+halves of the pipeline that already existed independently — the
+input-assessment machinery `/api/v1/assess` already runs, and the
+provider abstraction §3d already built — around one new step in the
+middle:
+
+1. Auth, tenant resolution, rate limiting — identical to `/api/v1/assess`.
+2. PII redaction, `assess_risk` (bounded pool), `policy_decision`.
+   `BLOCK` and `REVIEW` both return immediately: **the provider is never
+   called**. A `REVIEW`-routed prompt still gets enqueued to the human
+   review queue exactly as `/api/v1/assess` does, but there is nothing
+   for a proxied call to do until a human resolves it.
+3. Only past that gate: `get_provider(name)` (422 on an unknown name),
+   then the actual `provider.complete()` call, on its own bounded
+   thread pool (`_gateway_pool` / `_run_gateway_bounded`, separate from
+   the assessment pool) with its own timeout
+   (`GATEWAY_TIMEOUT_SECONDS`) — a slow external provider must not be
+   able to starve the assessment pool's own capacity, and vice versa.
+4. The response that comes back is run through `assess_output` — the
+   same output-guardrail machinery Phase 2 built — before anything is
+   returned to the caller. A clean prompt is not a safe response; this
+   is the actual point of "response interception" as a distinct roadmap
+   item from "request forwarding".
+5. Final decision is the more severe of the input and output verdicts,
+   same severity ordering Phase 4 established
+   (`BLOCK > REVIEW > RESTRICT > ALLOW`).
+
+### Three-way audit trail, not two
+
+`core/logger.py::log_gateway_event` is a third `event_type`
+(`"gateway_call"`), alongside `"input_assessment"` and
+`"output_assessment"` — deliberately not folded into either existing
+function, for the same reason those two are already separate from each
+other (§3a): it answers a third question neither of them do — did the
+call to the *external provider* succeed, and what did it cost — joinable
+back to the other two records on `request_id`, not duplicating their
+verdicts. It fires on both success and provider failure (so "did this
+proxied call happen at all" is answerable even for a 502/503), but never
+fires when the input was BLOCK/REVIEW, because in that case no call to a
+provider was ever attempted — there is nothing for the event to
+describe. No prompt or response content is logged, matching every other
+audit record in this codebase; `usage` is logged verbatim since it is
+already just a token count, not content.
+
+### Error handling, and what it deliberately still doesn't do
+
+`LLMProviderError` → 502 (the provider failed; not Gatekeeper's fault,
+not the caller's). `_run_gateway_bounded`'s `TimeoutError` → 503 (the
+provider didn't answer in time). An unknown `provider` name → 422,
+resolved before any network call is attempted. All three are
+fail-closed: none of them fabricate a decision or a partial response.
+
+Still not built, honestly: **cross-provider fallback** (a 502 from one
+provider does not retry against a second one — the roadmap's
+"Timeout/failure handling, fallback" bullet is only half-done, timeout
+yes, fallback no) and **token accounting as an enforced policy**
+(`usage` is surfaced in the response exactly as §3d left it, passed
+through, not metered against any quota — "model selection" from that
+same bullet is the part that's actually done, since `provider`/`model`
+are both caller-selectable). Streaming is entirely unbuilt. None of
+these are silently skipped — see the roadmap update alongside this
+entry for exactly which sub-items are checked and which aren't.
+
+### Verified
+
+- `tests/test_gateway_chat.py` (14 tests, all mocked — no live network
+  call or API key needed): happy path with default and explicit
+  provider/model, unknown provider 422, HIGH risk and REVIEW decisions
+  both proven to never reach the provider (`mock_complete.assert_not_
+  called()`), a leaked secret in the provider's own response still
+  blocks, a clean prompt with a dirty response still blocks (the actual
+  point of output interception), provider error 502, provider timeout
+  503, a successful call logs a gateway event distinct from the input
+  and output events, a provider failure still logs a gateway event, a
+  blocked input logs no gateway event, and the same auth boundary as
+  `/api/v1/assess` (401 unauthenticated when required, 200 with a valid
+  key).
+- One test bug found and fixed while writing these: the unknown-provider
+  test initially forgot to mock `assess_risk`, so the real (slow) risk
+  pipeline ran, hit `ASSESS_TIMEOUT_SECONDS`, and returned 503 instead of
+  reaching the provider-selection code the test meant to exercise.
+- `ruff check core/ api/ tests/` run locally before committing — clean.
+- Full suite: 512 passed (up from 498 after §3d).
+
+### What this does not close
+
+No live provider has still ever been exercised end-to-end — every test
+here, like §3d's, mocks the HTTP layer. RAM headroom on this machine was
+too thin (under 3GB free) at the point this work finished to justify a
+real Ollama call just to re-prove what 14 mocked tests already cover;
+the first genuine live call should happen when there is a concrete
+reason to need one (e.g. debugging a real integration issue), not as a
+symbolic check. Streaming, enforced token accounting, and cross-provider
+fallback remain open roadmap items, tracked in `docs/ROADMAP_V2.md`.
+
 ---
