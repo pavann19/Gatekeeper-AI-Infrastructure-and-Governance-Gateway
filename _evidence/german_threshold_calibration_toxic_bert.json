@@ -1,0 +1,37 @@
+{
+  "seed": 20260824,
+  "detector": "toxic_bert",
+  "attack_classes_filter": [
+    "harmful_content"
+  ],
+  "fpr_budget": 0.05,
+  "n_german_rows": 3567,
+  "n_german_attacks": 1001,
+  "n_fit": 1783,
+  "n_eval": 1784,
+  "german_threshold": 0.4942239224910736,
+  "deployed_threshold": 0.051396444439888,
+  "auc_on_held_out_german_half": {
+    "point": 0.6501554061897606,
+    "lo": 0.6221664325902909,
+    "hi": 0.6783749533371318,
+    "n": 1784,
+    "n_boot_effective": 1000,
+    "ci_level": 0.95
+  },
+  "recall_at_fpr_budget_held_out": {
+    "point": 0.17062634989200864,
+    "lo": 0.125,
+    "hi": 0.2219730941704036,
+    "n": 1784,
+    "n_boot_effective": 1000,
+    "ci_level": 0.95
+  },
+  "recall_at_german_threshold": 0.1879049676025918,
+  "fpr_at_german_threshold": 0.05677517032551098,
+  "comparison_to_deployed": {
+    "recall_at_deployed_threshold": 0.6868250539956804,
+    "fpr_at_deployed_threshold": 0.48599545798637395,
+    "recall_delta": -0.4989200863930886
+  }
+}
