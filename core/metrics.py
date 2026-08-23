@@ -198,6 +198,25 @@ gateway_call_total = Counter(
     ["provider", "outcome"],
 )
 
+# Tenant is safe as its own low-dimension label here for the same reason
+# tenant_assessments_total is kept separate from assessments_total above:
+# tenant_id is operator-provisioned (core/tenancy.py), not caller-chosen.
+gateway_tokens_total = Counter(
+    "gatekeeper_gateway_tokens_total",
+    "Tokens consumed via the gateway's proxied calls, by tenant. Only counts "
+    "calls whose provider actually reported usage (core/token_quota.py's "
+    "extract_total_tokens) -- a provider that doesn't report usage (Ollama) "
+    "contributes zero here, not an estimate.",
+    ["tenant"],
+)
+
+gateway_quota_rejections_total = Counter(
+    "gatekeeper_gateway_quota_rejections_total",
+    "Gateway calls rejected with 429 because the tenant's daily token quota "
+    "was already exhausted BEFORE this call, by tenant.",
+    ["tenant"],
+)
+
 circuit_breaker_open = Gauge(
     "gatekeeper_circuit_breaker_open",
     "1 while a judge backend's circuit breaker is open (failing fast).",

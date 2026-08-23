@@ -66,6 +66,13 @@ class TenantConfig:
     status: str = "active"
     rate_limit_rpm: float | None = None
 
+    # Phase 5 token accounting (core/token_quota.py). None means "use
+    # settings.GATEWAY_TOKEN_QUOTA_DAILY_DEFAULT for this tenant", mirroring
+    # rate_limit_rpm=None's "use the tier default" convention exactly. 0 is
+    # an explicit override to unlimited for this specific tenant, distinct
+    # from None's "no override, inherit the default".
+    token_quota_daily: int | None = None
+
     @property
     def suspended(self) -> bool:
         return self.status == "suspended"
@@ -87,7 +94,8 @@ class TenantStore:
           "acme": {
             "display_name": "Acme Corp",
             "status": "active",
-            "rate_limit_rpm": 500
+            "rate_limit_rpm": 500,
+            "token_quota_daily": 200000
           },
           "acme-trial": {
             "display_name": "Acme Corp (trial)",
@@ -153,11 +161,25 @@ class TenantStore:
                         f"{grant.get('rate_limit_rpm')!r} is not a positive number."
                     )
                     rpm = None
+            quota = grant.get("token_quota_daily")
+            if quota is not None:
+                try:
+                    quota = int(quota)
+                    if quota < 0:
+                        raise ValueError
+                except (TypeError, ValueError):
+                    logger.error(
+                        f"Ignoring token_quota_daily for tenant {tenant_id!r}: "
+                        f"{grant.get('token_quota_daily')!r} is not a non-negative integer."
+                    )
+                    quota = None
+
             self._tenants[tenant_id] = TenantConfig(
                 tenant_id=tenant_id,
                 display_name=str(grant.get("display_name", tenant_id)),
                 status=status,
                 rate_limit_rpm=rpm,
+                token_quota_daily=quota,
             )
 
         logger.info(f"Loaded {len(self._tenants)} tenant(s) from {self.path}")

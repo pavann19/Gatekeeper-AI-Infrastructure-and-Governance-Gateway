@@ -146,6 +146,36 @@ def test_invalid_rate_limit_override_is_dropped_not_applied(tmp_path, monkeypatc
     assert result.rate_limit_rpm is None
 
 
+# --- token_quota_daily (Phase 5 token accounting override) -----------------
+
+def test_no_token_quota_override_means_none(tenant_store):
+    tenant_store("acme", status="active")
+    assert resolve_tenant("acme").token_quota_daily is None
+
+
+def test_configured_token_quota_override_resolves(tenant_store):
+    tenant_store("acme", token_quota_daily=200000)
+    assert resolve_tenant("acme").token_quota_daily == 200000
+
+
+def test_zero_token_quota_is_an_explicit_override_not_dropped(tenant_store):
+    """0 means 'unlimited for this tenant specifically' -- distinct from
+    None's 'no override, inherit the global default' -- so it must survive
+    parsing rather than being treated as falsy/invalid."""
+    tenant_store("acme", token_quota_daily=0)
+    assert resolve_tenant("acme").token_quota_daily == 0
+
+
+@pytest.mark.parametrize("bad_quota", ["not-a-number", -5])
+def test_invalid_token_quota_override_is_dropped_not_applied(tmp_path, monkeypatch, bad_quota):
+    path = tmp_path / "tenants.json"
+    path.write_text(json.dumps({"acme": {"token_quota_daily": bad_quota}}), encoding="utf-8")
+    monkeypatch.setattr(tenancy_mod, "_store", TenantStore(str(path)))
+
+    result = resolve_tenant("acme")
+    assert result.token_quota_daily is None
+
+
 # --- reload -------------------------------------------------------------------
 
 def test_reload_picks_up_suspension(tenant_store):

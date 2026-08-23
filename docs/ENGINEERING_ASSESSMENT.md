@@ -3556,3 +3556,131 @@ symbolic check. Streaming, enforced token accounting, and cross-provider
 fallback remain open roadmap items, tracked in `docs/ROADMAP_V2.md`.
 
 ---
+
+## 3f. Phase 5 closed out — token accounting, cross-provider fallback, and why streaming stays unbuilt (2026-08-24)
+
+`docs/ROADMAP_V2.md` Phase 5, closing the remaining checklist at the
+user's direction ("finish the Phase 5 remaining checkpoints"). RAM
+re-checked before starting (4.14GB free — better than §3e's <3GB, still
+the tightest resource on this build).
+
+### Token accounting — enforced past the fact, not predicted ahead of it
+
+New `core/token_quota.py::TokenQuotaTracker`, mirroring
+`core/rate_limit.py::RateLimiter`'s own shape deliberately (process-local,
+LRU-capped registry, same declared multi-replica limitation, same "0
+disables, don't fake it with a huge number" convention). The one
+structural difference from the rate limiter: **a token cost cannot be
+known before the call happens** — there is no pre-flight estimate to
+enforce against, only a running total from calls that already completed.
+So this can only ever reject the NEXT call once a tenant's tracked usage
+has already crossed the line, never the call that puts them over — the
+same shape every commercial LLM API's own usage cap has.
+
+Quota is per-tenant, resolved the same way `rate_limit_rpm` already is
+(§1s): `TenantConfig.token_quota_daily` overrides
+`settings.GATEWAY_TOKEN_QUOTA_DAILY_DEFAULT` when set, `None` means
+"inherit the default", explicit `0` means "unlimited for this tenant
+specifically" — distinct states, both parsed and tested
+(`tests/test_tenancy.py`). Checked in `/api/v1/gateway/chat` right after
+rate limiting and before the (comparatively expensive) input assessment
+runs at all — cheapest check first, same ordering principle the rate
+limit check already followed.
+
+`core/token_quota.py::extract_total_tokens` normalises the two usage
+shapes the three providers actually return (OpenAI's `total_tokens`,
+Anthropic's separate `input_tokens`/`output_tokens`) into one integer.
+Ollama reports no usage at all, so a tenant calling only Ollama is never
+quota-limited by this mechanism — a stated gap, not a bug: silently
+estimating a token count would misrepresent a guess as a metered fact,
+and this project's tolerance convention (`core/metrics.py`'s
+`record_assessment` docstring) is to degrade the feature, never fabricate
+the number.
+
+### Cross-provider fallback — only when the caller didn't choose
+
+`GATEWAY_FALLBACK_PROVIDERS` (comma-separated, same convention as
+`CORS_ORIGINS`) names an ordered chain tried after the primary provider
+fails or times out. The one deliberate restriction: fallback applies
+**only when the caller left `provider` unset**. A caller who explicitly
+named `"openai_compatible"` chose that provider on purpose; silently
+routing around that choice on failure would be the same mistake
+`AssessRequest`'s `extra="forbid"` exists to prevent elsewhere in this
+codebase — an explicit input is never second-guessed by the gateway.
+
+Each attempt in the chain logs its own `gateway_call` audit event
+(success or failure), so "primary failed, fallback succeeded" is visible
+as two distinct joinable records, not collapsed into one. A caller-given
+`model` name is never forwarded to a fallback provider — it was meant for
+the primary provider and might not exist on a different one — a fallback
+attempt always uses that provider's own configured default model
+instead. When a fallback rescues the call, the response's `details`
+carries `gateway_fallback_used: true` and `gateway_fallback_from`, so the
+degradation is visible to the caller rather than silently invisible
+(the same "make degradation visible" instinct as `core/metrics.py`'s
+`safe_source` counting unrecognised values instead of dropping them).
+
+### Streaming — an explicit decision NOT to build it, not an oversight
+
+This is the one Phase 5 checklist item closed by a documented "no"
+rather than code. The reason is architectural, not effort: this
+gateway's entire output-security value — secrets detection, PII
+redaction, toxicity/hallucination judging, system-prompt-leakage
+checking — runs against the FULL assembled response (`core/
+output_guardrails.py::assess_output`), because several of those checks
+are only meaningful over complete text (a secret pattern split across
+two streamed chunks, a leaked system prompt only recognisable once 40+
+contiguous characters have arrived, a toxicity judge that scores a
+sentence, not a token fragment). Real token-by-token streaming to the
+caller would mean handing back content BEFORE it has been through the
+one step that is this project's actual reason to exist — that is not a
+smaller version of this feature, it is the opposite of it.
+
+A "buffered pseudo-streaming" version (collect the full response
+internally, still non-streamed from the provider, then chunk it back to
+the caller after guardrails pass) was considered and rejected as not
+worth building: it gives the caller zero actual latency benefit — the
+thing streaming exists to provide — while adding real complexity
+(chunked HTTP response handling, a new failure mode for a guardrail
+verdict arriving after some chunks are already sent). Building it would
+be exactly the "speculative code with nothing real driving its design"
+pattern this project has consistently avoided since §1b.
+
+If a future deployment genuinely needs streaming, the honest design
+starting point is a provider-side streaming capability that this gateway
+buffers and inspects at fixed checkpoints (e.g. every N tokens re-run a
+cheap subset of the output guardrails, hard-stop on a hit) — a real
+scope of work, not a flag to flip, and one this document is not
+recommending be scheduled without a concrete deployment asking for it.
+
+### Verified
+
+- `tests/test_token_quota.py` (12 tests): tracker unit tests (quota
+  enforcement, per-tenant isolation, LRU eviction, non-positive record is
+  a no-op, reset) and `extract_total_tokens` normalisation across both
+  provider usage shapes plus malformed/missing input.
+- `tests/test_tenancy.py` (+4 tests): `token_quota_daily` resolution,
+  the `None` vs explicit `0` distinction, and invalid values dropped the
+  same way `rate_limit_rpm` already is.
+- `tests/test_gateway_chat.py` (+7 tests): quota-exceeded returns 429
+  and never calls the provider, a successful call records usage against
+  the right tenant, quota disabled by default even with prior usage
+  recorded, fallback rescues a failed primary call and marks the response
+  accordingly, fallback is NOT used when the caller named a provider
+  explicitly, and every attempt in a chain failing surfaces the last
+  attempt's actual error.
+- `ruff check core/ api/ tests/` — clean.
+- Full suite: 536 passed (up from 512 after §3e).
+
+### What this closes, honestly
+
+Phase 5's checklist is now: provider abstraction (done, §3d), request
+forwarding + response interception (done, §3e), audit trail (done, §3e),
+token accounting (done — enforced, not just surfaced), timeout/fallback
+(done — both halves now, not just timeout). Streaming is the one
+remaining unchecked item, closed by the architectural decision above
+rather than left silently incomplete. Phase 5 is COMPLETE against every
+item this project judged buildable; streaming's absence is a documented
+design boundary, not a gap.
+
+---
