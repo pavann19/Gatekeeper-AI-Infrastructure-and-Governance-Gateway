@@ -32,7 +32,7 @@ positioned to be the source of truth for).
 import json
 import os
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 
 from core.config import settings
