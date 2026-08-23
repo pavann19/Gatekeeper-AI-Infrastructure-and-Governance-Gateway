@@ -181,3 +181,45 @@ class ReviewResolveRequest(BaseModel):
     outcome: Literal["APPROVED", "REJECTED"] = Field(..., description="APPROVED or REJECTED.")
 
     model_config = {"extra": "forbid"}
+
+
+# --- Real LLM Gateway (Phase 5) ---
+
+class GatewayChatRequest(BaseModel):
+    prompt: str = Field(..., min_length=1, max_length=50_000,
+                        description="The user prompt to send to the LLM, after Gatekeeper's own input guardrails.")
+    system_prompt: Optional[str] = Field(
+        None, max_length=20_000,
+        description="Optional system prompt. Also used to check the response for "
+                    "verbatim leakage of it, same as AssessRequest.system_prompt.",
+    )
+    provider: Optional[str] = Field(
+        None, description="ollama, openai_compatible, or anthropic_compatible. "
+                          "Defaults to LLM_GATEWAY_DEFAULT_PROVIDER if omitted.",
+    )
+    model: Optional[str] = Field(
+        None, description="Model name for the chosen provider. Defaults to that "
+                          "provider's own configured default if omitted.",
+    )
+
+    model_config = {"extra": "forbid"}
+
+
+class GatewayChatResponse(BaseModel):
+    decision: str = Field(..., description="The FINAL decision after both input and "
+                                           "output guardrails: BLOCK, RESTRICT, ALLOW, or REVIEW.")
+    content: Optional[str] = Field(
+        None, description="The LLM's (PII-redacted) response, present only when "
+                          "decision allowed it through. None for BLOCK/REVIEW, or "
+                          "if the provider call itself failed.",
+    )
+    provider: Optional[str] = Field(None, description="Which provider actually handled this call.")
+    model: Optional[str] = Field(None, description="Which model actually handled this call.")
+    usage: Optional[Dict[str, Any]] = Field(
+        None, description="Token usage as reported by the provider, verbatim -- "
+                          "not yet enforced against any quota (Phase 5's "
+                          "'Token accounting' item is unbuilt).",
+    )
+    review_id: Optional[str] = Field(None, description="Set when decision is REVIEW.")
+    details: Dict[str, Any] = Field(default_factory=dict, description="Metadata and scores.")
+    process_time_ms: float = Field(default=0.0, description="Server-side processing latency, including the provider call.")

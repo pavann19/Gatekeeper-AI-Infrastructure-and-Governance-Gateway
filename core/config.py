@@ -240,6 +240,29 @@ class Settings(BaseSettings):
     # than a fabricated verdict — see the rationale at the call site.
     ASSESS_TIMEOUT_SECONDS: float = 30.0
 
+    # --- Gateway execution bounds (api/main.py, Phase 5: request forwarding) ---
+    #
+    # A SEPARATE pool from ASSESS_MAX_CONCURRENCY, deliberately — an LLM
+    # completion is network I/O to an external provider, not local
+    # transformer inference, so it competes for a fundamentally different
+    # resource (outbound connections/provider rate limits, not this
+    # machine's CPU). Sharing the assess pool would let a slow external
+    # provider starve local risk assessment of workers, which is exactly
+    # the coupling a bounded-and-separate pool avoids.
+    GATEWAY_MAX_CONCURRENCY: int = 4
+
+    # Higher than ASSESS_TIMEOUT_SECONDS on purpose: a non-streaming LLM
+    # completion routinely takes longer than this project's own local
+    # detector pipeline, especially from a larger or remote model. Still a
+    # hard ceiling, not a suggestion — the same fail-closed-to-503
+    # reasoning as ASSESS_TIMEOUT_SECONDS applies: a timeout here means the
+    # call did not happen and must not be treated as if it did.
+    GATEWAY_TIMEOUT_SECONDS: float = 60.0
+
+    # Which LLMProvider (core/llm_providers.py) a gateway call uses when
+    # the caller doesn't specify one explicitly.
+    LLM_GATEWAY_DEFAULT_PROVIDER: str = "ollama"
+
     # Load every model during startup instead of on the first request.
     #
     # This is NOT an optimisation, it is a correctness fix for the timeout
@@ -294,6 +317,20 @@ class Settings(BaseSettings):
     def _validate_timeout(cls, v: float) -> float:
         if v <= 0:
             raise ValueError("ASSESS_TIMEOUT_SECONDS must be positive.")
+        return v
+
+    @field_validator("GATEWAY_MAX_CONCURRENCY")
+    @classmethod
+    def _validate_gateway_concurrency(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("GATEWAY_MAX_CONCURRENCY must be at least 1.")
+        return v
+
+    @field_validator("GATEWAY_TIMEOUT_SECONDS")
+    @classmethod
+    def _validate_gateway_timeout(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError("GATEWAY_TIMEOUT_SECONDS must be positive.")
         return v
 
     @field_validator("AUTH_MODE")
