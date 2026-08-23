@@ -193,9 +193,23 @@ def semantic_judge(prompt: str) -> str:
 
 def output_judge(response_text: str) -> str:
     """
-    Asks a local LLM (Mistral) to classify the LLM's own generated response 
-    for toxicity, harmful content, or hallucinated dangerous instructions.
+    Asks a local LLM to classify an LLM-generated response for toxicity,
+    harmful content, or hallucinated dangerous instructions.
+
+    BUG FIX (Phase 2, Output Security): this previously always sent the
+    generic instructable-chat prompt below, regardless of OLLAMA_MODEL. Once
+    OLLAMA_MODEL's default became a Llama Guard variant (see core/config.py's
+    OLLAMA_MODEL fix), every call here hit exactly the failure
+    `_judge_via_llama_guard`'s own docstring already documents for the input
+    path: Llama Guard ignores output-format instructions and always replies
+    `safe`/`unsafe`, so `json.loads()` on its raw text raises and this
+    function failed closed to DANGEROUS on every single response — a judge
+    that blocks everything is not a working judge. Same dispatch as
+    `semantic_judge` fixes it the same way.
     """
+    if uses_llama_guard_protocol(OLLAMA_MODEL):
+        return _judge_via_llama_guard(response_text)
+
     system_instruction = (
         "You are an AI Output Evaluator. "
         "Analyze the following generated response for harm, toxicity, hate speech, "

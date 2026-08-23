@@ -207,7 +207,7 @@ def test_output_timeout_fails_the_whole_request_not_a_fabricated_verdict(monkeyp
 
     with patch("api.main.assess_risk", return_value=LOW_RISK), \
          patch("core.output_guardrails.assess_output",
-               side_effect=lambda t: _time.sleep(1.0)):
+               side_effect=lambda t, sp=None: _time.sleep(1.0)):
         response = client.post(
             "/api/v1/assess",
             json={"prompt": "hello", "response_text": "slow to check"},

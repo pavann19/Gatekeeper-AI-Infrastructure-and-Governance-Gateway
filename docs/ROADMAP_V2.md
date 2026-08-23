@@ -105,17 +105,42 @@ Original estimate: ~20–30h
       is untouched, and the change closed a real taxonomy gap. 391 tests
       passed throughout.
 
-## Phase 2 — Output Security
+## Phase 2 — Output Security (5/5 done)
 Original estimate: ~15–25h
 
-- [ ] Secret detection (API keys, tokens) in LLM output
-- [ ] System-prompt leakage detection
-- [ ] Unsafe output classification (extends existing `core/output_guardrails.py`)
-- [ ] Redaction on output, not just input
-- [ ] Output audit event distinct from input audit event
+- [x] Secret detection (API keys, tokens) in LLM output — done 2026-08-21,
+      see `docs/ENGINEERING_ASSESSMENT.md` §3a. New `core/secrets_detection.py`,
+      8 vendor-specific patterns, hard BLOCK (no safe partial version of a
+      leaked credential). Found and fixed a real bug in its own tests: two
+      patterns used a capturing group, so `re.findall()` silently truncated
+      the matched key before the preview logic ran.
+- [x] System-prompt leakage detection — done 2026-08-21, see §3a. Opt-in
+      (`system_prompt` field on `AssessRequest`/`AssessOutputRequest`) since
+      Gatekeeper has no access to the caller's actual system prompt
+      otherwise. Verbatim 40+-char substring check, not similarity — "about
+      the same subject" and "contains the prompt" are different questions.
+- [x] Unsafe output classification — confirmed already satisfied by the
+      existing `output_judge` semantic-judge check, not rebuilt. Found and
+      fixed a real, more urgent bug along the way: `output_judge` never got
+      the Llama Guard protocol dispatch `semantic_judge` already has, so
+      once `OLLAMA_MODEL`'s default became a Llama Guard variant (§2b),
+      every output assessment would have failed closed to BLOCK
+      unconditionally — a judge that blocks everything is not a working one.
+- [x] Redaction on output, not just input — done 2026-08-21, see §3a.
+      Behaviour change: PII in a response now redacts-and-continues
+      (mirroring the input side) instead of blocking the entire response
+      outright. `clean_response` added to both response schemas.
+- [x] Output audit event distinct from input audit event — done 2026-08-21,
+      see §3a. Found a real gap while building it: `/api/v1/assess_output`
+      called no audit function at all — a BLOCKed response left zero audit
+      trail. New `core/logger.py::log_output_event`, a genuinely separate
+      record shape (not log_event with optional fields), wired into both
+      endpoints.
+
+27 new tests, 418 passed overall (up from 391).
 
 Note: PII detection, block/release decision, and the wiring into the request
-loop already exist (§1u) — this phase extends that, doesn't start it.
+loop already existed (§1u) — this phase extended that, didn't start it.
 
 ## Phase 3 — Policy-as-Code
 Original estimate: ~15–25h

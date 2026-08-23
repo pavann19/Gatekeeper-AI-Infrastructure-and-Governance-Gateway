@@ -30,6 +30,19 @@ class AssessRequest(BaseModel):
                     "machinery as /api/v1/assess_output.",
     )
 
+    # Optional reference text for system-prompt-leakage detection (Phase 2,
+    # Output Security). Gatekeeper is a sidecar to the CALLER's own LLM call
+    # and has no access to the caller's actual system prompt unless handed
+    # one explicitly — there is nothing built into this gateway to detect
+    # leakage against otherwise. Only meaningful together with response_text.
+    system_prompt: Optional[str] = Field(
+        None,
+        max_length=20_000,
+        description="Optional: the system prompt given to your LLM, if you "
+                    "want the response checked for verbatim leakage of it. "
+                    "Ignored if response_text is not also provided.",
+    )
+
     # NOTE: `role` was REMOVED from this schema deliberately, and its absence is
     # a security control rather than an oversight.
     #
@@ -82,6 +95,15 @@ class AssessResponse(BaseModel):
                           "AssessOutputResponse.details. None when "
                           "response_text was omitted.",
     )
+    clean_response: Optional[str] = Field(
+        None,
+        description="response_text after PII redaction, if response_text "
+                    "was submitted and contained no secrets/toxicity/"
+                    "hallucination (those still BLOCK outright — there is "
+                    "no safe partial version of a leaked credential). "
+                    "None when response_text was omitted or the output was "
+                    "blocked outright.",
+    )
 
 class AssessOutputRequest(BaseModel):
     # Bounded for the same reason AssessRequest.prompt is: this text is
@@ -98,9 +120,23 @@ class AssessOutputRequest(BaseModel):
         description="The generated LLM response to analyze.",
     )
 
+    # See AssessRequest.system_prompt — identical purpose, standalone-endpoint copy.
+    system_prompt: Optional[str] = Field(
+        None,
+        max_length=20_000,
+        description="Optional: the system prompt given to your LLM, if you "
+                    "want the response checked for verbatim leakage of it.",
+    )
+
     model_config = {"extra": "forbid"}
 
 class AssessOutputResponse(BaseModel):
     decision: str = Field(..., description="ALLOW or BLOCK")
     details: Dict[str, Any] = Field(default_factory=dict, description="Metadata and scores.")
     process_time_ms: float = Field(default=0.0, description="Server-side processing latency in milliseconds.")
+    clean_response: Optional[str] = Field(
+        None,
+        description="response_text after PII redaction. None when the "
+                    "output was BLOCKed outright (secrets/toxicity/"
+                    "hallucination have no safe partial version).",
+    )

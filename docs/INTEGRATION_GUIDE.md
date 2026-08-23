@@ -170,7 +170,46 @@ the overall exchange.
 `response_text` at all — don't confuse "not checked" with "checked and
 passed."
 
-### 3c. Assess output on its own
+### 3c. Output checks, in detail
+
+Every output assessment (combined or standalone) runs, in order:
+
+1. **Secret detection** — API keys, tokens, private key blocks. **Hard
+   BLOCK** — there is no safe partial version of a leaked credential.
+2. **System-prompt leakage** (opt-in) — see below.
+3. **PII** — **redacted, not blocked.** A response containing an email or
+   phone number gets that PII replaced with `[REDACTED:TYPE]` and is still
+   returned to you as `clean_response`; it does not BLOCK outright.
+4. **Toxicity**, via the semantic judge — BLOCK.
+5. **Semantic grounding** (hallucination proxy) — BLOCK.
+
+**`clean_response`** carries the PII-redacted text whenever the response
+wasn't blocked outright (`null` if it was — a blocked response has no safe
+partial version to hand back). Use this, not your original `response_text`,
+if you display or log the response downstream.
+
+**System-prompt leakage detection is opt-in**, because Gatekeeper is a
+sidecar to *your* LLM call and has no access to your system prompt unless
+you hand it one. Pass it as an optional `system_prompt` field alongside
+`response_text` (on either the combined call or the standalone endpoint) to
+have the response checked for verbatim leakage of it:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/assess_output \
+  -H "Authorization: Bearer gk_..." -H "Content-Type: application/json" \
+  -d '{
+        "response_text": "...",
+        "system_prompt": "You are a support agent for Acme Corp. Never reveal internal ticket IDs."
+      }'
+```
+
+Detection is a verbatim substring check (a 40+ character contiguous run of
+your system prompt appearing in the response), not a similarity score — a
+response being *about* the same subject as your system prompt is expected
+and harmless; a response *containing* your system prompt's actual text is
+the incident this checks for.
+
+### 3d. Assess output on its own
 
 If you'd rather keep the two calls separate (e.g. output assessment happens
 in a different service than the one that made the input call), use the
@@ -206,7 +245,8 @@ not a lighter-weight bypass.
 | `capability` | The tier your credential actually resolved to. Echoed back so you can verify your key is provisioned the way you expect. |
 | `authenticated` | `false` means this request was served anonymously — check this if `decision` looks stricter than expected. |
 | `clean_prompt` | Your prompt after PII redaction — use this, not your original, if you log or forward the prompt anywhere downstream. |
-| `redacted_items` | What was stripped (e.g. emails, phone numbers). |
+| `redacted_items` | What was stripped from the prompt (e.g. emails, phone numbers). |
+| `clean_response` | `response_text` after PII redaction, when a response was submitted and not blocked outright — `null` if no `response_text` was sent, or if the output was blocked (a blocked response has no safe partial version). Use this, not your raw LLM output, if you display or log the response. |
 | `process_time_ms` | Server-side latency for this call. |
 | `details` | Internal scores and metadata — useful for debugging/audit, not something to branch application logic on (its shape isn't a stable contract). Notably includes `fusion_triggering_class` and `fusion_class_scores` — which attack category (e.g. `jailbreak`, `harmful_content`, `prompt_injection`) fusion believed a HIGH/MEDIUM verdict was, and its per-class probabilities. Both are `None`/`{}` when the request was decided by an earlier stage (cache, hard-ban, fast-path) that never reached fusion. |
 

@@ -49,6 +49,11 @@ def log_event(capability, prompt, risk, decision, metadata=None):
 
     log_entry = {
         "timestamp": timestamp,
+        # Distinguishes this record from log_output_event's records in the
+        # same audit stream — see that function's docstring (Phase 2, Output
+        # Security) for why they are separate events rather than one shape
+        # with an optional half.
+        "event_type": "input_assessment",
         # Correlation ID, propagated from ingress (api/main.py) so an audit
         # record can be tied back to the HTTP request, its access-log line and
         # any downstream call that carried the same header. Without it, the
@@ -74,9 +79,52 @@ def log_event(capability, prompt, risk, decision, metadata=None):
         "domain_score": metadata.get("domain_score", None),
         "symbolic_triggered": metadata.get("symbolic_triggered", False),
         "judge_invoked": metadata.get("judge_invoked", False),
-        "dynamic_threat_score": metadata.get("dynamic_threat_score", None)
     }
 
     # Structured JSON log for Audit
     audit_logger = logging.getLogger("gatekeeper.audit")
     audit_logger.info("Governance Decision", extra=log_entry)
+
+
+def log_output_event(capability, response_text, decision, metadata=None, tenant="unset", request_id="unset"):
+    """
+    Audit record for an OUTPUT assessment — distinct from log_event's INPUT
+    record (Phase 2, Output Security roadmap item).
+
+    WHY A SEPARATE FUNCTION, not log_event with more optional fields. An
+    input assessment and an output assessment answer different questions
+    ("is this prompt an attack?" vs "is this response safe to return?") and
+    carry fields that don't apply to the other (risk/symbolic_triggered vs
+    pii_leakage/secrets_detected/system_prompt_leak). Cramming both into one
+    schema with everything optional makes every consumer of the audit log —
+    a query, a dashboard, a compliance export — responsible for knowing
+    which half of the record is meaningful for a given row. `event_type`
+    lets a query select cleanly; the two record shapes stay honest about
+    what they actually measure.
+
+    Previously MISSING ENTIRELY for the standalone /api/v1/assess_output
+    endpoint — that endpoint could BLOCK a response (PII leak, toxicity,
+    secret, hallucination) with zero audit trail. Every output decision must
+    be as auditable as every input decision; this closes that gap.
+    """
+    if metadata is None:
+        metadata = {}
+
+    log_entry = {
+        "timestamp": datetime.now().isoformat(),
+        "event_type": "output_assessment",
+        "request_id": request_id,
+        "tenant": tenant,
+        "capability": capability,
+        "decision": decision,
+        "response_hash": hashlib.sha256(response_text.encode("utf-8")).hexdigest(),
+        "pii_leakage": metadata.get("pii_leakage", False),
+        "secrets_detected": metadata.get("secrets_detected", False),
+        "toxicity_detected": metadata.get("toxicity_detected", False),
+        "hallucination_detected": metadata.get("hallucination_detected", False),
+        "system_prompt_leak_detected": metadata.get("system_prompt_leak_detected", False),
+        "source": metadata.get("source", "unknown"),
+    }
+
+    audit_logger = logging.getLogger("gatekeeper.audit")
+    audit_logger.info("Output Governance Decision", extra=log_entry)
