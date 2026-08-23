@@ -2942,3 +2942,172 @@ surface it — that gap only shows up on the multi-source suite's German
 slice, which is a separate, already-documented measurement (§1x).
 
 ---
+
+## 3a. Phase 2 — Output Security (2026-08-21)
+
+`docs/ROADMAP_V2.md` Phase 2. Five checklist items, plus a real bug found
+while implementing the first one.
+
+### A latent bug found before any new feature work: `output_judge` never got the Llama Guard fix `semantic_judge` already has
+
+`core/semantic_judge.py::_judge_via_llama_guard`'s own docstring already
+documents this exact failure mode for the INPUT-side judge: Llama Guard
+ignores output-format instructions and always replies bare `safe`/
+`unsafe`, so asking it for JSON and calling `json.loads()` on the raw
+reply raises, and the generic path fails closed to `DANGEROUS`
+unconditionally — "a judge that blocks everything is not a working
+judge." `output_judge` was never given the equivalent protocol dispatch
+(`uses_llama_guard_protocol(OLLAMA_MODEL)` → `_judge_via_llama_guard`) —
+it always sent the generic instructable-chat prompt. This was latent,
+not yet triggered, until `OLLAMA_MODEL`'s default became a Llama Guard
+variant (§2b, this same session) — at that point every output assessment
+would have failed closed to BLOCK regardless of content. Fixed with the
+identical one-line dispatch `semantic_judge` already uses.
+`_judge_via_llama_guard` itself needed no changes — it's already
+content-agnostic (judges "a string," not specifically "a prompt").
+
+**Verified:** `tests/test_semantic_judge.py` gained 3 tests, one of which
+(`test_output_judge_under_guard_default_does_not_fail_closed_on_every_response`)
+exercises the real dispatch and the real Llama Guard response parser
+against a simulated `/api/chat` response shape — not a mock of
+`output_judge`'s own internals — specifically because every *existing*
+output-guardrail test mocked `output_judge` wholesale, which is exactly
+how this bug went undetected: the consumer (`assess_output`) was tested,
+the producer's actual model-dispatch logic never was. Same shape of gap
+as §1z's `is_educational` bug.
+
+### 1. Secret detection — new, `core/secrets_detection.py`
+
+Regex-based, deliberately narrow: vendor-specific prefixed formats only
+(AWS `AKIA`/`ASIA`, GitHub `ghp_`/`gho_`/etc., Slack `xox?-`, OpenAI-style
+`sk-`, Anthropic-style `sk-ant-`, Google `AIza`, JWTs, PEM private-key
+blocks) rather than a generic high-entropy heuristic, which would flag
+ordinary hashes/UUIDs and make the check unusable noise. Matches BLOCK
+outright — no redact-and-continue, because there is no safe partial
+version of a leaked credential (contrast with PII, below).
+
+**A real bug found by the module's own tests before it shipped:** two of
+the eight patterns (`AWS_ACCESS_KEY`, `PRIVATE_KEY_BLOCK`) used a
+capturing group in the alternation (`(AKIA|ASIA)`), and `re.findall()`
+silently returns ONLY a capturing group's content when a pattern has
+one — so a real AWS key matched, but `findall` returned just `"AKIA"`,
+truncating the key before the preview-slice logic even ran. Fixed to
+non-capturing groups (`(?:AKIA|ASIA)`); a new test
+(`test_no_pattern_has_a_capturing_group`) asserts `re.compile(pattern)
+.groups == 0` for every pattern in the module, so this class of bug
+cannot reappear silently for a ninth pattern later.
+
+Matched secrets are never logged or returned in full — only
+`LABEL:first6chars...` — so the audit trail (below) documents *that* and
+*what kind* of secret leaked without itself becoming a second place the
+secret is stored.
+
+### 2. System-prompt leakage detection — new, opt-in
+
+Gatekeeper is a sidecar to the caller's own LLM call and has no access to
+the caller's actual system prompt unless handed one — there is nothing
+built into the gateway to check leakage against otherwise. Added an
+optional `system_prompt` field to `AssessRequest` and
+`AssessOutputRequest`; when supplied, `check_system_prompt_leakage`
+(`core/output_guardrails.py`) checks for a **verbatim** contiguous run of
+at least 40 characters of it appearing in the response — deliberately not
+a semantic-similarity check, since "the response is *about* the same
+subject as the system prompt" (expected, harmless) and "the response
+*contains* the system prompt" (the actual incident) are different
+questions a similarity score would conflate. BLOCKs outright, same as
+secrets.
+
+### 3. Unsafe output classification — already covered, not rebuilt
+
+`output_judge`'s toxicity/harm classification already existed
+(`core/output_guardrails.py::assess_output`, step 4) and — once the bug
+above is fixed — is the mechanism this item asks for. No new
+classification layer was built on top of it; extending it further (e.g.
+surfacing Llama Guard's hazard category, already logged but not returned
+— see `_judge_via_llama_guard`'s docstring) is future work, not done here.
+
+### 4. Redaction on output, not just input — behaviour change
+
+**Before:** any PII match in a response caused an unconditional BLOCK,
+discarding the redaction `redact_pii()` had already computed.
+**After:** PII is redacted and the response is allowed through, mirroring
+how the INPUT side has always worked (`core/risk.py` runs detection on
+the PII-redacted prompt, never the raw one) — input and output were
+inconsistent in exactly this way before. `AssessResponse` and
+`AssessOutputResponse` both gained a `clean_response` field carrying the
+redacted text; it is `None` only when the output was blocked outright
+(secrets/toxicity/leakage/hallucination all still BLOCK — there is no
+safe partial version of any of those, unlike incidental PII). Toxicity
+and hallucination checks now run on the redacted text, not the raw text —
+no reason to widen a downstream check's exposure to PII redaction already
+removed.
+
+**A real ordering question, tested explicitly:** a response can contain
+both a secret and PII. Secret detection runs first and returns
+immediately, so `pii_leakage` never gets a chance to redact-and-pass a
+response that should have been hard-blocked for the secret
+(`test_secret_takes_priority_over_pii_in_the_same_response`).
+
+### 5. Output audit event, distinct from the input event — closes a real gap
+
+**Found while implementing this item, not before:** `/api/v1/assess_output`
+called no audit-logging function anywhere in its body. A response could be
+BLOCKed for a leaked secret, PII, toxicity, or hallucination via that
+endpoint with **zero audit trail** — the exact kind of gap an "immutable
+audit log" claim should not have next to it (see the CV-audit work
+earlier this session that flagged the audit log's actual mutability
+properties; this is a different, more basic gap — records that should
+exist and didn't, not records that could be altered).
+
+`core/logger.py` gained `log_output_event`, a genuinely separate function
+and record shape from `log_event` (not the same function with more
+optional fields) — an input assessment and an output assessment answer
+different questions and carry non-overlapping fields
+(`risk`/`symbolic_triggered` vs `pii_leakage`/`secrets_detected`/
+`system_prompt_leak_detected`); cramming both into one schema makes every
+consumer of the audit log responsible for knowing which half of a given
+row is meaningful. Both records now carry `event_type`
+(`"input_assessment"` / `"output_assessment"`) so a query can select
+cleanly. Wired into both the standalone endpoint (previously nothing) and
+the combined `/api/v1/assess` path (previously folded only into the
+input event's `details["output_assessment"]`, never its own record).
+
+**A small, adjacent cleanup:** `log_event`'s hardcoded field list still
+included `dynamic_threat_score`, permanently `None` since §1z removed the
+underlying computation — dead since that commit, unnoticed until this
+pass touched the same function. Removed.
+
+### Verified
+
+- `tests/test_semantic_judge.py`: 3 new tests (the `output_judge` bug, above).
+- `tests/test_secrets_detection.py` (new, 10 tests): all 8 patterns match
+  real-shaped examples, clean text and generic UUIDs/hashes are NOT
+  flagged, matches are never returned in full, and the capturing-group
+  regression guard.
+- `tests/test_output_guardrails.py` (rewritten): clean pass, PII
+  redact-and-continue (behaviour change, explicitly tested against the
+  OLD blocking behaviour in the test's own docstring), toxicity still
+  blocks, the judge runs on redacted not raw text, secrets block even
+  when judge/grounding pass and take priority over PII, system-prompt
+  leakage (verbatim vs topical-overlap-only, explicitly distinguished).
+- `tests/test_output_audit_logging.py` (new, 6 tests): both endpoints now
+  call the audit function (previously zero calls on the standalone one),
+  a BLOCK still gets logged, the combined path emits two distinct
+  records not one, omitting `response_text` skips the output event
+  entirely, and `log_output_event`'s record is provably distinguishable
+  from `log_event`'s by `event_type` with no raw response text captured.
+- Full suite: 418 passed (up from 391 before this pass).
+
+### What this does not close
+
+Llama Guard's hazard category (`S1`..`S13`) is already computed and
+logged by `_judge_via_llama_guard` but not surfaced in `assess_output`'s
+`details` or returned to the caller — a natural extension of item 3
+above, not done here. The system-prompt-leakage check is verbatim-only;
+a paraphrased leak (same information, different wording) is not
+detected, and doing so would need a semantic approach with its own
+false-positive-rate discipline, not attempted here. Remaining Phase 2
+items per the roadmap: none — all five checklist items are addressed
+(one, item 3, by confirming existing coverage rather than new code).
+
+---

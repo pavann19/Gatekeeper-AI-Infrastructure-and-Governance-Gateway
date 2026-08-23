@@ -200,3 +200,52 @@ def test_guard_path_exception_is_judge_offline_not_a_crash():
         with mock.patch("core.semantic_judge._judge_via_llama_guard",
                         side_effect=ConnectionError("refused")):
             assert semantic_judge("anything") == "JUDGE_OFFLINE"
+
+
+# ---------------------------------------------------------------------------
+# output_judge: the SAME protocol bug semantic_judge already had, found
+# during Phase 2 (Output Security) after OLLAMA_MODEL's default changed to
+# a Llama Guard variant. output_judge never got the equivalent fix, so it
+# always sent the generic instructable-chat prompt regardless of model —
+# under a Llama Guard default that means json.loads() on "safe"/"unsafe"
+# raises every time and every response fails closed to DANGEROUS.
+# ---------------------------------------------------------------------------
+
+from core.semantic_judge import output_judge
+
+
+def test_output_judge_routes_guard_models_to_the_guard_path():
+    """The dispatch itself: a guard model must never reach the JSON parser."""
+    with mock.patch("core.semantic_judge.OLLAMA_MODEL", "llama-guard3"):
+        with mock.patch("core.semantic_judge._judge_via_llama_guard",
+                        return_value="SAFE") as guard_path:
+            with mock.patch("core.semantic_judge.requests.post") as json_path:
+                assert output_judge("a perfectly ordinary response") == "SAFE"
+                guard_path.assert_called_once_with("a perfectly ordinary response")
+                json_path.assert_not_called()
+
+
+def test_output_judge_keeps_chat_models_on_the_json_path():
+    with mock.patch("core.semantic_judge.OLLAMA_MODEL", "llama3.2"):
+        with mock.patch("core.semantic_judge._judge_via_llama_guard") as guard_path:
+            with mock.patch("core.semantic_judge.requests.post",
+                            return_value=MockResponse({"response": '{"verdict": "SAFE"}'})):
+                assert output_judge("anything") == "SAFE"
+                guard_path.assert_not_called()
+
+
+def test_output_judge_under_guard_default_does_not_fail_closed_on_every_response():
+    """
+    THE REGRESSION THIS GUARDS: before the fix, this exact scenario --
+    Llama Guard configured, a genuinely safe response -- returned DANGEROUS
+    unconditionally because the raw "safe" text isn't valid JSON. Simulates
+    Llama Guard's real /api/chat response shape (see _judge_via_llama_guard),
+    not a mock of output_judge's own internals, so it exercises the real
+    dispatch and the real Llama Guard response parser.
+    """
+    with mock.patch("core.semantic_judge.OLLAMA_MODEL", "llama-guard3"):
+        with mock.patch(
+            "core.semantic_judge.requests.post",
+            return_value=MockResponse({"message": {"content": "safe"}}),
+        ):
+            assert output_judge("Here is a recipe for banana bread.") == "SAFE"

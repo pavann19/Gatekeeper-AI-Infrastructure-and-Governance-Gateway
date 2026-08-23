@@ -15,7 +15,7 @@ from core.rate_limit import assess_rate_limiter, bucket_parameters
 from core.tenancy import resolve_tenant
 from core.risk import assess_risk
 from core.cache import flush_cache
-from core.logger import get_logger, log_event
+from core.logger import get_logger, log_event, log_output_event
 from core.policy import policy_decision
 from core.config import settings
 
@@ -403,7 +403,7 @@ async def assess_prompt(req: AssessRequest, request: Request, background_tasks: 
 
         try:
             output_decision, output_details = await _run_bounded(
-                assess_output, req.response_text
+                assess_output, req.response_text, req.system_prompt
             )
         except asyncio.TimeoutError:
             logger.error(
@@ -440,6 +440,16 @@ async def assess_prompt(req: AssessRequest, request: Request, background_tasks: 
     #    was actually blocked on its response.
     log_event(principal.capability, clean_query, risk_level, decision, details)
 
+    # 4b. A DISTINCT output audit event, in addition to the merged summary
+    #     above (details["output_assessment"]) — see log_output_event's
+    #     docstring for why an output decision needs its own record rather
+    #     than living only nested inside the input's.
+    if output_details is not None:
+        log_output_event(
+            principal.capability, req.response_text, output_decision,
+            output_details, tenant=principal.tenant, request_id=request.state.request_id,
+        )
+
     # 5. Metrics. After the audit write, deliberately: the audit record is the
     #    compliance artefact and must not be at risk from an instrumentation
     #    bug. Wrapped for the same reason — observability must never be able to
@@ -468,6 +478,7 @@ async def assess_prompt(req: AssessRequest, request: Request, background_tasks: 
         process_time_ms=process_time_ms,
         output_decision=output_decision,
         output_details=output_details,
+        clean_response=output_details.get("clean_response") if output_details else None,
     )
 
 @app.post("/api/v1/assess_output", response_model=AssessOutputResponse)
@@ -505,9 +516,9 @@ async def assess_output_endpoint(req: AssessOutputRequest, request: Request):
 
     from core.output_guardrails import assess_output
 
-    # 1. Output Assessment (PII + Toxicity)
+    # 1. Output Assessment (secrets, system-prompt leakage, PII, toxicity, hallucination)
     try:
-        decision, details = await _run_bounded(assess_output, req.response_text)
+        decision, details = await _run_bounded(assess_output, req.response_text, req.system_prompt)
     except asyncio.TimeoutError:
         logger.error(
             f"Output assessment timed out after "
@@ -525,12 +536,21 @@ async def assess_output_endpoint(req: AssessOutputRequest, request: Request):
             headers={"Retry-After": "5"},
         )
 
+    # 2. Audit Logging — previously MISSING entirely on this endpoint, so a
+    #    BLOCK here (PII leak, secret, toxicity, hallucination) left zero
+    #    audit trail. See log_output_event's docstring.
+    log_output_event(
+        principal.capability, req.response_text, decision, details,
+        tenant=principal.tenant, request_id=request.state.request_id,
+    )
+
     process_time_ms = round((time.perf_counter() - request.state.start_time) * 1000, 2) if hasattr(request.state, "start_time") else 0.0
-    
+
     return AssessOutputResponse(
         decision=decision,
         details=details,
-        process_time_ms=process_time_ms
+        process_time_ms=process_time_ms,
+        clean_response=details.get("clean_response"),
     )
 
 @app.post("/api/v1/cache/flush")
