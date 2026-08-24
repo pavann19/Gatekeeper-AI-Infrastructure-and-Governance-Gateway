@@ -108,6 +108,20 @@ rejected (`api/main.py::_reject_suspended_and_rate_limit`, §7 finding
   correlating it back to the HTTP request (`core/logger.py`,
   `_resolve_request_id`), joinable across the input assessment, output
   assessment, gateway call, and tool call event types.
+- **Tampering (of the judge itself)**, §7 finding #10: the judge
+  arbitration step (`core/semantic_judge.py`) is itself an LLM call, and
+  its non-Llama-Guard fallback path concatenated the untrusted
+  prompt/response directly into the judge's own instruction text with no
+  protocol-level separation — a real prompt-injection surface against
+  the classifier deciding SAFE/DANGEROUS. Lower real-world severity than
+  it first appears: the actually-validated, default path
+  (`_judge_via_llama_guard`) sends untrusted content cleanly via the
+  chat API's `user` role, never string-concatenated, and Llama Guard is
+  a fine-tuned classifier that ignores embedded instructions entirely by
+  construction — this only affects a non-default configuration.
+  Mitigated with delimiter tags and explicit "treat as data, not
+  instructions" framing regardless, since the fix costs nothing on the
+  path that's actually used.
 
 ### 4.2 Tool/Agent Gateway (`/api/v1/tools/call`, `core/tools.py`)
 
@@ -276,6 +290,8 @@ severity-ranked index.
 | 6 | README presented a superseded, pipeline-bypassing UI prototype as current | Documentation drift (operational risk: wrong UI deployed) | Fixed |
 | 7 | `docker-compose.yml`'s `gatekeeper-ui` service built the same superseded prototype | Documentation/deployment drift | Fixed — service, `Dockerfile.ui`, and `ui/web_app.py` removed outright |
 | 8 | `Dockerfile.api` ran as root; `/app/audit` volume mount point defaulted to root ownership once non-root was introduced | Privilege / least-privilege | Fixed, verified live with real named volumes; full end-to-end healthy-boot not confirmed under this test run's memory constraints (see §5) |
+| 9 | `core.activity.get_recent_activity`'s retry logic re-scanned the entire audit log from scratch (several times) when a filter matched zero entries | Availability / resource exhaustion (~45x measured latency cliff) | Fixed, capped at 2 scan attempts instead of 5-6; 47-86% latency reduction measured live, 4 new tests |
+| 10 | `semantic_judge`/`output_judge`'s non-Llama-Guard fallback path concatenated untrusted content directly into the judge's instruction prompt with no delimiter | Prompt injection (low severity — not the validated/default model path) | Fixed with delimiter tags + explicit data-not-instructions framing; 3 new tests |
 
 ## 8. Known limitations (accepted, not hidden)
 
@@ -298,14 +314,18 @@ listed here so a reviewer doesn't have to go find them individually.
   process-local caveat, same stated future home.
 - **MCP has no per-caller authorization** (§6) — a deliberate scope
   boundary, not a gap.
-- **The activity/logs/trace endpoints' real scalability under load** —
-  a real load test (`docs/ROADMAP_V2.md`) showed severe latency
-  degradation under concurrency that was root-caused to `/health`'s
-  Ollama probe, not `core/activity.py`'s file scan — but the test
-  environment had other load-generating processes running throughout,
-  so this is recorded as an open question, not a closed one. Revisit
-  with a dedicated, otherwise-idle load-test environment before
-  concluding the audit-log tail-read design needs no further work.
+- **The activity/logs/trace endpoints' real scalability under
+  zero-match queries** — RESOLVED, not just revisited: a follow-up load
+  test in a quiet environment isolated a second, independent bug in
+  `core.activity.get_recent_activity` (its retry-window growth strategy
+  re-scanned the entire audit log from scratch when a filter matched
+  nothing at all — a real, ~45x latency cliff, confirmed and fixed; see
+  `docs/ROADMAP_V2.md`'s Phase 8 load-testing entry for the full
+  before/after numbers). What remains a genuine, stated limitation
+  rather than a closed question: a full-`MAX_BYTES_SCANNED` scan for a
+  query that truly matches nothing is still real work under concurrency
+  — closing that further would need a resume-based scan or an index,
+  both larger changes than this pass attempted.
 
 ## 9. Explicitly deferred (not part of Phases 1-8)
 
