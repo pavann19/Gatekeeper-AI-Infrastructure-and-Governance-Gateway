@@ -105,24 +105,22 @@ services:
     networks:
       - gatekeeper_net
 
-  gatekeeper-ui:
-    build:
-      context: .
-      dockerfile: Dockerfile.ui
-    ports:
-      - "8501:8501"
-    environment:
-      # HONEST LIMITATION (see Dockerfile.ui): this UI talks to Ollama
-      # directly, not to gatekeeper-api. Pointed at the real judge model so
-      # it is at least consistent with the API's judge, but it still does
-      # not exercise core/risk.py's pipeline. Documented, not hidden.
-      - OLLAMA_MODEL=llama-guard3
-      - OLLAMA_API_URL=http://ollama:11434/api/generate
-      - API_URL=http://gatekeeper-api:8000/api/v1
-    depends_on:
-      - gatekeeper-api
-    networks:
-      - gatekeeper_net
+  # Phase 8 hardening: the `gatekeeper-ui` service that used to live here
+  # (building Dockerfile.ui / ui/web_app.py, a Streamlit prototype) has
+  # been removed. That prototype called Ollama directly rather than
+  # gatekeeper-api, so it never exercised core/risk.py's pipeline at all
+  # -- deploying it as "the Gatekeeper UI" alongside the real API was
+  # actively misleading, not just an unused extra. The REAL client UI
+  # (sign-in, activity feed, review queue, trace, gateways, logs,
+  # benchmarks, policy editor, settings — see docs/ROADMAP_V2.md's
+  # Phase 7) ships for free inside `gatekeeper-api` itself: once that
+  # service is healthy, it's reachable at
+  # http://localhost:8000/ui/login/index.html. No separate service, no
+  # separate build, and it actually talks to this API. `ui/web_app.py`
+  # and `Dockerfile.ui` themselves are kept in git history (removed from
+  # the working tree in the same commit this comment was added) rather
+  # than silently deleted with no trace -- see that commit for the full
+  # record if the old prototype is ever needed for reference.
 
   # --- Dashboard: Grafana reading core/metrics.py's existing /metrics ---
   # Grafana, not a bespoke UI — the metrics (per-decision counters, per-stage

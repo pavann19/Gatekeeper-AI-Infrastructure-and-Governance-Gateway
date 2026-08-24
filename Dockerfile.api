@@ -42,6 +42,38 @@ RUN python -m spacy download en_core_web_sm
 
 COPY . .
 
+# Phase 8 hardening: run as a non-root user instead of the previous
+# default (root) -- standard container hardening, so a vulnerability in
+# any dependency or in this app's own code can't write outside what this
+# user explicitly owns.
+#
+# HF_HOME is set explicitly to the SAME path docker-compose.yml already
+# mounts `hf_cache` at (/root/.cache/huggingface), regardless of which
+# user's home directory sentence-transformers/huggingface_hub would
+# otherwise resolve the cache to -- an existing deployment's cached
+# models (all_mpnet-base-v2 + the fusion detectors, multi-GB, expensive
+# to re-download -- see .dockerignore's own account of the RAM crisis
+# from losing this cache once already) keep working with NO volume-mount
+# path change required. `/root` itself needs +x for a non-root user to
+# even traverse into it, which chmod grants without changing root's own
+# access to anything else under it.
+#
+# /app/audit is pre-created and chowned for the SAME reason as the HF
+# cache dir above -- verified live (not assumed) that Docker copies a
+# named volume's INITIAL content/ownership from whatever already exists
+# at the image's mount-point path on first mount: a mount point that
+# does not already exist in the image (which /app/audit would be,
+# without this line -- docker-compose.yml mounts `audit_data` there)
+# defaults the fresh volume to root:root, which broke a real write test
+# against `AUDIT_LOG_PATH=/app/audit/audit.jsonl` (Permission denied)
+# during this fix's own verification before this line was added.
+ENV HF_HOME=/root/.cache/huggingface
+RUN groupadd -r gatekeeper && useradd -r -g gatekeeper -d /app gatekeeper \
+    && mkdir -p /root/.cache/huggingface /app/audit \
+    && chown -R gatekeeper:gatekeeper /app /root/.cache/huggingface \
+    && chmod o+x /root
+USER gatekeeper
+
 EXPOSE 8000
 
 # Matches api/main.py's /health endpoint. start-period is generous —

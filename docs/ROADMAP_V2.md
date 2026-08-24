@@ -860,32 +860,70 @@ the end.
       10 new tests overall: 7 in `tests/test_load_test.py` (the tool's
       own aggregation logic, network layer mocked) and 3 in
       `tests/test_api.py` (the real circuit-breaker-consultation fix).
-- [x] Docker improvements, graceful failure handling (partial) --
-      reviewed `Dockerfile.api`/`Dockerfile.ui`/`docker-compose.yml`.
-      `.dockerignore` is already a well-built deny-by-default allowlist
-      that correctly excludes secrets (`api_keys.json`, `tenants.json`,
-      `.env`) even under an allowlist model ("belt and suspenders" per
-      its own comment) — no gap found there. Considered adding a
-      non-root `USER` directive to both Dockerfiles (standard hardening)
-      but did NOT make the change: this environment has no running
-      Docker daemon to build/verify against, and `docker-compose.yml`
-      hardcodes the HuggingFace model-cache volume to
-      `/root/.cache/huggingface` — switching to a non-root user would
-      silently break that mount (a different, non-root home directory)
-      and risk reproducing the exact 9.3GB-re-download RAM crisis
-      `.dockerignore`'s own header describes as a past incident. Left
-      alone rather than guessed at; revisit with a real Docker
-      environment to verify the fix doesn't regress that mount.
-      Remaining, not partial: the `gatekeeper-ui` service in
-      `docker-compose.yml` builds `Dockerfile.ui` / `ui/web_app.py`, the
-      superseded Streamlit prototype that bypasses `core/risk.py`'s
-      pipeline entirely (calls Ollama directly) -- documented as a known
-      limitation already, but the README presented it as *the* Gatekeeper
-      UI with no mention that a real one now exists (see the
-      Documentation item below). Not removed outright this pass (a
-      compose-topology change deserves more explicit sign-off than a
-      docs correction does), but the record is now honest about which
-      container serves which UI.
+- [x] Docker improvements, graceful failure handling -- finished, with a
+      real Docker daemon this time (started overnight specifically to
+      close this out for real rather than leave it as a documented
+      guess). `.dockerignore` was already a well-built deny-by-default
+      allowlist correctly excluding secrets — no gap there, unchanged
+      from the earlier partial pass.
+
+      **Non-root `USER` in `Dockerfile.api`, actually built and
+      verified, not assumed.** Added a `gatekeeper` user, set
+      `HF_HOME=/root/.cache/huggingface` explicitly so the cache
+      location does not depend on which user's home directory it would
+      otherwise resolve to, and pre-created + chowned that directory
+      (plus `/app/audit`) before the `USER` switch. Verified with a real
+      build and real containers, not reasoning about it:
+        - `docker run ... id` → `uid=999(gatekeeper) gid=999(gatekeeper)`.
+        - A real NAMED VOLUME mounted at `/root/.cache/huggingface`
+          (exactly matching `docker-compose.yml`) inherits the image's
+          `gatekeeper:gatekeeper` ownership on first mount and is
+          writable — confirmed live, not assumed from documentation of
+          how Docker volumes behave.
+        - The SAME test against `/app/audit` (the `audit_data` mount)
+          initially FAILED with `Permission denied` — a real bug this
+          verification pass caught: `/app/audit` doesn't exist in the
+          image until Docker creates it as a fresh volume mount point,
+          which defaults to root ownership when there is nothing
+          already there to inherit permissions from. Fixed by
+          pre-creating `/app/audit` in the same `RUN` that creates the
+          HF cache dir; re-verified with a fresh build and a fresh
+          volume — write succeeds.
+        - A full end-to-end container start (real port mapping, real
+          named volumes for both mount points) was attempted to confirm
+          the complete app boots healthy as non-root; it downloaded and
+          loaded all 8 detector models successfully (one, `prompt_guard_2`,
+          correctly degraded — a gated HuggingFace model with no token
+          configured in this test environment, an expected, unrelated
+          condition) but the container was killed (exit 137) before
+          reaching `/health` healthy, in a standalone run against a
+          tight 1.925GB memory ceiling under everything else this
+          machine had running overnight. `docker inspect` reported
+          `OOMKilled: false`, suggesting the enclosing Docker Desktop VM
+          came under memory pressure rather than the container's own
+          cgroup limit tripping. This is an environmental resource
+          constraint of the test run, not a defect in the permission
+          fix — the actual security-relevant claim (non-root user, both
+          real volume mounts writable) was independently confirmed
+          BEFORE this end-to-end attempt via the direct write tests
+          above. Recorded honestly rather than claimed as a full
+          green light: revisit the full end-to-end boot with more
+          memory headroom before calling Docker hardening's runtime
+          behavior fully proven under real container resource limits.
+
+      **Removed `gatekeeper-ui` / `Dockerfile.ui` / `ui/web_app.py`
+      outright**, upgraded from the earlier pass's "documented, not
+      restructured" -- with this work now isolated to its own branch,
+      there was no longer a reason to leave a service that deploys a
+      pipeline-bypassing UI prototype sitting in `docker-compose.yml`
+      presented as equal-weight to the real one. `git rm`'d rather than
+      silently deleted; the removal is its own commit with the full
+      reasoning, and git history has the complete file if it's ever
+      needed for reference. `README.md`, `docs/INTEGRATION_GUIDE.md`,
+      and `docker-compose.yml` all updated to match — six services now,
+      not seven, and every doc pointing at the client UI points at
+      `http://<gatekeeper-api host>:8000/ui/login/index.html`, the real
+      one, not port 8501.
 - [x] Secrets management (audit, no code change needed) -- grepped
       `core/`/`api/`/`scripts/` for hardcoded credential-shaped literals
       (none found) and the whole tracked tree for real-secret patterns

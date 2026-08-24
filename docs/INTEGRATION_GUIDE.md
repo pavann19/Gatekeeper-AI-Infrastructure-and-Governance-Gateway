@@ -20,9 +20,9 @@ cp .env.example .env   # edit GRAFANA_ADMIN_PASSWORD at minimum
 docker compose up -d
 ```
 
-This brings up seven services: `redis`, `ollama` (+ a one-shot `model-pull`
+This brings up six services: `redis`, `ollama` (+ a one-shot `model-pull`
 that fetches the `llama-guard3` judge model automatically), `gatekeeper-api`,
-`gatekeeper-ui`, `prometheus`, and `grafana`. First boot is slow — the judge
+`prometheus`, and `grafana`. First boot is slow — the judge
 model pull and the sentence-transformer model download both happen on a cold
 cache — subsequent restarts reuse the `hf_cache` and `ollama_data` volumes
 and come up fast.
@@ -32,6 +32,7 @@ Once healthy:
 | Service | URL | Notes |
 |---|---|---|
 | Gatekeeper API | `http://localhost:8000` | the integration surface — see §3 |
+| Gatekeeper Client UI | `http://localhost:8000/ui/login/index.html` | served by the API itself, no separate service — see §3 |
 | API docs (Swagger) | `http://localhost:8000/docs` | auto-generated from the schemas in §3 |
 | Health check | `http://localhost:8000/health` | see §7 |
 | Grafana dashboard | `http://localhost:3000` | `admin` / whatever you set `GRAFANA_ADMIN_PASSWORD` to — see §6 |
@@ -521,10 +522,6 @@ crash-looping.
   slower confirmatory judge pass (Llama Guard) runs after your response
   completes, purely for audit/metrics — it does not change the decision you
   already received.
-- **`gatekeeper-ui` (port 8501) talks to Ollama directly, not to
-  `gatekeeper-api`.** It's a manual-testing convenience for poking at the
-  judge model, not a reference integration — don't build against it as an
-  example of the real request flow.
 - **Change `GRAFANA_ADMIN_PASSWORD`.** The compose default (`changeme`) is a
   placeholder, not a credential meant to survive to a real deployment.
 - **`/metrics` leaks operational detail** (traffic volume, block rates,
