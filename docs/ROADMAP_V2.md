@@ -793,14 +793,51 @@ the end.
       of unbounded-input concern: `for line in input_stream` buffers an
       entire line into memory before yielding it, so an arbitrarily long
       single line with no newline is a real memory-exhaustion vector in
-      principle. NOT fixed this pass — the module's own documented trust
-      model is that an MCP stdio client is a trusted local process (the
-      process itself is the security boundary, not each message), which
-      is a materially different threat model than the HTTP-facing
-      endpoints this phase has otherwise focused on. Left as a known,
-      considered gap rather than fixed reflexively, since fixing it would
-      mean picking a line-length cap for a transport this project's own
-      docstring says trusts its caller by design.
+      principle. Initially left unfixed on the reasoning that the
+      module's documented trust model (an MCP stdio client is a trusted
+      local process, the process itself is the security boundary) made
+      it a different threat category than the HTTP endpoints this phase
+      otherwise focuses on — revisited overnight and fixed anyway, since
+      the cost is zero regardless of trust level: replaced
+      `for line in stream` with `readline(MAX_LINE_BYTES + 1)` (1MB cap)
+      plus a resync loop so an oversized line is a clean protocol error
+      and the next real message still parses correctly. 3 new tests.
+
+      Continued overnight into modules not yet touched this session:
+      `core/output_guardrails.py` (system-prompt-leak check's
+      sliding-window substring scan is O(n·m) but both inputs are
+      schema-bounded — 20k/50k chars — and covered by the existing
+      assessment worker-pool/timeout controls; no new gap),
+      `core/secrets_detection.py` (regex-only, no ReDoS-prone patterns,
+      previews truncated before logging; clean), `core/cache_backend.py`
+      (JSON only, never pickle; Redis credentials stripped before
+      logging; `flush()` scoped to this app's own key prefix, never a
+      blanket `FLUSHDB` on a shared instance; clean), `core/mcp_compat.py`
+      (checked a suspicious-looking `"error" in result` membership test
+      against `execute_tool`'s actual return shape — confirmed correct,
+      not a bug: the key is only ever present on a real handler
+      exception, never as a falsy placeholder on success),
+      `core/normalizer.py` (its single-character-collapsing loop looked
+      like a candidate for O(n²) blowup on adversarial input --
+      benchmarked directly rather than assumed safe: a 50k-char
+      worst-case payload of space-separated single letters normalizes in
+      ~10ms, not a real DoS vector), and `core/embeddings.py`/
+      `core/vector_store.py` (thin, correctly-scoped wrappers operating
+      only on server-controlled anchor/corpus data, not caller input; no
+      gap).
+
+      One real, if minor, finding fixed: `core/policy_loader.py`,
+      `core/domain_classifier.py`, `core/threat_centroid.py`, and
+      `core/privacy.py` all used bare `print()` for their startup
+      diagnostics (missing corpus/model files, load failures) instead of
+      this codebase's own structured logger — the "structured logging...
+      extended to new subsystems" Phase 8 item, applied to older modules
+      that predated the convention rather than only new ones. All four
+      switched to `core.logger.get_logger`, matching the pattern already
+      used everywhere else. `core/auth.py`'s own three `print()` calls
+      were checked and left alone — they're inside `get_user_role()`, an
+      explicitly-labeled "LOCAL DEMO ONLY" interactive CLI prompt, not a
+      logging gap.
 - [x] Load testing -- built `scripts/load_test.py`, a real concurrent-HTTP
       load generator (`concurrent.futures.ThreadPoolExecutor` + `requests`,
       no new dependency) against a REAL running instance, not a simulated

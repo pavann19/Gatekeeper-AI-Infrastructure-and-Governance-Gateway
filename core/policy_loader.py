@@ -6,6 +6,10 @@ Loaded once at import time. Safe fallback to empty lists on missing/invalid file
 import json
 import os
 
+from core.logger import get_logger
+
+logger = get_logger(__name__)
+
 # --- Policy File Paths ---
 DOMAIN_ANCHORS_FILE = "policies/domain_anchors.json"
 SYMBOLIC_RULES_FILE = "policies/symbolic_rules.json"
@@ -22,13 +26,13 @@ def _load_json_file(filepath):
     """Loads and returns parsed JSON data from a file.
     Returns None if file is missing or invalid."""
     if not os.path.exists(filepath):
-        print(f"WARNING: {filepath} not found.")
+        logger.warning(f"{filepath} not found.")
         return None
     try:
         with open(filepath, "r") as f:
             return json.load(f)
     except Exception as e:
-        print(f"WARNING: Failed to load {filepath}: {e}")
+        logger.warning(f"Failed to load {filepath}: {e}")
         return None
 
 
@@ -42,7 +46,7 @@ def _init_policies():
     if data is not None:
         _domain_anchors = data.get("domains", [])
     else:
-        print("WARNING: Domain guardrail disabled (no anchors loaded).")
+        logger.warning("Domain guardrail disabled (no anchors loaded).")
         _domain_anchors = []
 
     # --- Symbolic Rules ---
@@ -53,7 +57,7 @@ def _init_policies():
         _instruction_override_patterns = data.get("instruction_override_patterns", [])
         _hard_ban_keywords = data.get("hard_ban_keywords", [])
     else:
-        print("CRITICAL: Symbolic rules not loaded. Symbolic detection will fail closed.")
+        logger.error("Symbolic rules not loaded. Symbolic detection will fail closed.")
         _suspicious_phrases = []
         _jailbreak_patterns = None
         _instruction_override_patterns = None
