@@ -91,6 +91,17 @@ def _parse_policy_file(path: str) -> dict:
         return json.load(f)
 
 
+def load_policy_file(path: str = None) -> dict:
+    """Public wrapper over `_parse_policy_file`, defaulting to the live
+    `settings.POLICY_RULES_FILE` -- for callers (the Policy Editor API)
+    that need the raw parsed content itself, not a resolved `PolicySet`.
+    Raises the same way `_parse_policy_file` does (missing file, bad
+    YAML/JSON) -- callers that need a safe fallback should catch, the
+    same discipline `PolicyStore.load` already applies around this exact
+    call."""
+    return _parse_policy_file(path or settings.POLICY_RULES_FILE)
+
+
 @dataclass(frozen=True)
 class PolicySet:
     """
