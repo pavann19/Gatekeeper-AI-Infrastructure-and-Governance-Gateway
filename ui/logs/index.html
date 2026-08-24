@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gatekeeper — Logs</title>
+<link rel="stylesheet" href="/ui/shared/theme.css">
+<style>
+  body { padding: 0 0 80px; }
+
+  main {
+    max-width: 1000px;
+    margin: 0 auto;
+    padding: 40px 24px 0;
+  }
+
+  .identity-chip {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+  .identity-chip b { color: var(--text); font-weight: 600; }
+
+  .toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 20px;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .toolbar h2 { font-size: 28px; font-weight: 650; letter-spacing: -0.02em; margin: 0; }
+
+  .filter-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+  select, input[type="text"] {
+    font-family: inherit;
+    font-size: 13px;
+    padding: 8px 12px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--surface-solid);
+    color: var(--text);
+    outline: none;
+  }
+
+  .log-line {
+    font-family: ui-monospace, "SF Mono", Consolas, monospace;
+    font-size: 12px;
+    background: var(--surface-solid);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin-bottom: 4px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-x: auto;
+  }
+
+  .log-line .lk { color: var(--text-tertiary); }
+
+  .empty-inline { padding: 48px; text-align: center; color: var(--text-tertiary); font-size: 13px; }
+
+  .scan-note {
+    font-size: 12px;
+    background: var(--warn-bg);
+    color: var(--warn-text);
+    padding: 8px 14px;
+    border-radius: var(--radius-sm);
+    margin-bottom: 16px;
+    display: none;
+  }
+  .scan-note.visible { display: block; }
+
+  footer { text-align: center; color: var(--text-tertiary); font-size: 12px; margin-top: 48px; }
+</style>
+</head>
+<body>
+
+<header class="gk-header">
+  <div class="gk-brand">
+    <h1>Gatekeeper</h1>
+    <span class="subtitle">Logs</span>
+  </div>
+  <nav class="gk-nav" id="navLinks"></nav>
+  <div class="identity-chip" id="identityChip"></div>
+  <div style="display:flex; gap:8px;">
+    <button class="btn-ghost" id="refreshBtn" title="Refresh (⌘R)">Refresh</button>
+    <button class="btn-ghost" id="signOutBtn">Sign Out</button>
+  </div>
+</header>
+
+<main>
+  <div class="gk-status-banner" id="banner"></div>
+
+  <div class="toolbar">
+    <h2>Raw Audit Log</h2>
+    <div class="filter-row">
+      <input type="text" id="tenantFilter" placeholder="tenant (blank = all)" style="width:160px;">
+      <select id="eventTypeFilter">
+        <option value="">All event types</option>
+        <option value="input_assessment">Input assessments</option>
+        <option value="output_assessment">Output assessments</option>
+        <option value="gateway_call">Gateway calls</option>
+        <option value="tool_call">Tool calls</option>
+        <option value="legacy">Legacy</option>
+      </select>
+      <select id="limitSelect">
+        <option value="50">50</option>
+        <option value="100" selected>100</option>
+        <option value="200">200</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="scan-note" id="scanNote">
+    The scan hit its byte-read cap before finding enough matching lines —
+    there may be more, further back, than shown here.
+  </div>
+
+  <div id="logList"></div>
+
+  <footer>Gatekeeper Logs · cross-tenant raw audit lines, unfiltered by presentation logic</footer>
+</main>
+
+<script src="/ui/shared/auth.js"></script>
+<script>
+const API_BASE = window.location.origin;
+const banner = document.getElementById('banner');
+const scanNote = document.getElementById('scanNote');
+const logList = document.getElementById('logList');
+const refreshBtn = document.getElementById('refreshBtn');
+const signOutBtn = document.getElementById('signOutBtn');
+const identityChip = document.getElementById('identityChip');
+const navLinks = document.getElementById('navLinks');
+const tenantFilter = document.getElementById('tenantFilter');
+const eventTypeFilter = document.getElementById('eventTypeFilter');
+const limitSelect = document.getElementById('limitSelect');
+
+function showBanner(message, isError) {
+  banner.textContent = message;
+  banner.className = 'gk-status-banner visible' + (isError ? ' error' : '');
+}
+function hideBanner() { banner.className = 'gk-status-banner'; }
+
+function escapeHtml(s) {
+  const div = document.createElement('div');
+  div.textContent = s == null ? '' : String(s);
+  return div.innerHTML;
+}
+
+async function loadLogs() {
+  refreshBtn.disabled = true;
+  refreshBtn.textContent = 'Refreshing…';
+  try {
+    const params = new URLSearchParams();
+    params.set('limit', limitSelect.value);
+    if (eventTypeFilter.value) params.set('event_type', eventTypeFilter.value);
+    if (tenantFilter.value.trim()) params.set('tenant', tenantFilter.value.trim());
+
+    const res = await fetch(API_BASE + '/api/v1/logs?' + params.toString(), { headers: gkAuthHeaders() });
+    if (res.status === 401) { gkSignOut(); return; }
+    if (res.status === 403) {
+      showBanner('INTERNAL capability required to view raw logs.', true);
+      logList.innerHTML = '';
+      return;
+    }
+    if (!res.ok) {
+      showBanner('Request failed: HTTP ' + res.status, true);
+      return;
+    }
+    const data = await res.json();
+    hideBanner();
+    scanNote.className = 'scan-note' + (data.scan_truncated ? ' visible' : '');
+    if (data.events.length === 0) {
+      logList.innerHTML = '<div class="empty-inline">No matching log lines.</div>';
+      return;
+    }
+    logList.innerHTML = data.events.map(e => `<div class="log-line">${escapeHtml(JSON.stringify(e))}</div>`).join('');
+  } catch (e) {
+    showBanner('Could not reach the API — ' + e.message, true);
+  } finally {
+    refreshBtn.disabled = false;
+    refreshBtn.textContent = 'Refresh';
+  }
+}
+
+refreshBtn.addEventListener('click', loadLogs);
+signOutBtn.addEventListener('click', gkSignOut);
+eventTypeFilter.addEventListener('change', loadLogs);
+limitSelect.addEventListener('change', loadLogs);
+tenantFilter.addEventListener('keydown', (e) => { if (e.key === 'Enter') loadLogs(); });
+document.addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'r') { e.preventDefault(); loadLogs(); }
+});
+
+(async () => {
+  const identity = await gkRequireAuth();
+  if (!identity) return;
+  navLinks.innerHTML = gkNavLinks(identity, 'logs');
+  identityChip.innerHTML = '<b>' + escapeHtml(identity.key_id) + '</b> · ' + escapeHtml(identity.tenant) + ' · ' + escapeHtml(identity.capability);
+
+  if (identity.capability !== 'INTERNAL') {
+    showBanner('This key has ' + identity.capability + ' capability — INTERNAL is required to view raw logs.', true);
+    return;
+  }
+  loadLogs();
+})();
+</script>
+
+</body>
+</html>

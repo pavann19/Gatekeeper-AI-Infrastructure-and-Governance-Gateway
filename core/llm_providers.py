@@ -262,3 +262,11 @@ def get_provider(name: str) -> LLMProvider:
     if name not in _PROVIDER_CLASSES:
         raise KeyError(f"unknown provider '{name}'; available: {sorted(_PROVIDER_CLASSES)}")
     return _PROVIDER_CLASSES[name]()
+
+
+def list_provider_names() -> list[str]:
+    """The real, currently-supported provider type names -- for the
+    Developer UI's model gateway view, so it lists what this deployment
+    can actually route to rather than a hand-maintained, driftable copy
+    of `_PROVIDER_CLASSES`' keys."""
+    return sorted(_PROVIDER_CLASSES)

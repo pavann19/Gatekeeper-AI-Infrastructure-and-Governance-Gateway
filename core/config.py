@@ -154,6 +154,12 @@ class Settings(BaseSettings):
     # the one an operator would want to roll back to.
     POLICY_VERSIONS_DIR: str = "policy_versions"
 
+    # Where real benchmark run results (accuracy/latency/confusion-matrix
+    # JSON reports produced by this project's own benchmark scripts) live,
+    # for the Developer UI's Benchmarks view (Phase 7). Read-only from the
+    # API's side -- nothing in this codebase writes here at request time.
+    EVIDENCE_DIR: str = "_evidence"
+
     # core/review_queue.py's storage (Phase 4: Human Review). A single
     # mutable JSON file, not the audit log's append-only convention — see
     # that module's docstring for why. Same mounted-volume guidance as

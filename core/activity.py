@@ -152,3 +152,42 @@ def get_recent_activity(limit=DEFAULT_LIMIT, tenant=None, event_types=None, path
         needed_raw *= 4
 
     return {"events": events[:limit], "scan_truncated": scan_truncated}
+
+
+def find_by_request_id(request_id, tenant=None, path=None):
+    """
+    Returns {"events": [...], "scan_truncated": bool} for every audit
+    record carrying this exact `request_id`, in CHRONOLOGICAL order
+    (oldest first) -- a trace reads top-to-bottom as a story, the
+    opposite order from get_recent_activity's newest-first feed.
+
+    Unlike get_recent_activity, there is no small `limit` to stop early
+    at: request_id is a high-cardinality correlation ID (a UUID), so a
+    real trace is a handful of lines scattered anywhere in the log, not
+    a count that early-exits a tail read the way "give me the last 50"
+    does. This always scans the full MAX_BYTES_SCANNED budget looking
+    for matches -- `scan_truncated` here means "the trace may be
+    incomplete because the byte cap was hit before reaching the start
+    of the file," a real possibility for an old request_id on a large
+    log, not an edge case to hide.
+    """
+    audit_path = path or settings.AUDIT_LOG_PATH
+    raw_lines, truncated, _exhausted = _tail_raw_lines(audit_path, needed=float("inf"))
+
+    matches = []
+    for raw in raw_lines:
+        try:
+            record = json.loads(raw)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        if record.get("request_id") != request_id:
+            continue
+        record["event_type"] = record.get("event_type") or "legacy"
+        record.setdefault("tenant", "unset")
+        record.setdefault("capability", "unset")
+        if tenant is not None and record["tenant"] != tenant:
+            continue
+        matches.append(record)
+
+    matches.reverse()  # raw_lines was newest-first; a trace reads oldest-first
+    return {"events": matches, "scan_truncated": truncated}

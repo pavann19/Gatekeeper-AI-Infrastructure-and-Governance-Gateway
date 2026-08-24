@@ -17,7 +17,8 @@ from api.schemas import (
     ReviewStatusResponse, ReviewResolveRequest, GatewayChatRequest, GatewayChatResponse,
     ToolCallRequest, ToolCallResponse, WhoAmIResponse,
 )
-from core.activity import get_recent_activity
+from core.activity import find_by_request_id, get_recent_activity
+from core.benchmarks import list_benchmark_runs
 from core.auth import auth_required, resolve_principal
 from core.privacy import redact_pii
 from core.rate_limit import assess_rate_limiter, bucket_parameters
@@ -27,8 +28,8 @@ from core.cache import flush_cache
 from core.logger import get_logger, log_event, log_output_event, log_gateway_event
 from core.policy import policy_decision
 from core.review_queue import enqueue_review, get_review, list_pending_reviews, resolve_review
-from core.tools import execute_tool
-from core.llm_providers import get_provider, LLMProviderError
+from core.tools import execute_tool, get_tool_registry
+from core.llm_providers import get_provider, list_provider_names, LLMProviderError
 from core.token_quota import gateway_token_quota, extract_total_tokens, seconds_until_utc_midnight
 from core.config import settings, CAPABILITY_INTERNAL
 
@@ -626,6 +627,68 @@ async def assess_output_endpoint(req: AssessOutputRequest, request: Request):
     )
 
 
+@app.get("/api/v1/gateway/providers")
+def gateway_providers(request: Request):
+    """
+    Developer UI's Model Gateway view: which provider TYPES this
+    deployment can actually route a `/api/v1/gateway/chat` call to
+    (`core.llm_providers.list_provider_names`, the real registry backing
+    `get_provider`), and which one is the default when a caller omits
+    `provider`. No credentials or endpoint URLs are returned -- those
+    live in environment/settings, not in an HTTP response.
+
+    INTERNAL capability required, matching every other Developer UI
+    endpoint added alongside this one (tools listing, raw logs) -- this
+    is operator/developer-facing configuration, not end-user data.
+    """
+    principal = resolve_principal(authorization=request.headers.get("Authorization"))
+    if principal.capability != CAPABILITY_INTERNAL:
+        raise HTTPException(
+            status_code=403,
+            detail="INTERNAL capability required to view gateway configuration.",
+        )
+    return {
+        "providers": list_provider_names(),
+        "default_provider": settings.LLM_GATEWAY_DEFAULT_PROVIDER,
+    }
+
+
+@app.get("/api/v1/tools")
+def list_tools(request: Request):
+    """
+    Developer UI's Tool Gateway view: every tool currently registered
+    with the shared ToolRegistry (`core.tools.get_tool_registry`) --
+    name, description, JSON-Schema parameters, risk level, and required
+    capability. This is the tool CATALOGUE (what could be called and
+    under what rules), not a log of calls -- see /api/v1/activity or
+    /api/v1/logs (event_type=tool_call) for actual call history.
+
+    INTERNAL capability required, same bar as the other new Developer UI
+    endpoints -- a tool's registered schema can reveal internal system
+    shape (table names, internal service paths) that a GENERAL/ELEVATED
+    caller has no operational need to browse.
+    """
+    principal = resolve_principal(authorization=request.headers.get("Authorization"))
+    if principal.capability != CAPABILITY_INTERNAL:
+        raise HTTPException(
+            status_code=403,
+            detail="INTERNAL capability required to view the tool catalogue.",
+        )
+    registry = get_tool_registry()
+    return {
+        "tools": [
+            {
+                "name": spec.name,
+                "description": spec.description,
+                "parameters": spec.parameters,
+                "risk_level": spec.risk_level,
+                "capability_required": spec.capability_required,
+            }
+            for spec in registry.list_tools()
+        ]
+    }
+
+
 @app.post("/api/v1/gateway/chat", response_model=GatewayChatResponse)
 async def gateway_chat(req: GatewayChatRequest, request: Request, background_tasks: BackgroundTasks):
     """
@@ -972,6 +1035,20 @@ def whoami(request: Request):
 
 # --- Activity feed (Phase 7) ---
 
+def _resolve_activity_tenant_scope(principal, request: Request) -> str:
+    """
+    Shared by every audit-log-reading endpoint (activity feed, trace,
+    logs): every caller defaults to their OWN tenant; only INTERNAL may
+    pass `?tenant=<other>` or `?tenant=__all__` to cross tenants. Kept as
+    one function so the three endpoints can never silently diverge on
+    this rule.
+    """
+    requested_tenant = request.query_params.get("tenant")
+    if principal.capability == CAPABILITY_INTERNAL and requested_tenant:
+        return None if requested_tenant == "__all__" else requested_tenant
+    return principal.tenant
+
+
 @app.get("/api/v1/activity")
 def activity_feed(request: Request, limit: int = 50, event_type: str = None):
     """
@@ -999,14 +1076,83 @@ def activity_feed(request: Request, limit: int = 50, event_type: str = None):
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    requested_tenant = request.query_params.get("tenant")
-    if principal.capability == CAPABILITY_INTERNAL and requested_tenant:
-        tenant_filter = None if requested_tenant == "__all__" else requested_tenant
-    else:
-        tenant_filter = principal.tenant
-
+    tenant_filter = _resolve_activity_tenant_scope(principal, request)
     event_types = [t.strip() for t in event_type.split(",")] if event_type else None
     return get_recent_activity(limit=limit, tenant=tenant_filter, event_types=event_types)
+
+
+@app.get("/api/v1/activity/trace/{request_id}")
+def activity_trace(request_id: str, request: Request):
+    """
+    Every audit event sharing one request_id, oldest first -- "what
+    actually happened, end to end, for this one call": the input
+    assessment's detector signals (semantic_score, symbolic_triggered,
+    judge_invoked, risk), the policy decision, and (if the request went
+    further) the gateway call or tool call it triggered, and the output
+    assessment on the way back.
+
+    Same tenant-scoping as the activity feed above: a non-INTERNAL caller
+    only ever sees a trace if it belongs to their own tenant (an event
+    list that's simply empty, not a 403 -- a stranger's request_id gives
+    no signal either way about whether it exists).
+    """
+    principal = resolve_principal(authorization=request.headers.get("Authorization"))
+    if auth_required() and not principal.authenticated:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required. Present a valid API key as "
+                   "'Authorization: Bearer <key>'.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    tenant_filter = _resolve_activity_tenant_scope(principal, request)
+    return find_by_request_id(request_id, tenant=tenant_filter)
+
+
+@app.get("/api/v1/logs")
+def raw_logs(request: Request, limit: int = 100, event_type: str = None):
+    """
+    The same audit log the activity feed reads, but for developers/
+    operators: cross-tenant by default (every tenant at once) and a
+    higher default limit, where the activity feed defaults to "my own
+    tenant" for a general caller. INTERNAL capability required outright
+    -- unlike the activity feed, there is no "your own tenant" reading of
+    this endpoint to fall back to.
+    """
+    principal = resolve_principal(authorization=request.headers.get("Authorization"))
+    if principal.capability != CAPABILITY_INTERNAL:
+        raise HTTPException(
+            status_code=403,
+            detail="INTERNAL capability required to view the raw cross-tenant log.",
+        )
+
+    requested_tenant = request.query_params.get("tenant")
+    tenant_filter = None if not requested_tenant or requested_tenant == "__all__" else requested_tenant
+    event_types = [t.strip() for t in event_type.split(",")] if event_type else None
+    return get_recent_activity(limit=limit, tenant=tenant_filter, event_types=event_types)
+
+
+@app.get("/api/v1/benchmarks")
+def benchmarks(request: Request):
+    """
+    Developer UI's Benchmarks view: this project's own real benchmark run
+    results (`core.benchmarks.list_benchmark_runs`, reading
+    `_evidence/benchmark_results_*.json` off disk) -- the exact reports
+    this project's benchmark scripts produce and commit as evidence, not
+    a re-derived or re-run summary.
+
+    INTERNAL capability required, same bar as the other Developer UI
+    endpoints -- these numbers describe the deployment's own detection
+    performance, not something a GENERAL/ELEVATED caller has an
+    operational need to browse.
+    """
+    principal = resolve_principal(authorization=request.headers.get("Authorization"))
+    if principal.capability != CAPABILITY_INTERNAL:
+        raise HTTPException(
+            status_code=403,
+            detail="INTERNAL capability required to view benchmark results.",
+        )
+    return list_benchmark_runs()
 
 
 # --- Human Review (Phase 4) ---

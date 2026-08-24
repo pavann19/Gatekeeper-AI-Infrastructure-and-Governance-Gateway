@@ -577,8 +577,55 @@ Original estimate: ~40–65h combined — deferred until engine + gateways are s
       Queue -- all read-only against that real data; nothing in it was
       approved/rejected/modified by this verification pass.
 - [ ] Client UI (remainder): privacy, protection settings
-- [ ] Developer UI: request inspector, detector signals, policy editor, model
-      gateway view, tool gateway view, traces, benchmarks, logs
+- [x] Developer UI (request inspector + traces + detector signals):
+      `ui/trace/index.html`, backed by `core.activity.find_by_request_id`
+      and `GET /api/v1/activity/trace/{request_id}`. All three roadmap
+      bullets collapse into one real capability: every audit line sharing
+      a `request_id`, in chronological order, rendered with its FULL raw
+      field set (not the activity feed's friendly one-line summary) --
+      which for an `input_assessment` line means `semantic_score`,
+      `symbolic_triggered`, `judge_invoked`, `domain_score`, `risk` are
+      shown exactly as logged, i.e. this page IS the detector-signal view
+      for a given request, not a separate feature. Same tenant-scoping
+      rule as the activity feed (own tenant by default, INTERNAL may
+      cross), open to every capability since inspecting your OWN request
+      is not operator-only. Available to every capability via the shared
+      nav; INTERNAL-only pages below add their own nav entries.
+      `find_by_request_id` scans the full byte budget rather than
+      stopping at a small count (a request_id is a sparse, scattered
+      match, unlike "give me the last 50") -- covered by 6 new tests
+      including a forced-tiny-chunk-size multi-chunk-reconstruction case.
+- [x] Developer UI (model gateway view + tool gateway view):
+      `ui/gateways/index.html`, backed by two new INTERNAL-only endpoints
+      -- `GET /api/v1/gateway/providers` (real supported provider types
+      from `core.llm_providers.list_provider_names`, plus the configured
+      default) and `GET /api/v1/tools` (the real registered `ToolSpec`
+      catalogue from the shared `ToolRegistry` -- name, JSON-Schema
+      parameters, risk level, required capability). Each section also
+      shows real recent activity (`GET /api/v1/logs` filtered by
+      `gateway_call`/`tool_call`) alongside the static configuration, so
+      the page answers both "what's configured" and "what's actually
+      happening" for each gateway. 12 new tests.
+- [x] Developer UI (logs): `ui/logs/index.html` and `GET /api/v1/logs` --
+      the SAME `get_recent_activity` the activity feed uses, but
+      INTERNAL-only, cross-tenant by default (the activity feed defaults
+      to the caller's own tenant; this is the deliberately different,
+      developer-facing default), raw JSON per line rather than the
+      friendly card rendering. 7 new tests covering the capability gate
+      and default-vs-scoped tenant behaviour.
+- [x] Developer UI (benchmarks): `ui/benchmarks/index.html`, backed by
+      `core.benchmarks.list_benchmark_runs` and `GET /api/v1/benchmarks`
+      (INTERNAL-only). Reads this project's OWN real, already-committed
+      benchmark evidence (`_evidence/benchmark_results_*.json` --
+      accuracy/precision/recall/F1/FPR, confusion matrix, cold-vs-warm-
+      cache latency, exactly as this project's benchmark scripts produced
+      them) rather than re-deriving or synthesizing numbers. Deliberately
+      scoped to only the `benchmark_results_*` shape -- `_evidence/`
+      holds other real report types (calibration curves, detector
+      comparisons) with genuinely different shapes not yet surfaced by
+      this view. 10 new tests, including one asserting against the
+      actual tracked evidence files on disk (a real trip wire if that
+      file shape ever drifts from what this view assumes).
 
 ## Phase 8 — Production hardening (continuous, not a final phase)
 Original estimate: ~20–35h
