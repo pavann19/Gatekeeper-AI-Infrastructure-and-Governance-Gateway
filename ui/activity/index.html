@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gatekeeper — Activity</title>
+<link rel="stylesheet" href="/ui/shared/theme.css">
+<style>
+  body { padding: 0 0 80px; }
+
+  main {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 40px 24px 0;
+  }
+
+  .identity-chip {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+
+  .identity-chip b { color: var(--text); font-weight: 600; }
+
+  .toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 20px;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+
+  .toolbar h2 {
+    font-size: 28px;
+    font-weight: 650;
+    letter-spacing: -0.02em;
+    margin: 0;
+  }
+
+  .filter-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  select {
+    font-family: inherit;
+    font-size: 13px;
+    padding: 8px 12px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--surface-solid);
+    color: var(--text);
+    outline: none;
+  }
+
+  .scan-note {
+    font-size: 12px;
+    color: var(--text-tertiary);
+    background: var(--warn-bg);
+    color: var(--warn-text);
+    padding: 8px 14px;
+    border-radius: var(--radius-sm);
+    margin-bottom: 16px;
+    display: none;
+  }
+  .scan-note.visible { display: block; }
+
+  .empty-state {
+    text-align: center;
+    padding: 96px 24px;
+    color: var(--text-tertiary);
+  }
+  .empty-state .glyph { font-size: 48px; margin-bottom: 16px; opacity: 0.5; }
+  .empty-state h3 { font-size: 17px; font-weight: 600; color: var(--text-secondary); margin: 0 0 6px; }
+
+  .event-list { display: flex; flex-direction: column; gap: 8px; }
+
+  .event-row {
+    background: var(--surface-solid);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 14px 18px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    box-shadow: var(--shadow);
+  }
+
+  .event-type-badge {
+    flex-shrink: 0;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    padding: 4px 9px;
+    border-radius: 999px;
+    background: rgba(128,128,128,0.12);
+    color: var(--text-secondary);
+    white-space: nowrap;
+  }
+
+  .event-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .event-summary {
+    font-size: 13.5px;
+    font-weight: 500;
+    color: var(--text);
+  }
+
+  .event-detail {
+    font-size: 12px;
+    color: var(--text-tertiary);
+  }
+
+  .decision-badge {
+    flex-shrink: 0;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    padding: 3px 9px;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+  .decision-ALLOW { background: var(--low-bg); color: var(--low-text); }
+  .decision-BLOCK { background: var(--high-bg); color: var(--high-text); }
+  .decision-REVIEW { background: var(--medium-bg); color: var(--medium-text); }
+  .decision-RESTRICT { background: var(--medium-bg); color: var(--medium-text); }
+
+  .event-time {
+    flex-shrink: 0;
+    font-size: 12px;
+    color: var(--text-tertiary);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  footer {
+    text-align: center;
+    color: var(--text-tertiary);
+    font-size: 12px;
+    margin-top: 48px;
+  }
+</style>
+</head>
+<body>
+
+<header class="gk-header">
+  <div class="gk-brand">
+    <h1>Gatekeeper</h1>
+    <span class="subtitle">Activity</span>
+  </div>
+  <nav class="gk-nav" id="navLinks"></nav>
+  <div class="identity-chip" id="identityChip"></div>
+  <div style="display:flex; gap:8px;">
+    <button class="btn-ghost" id="refreshBtn" title="Refresh (⌘R)">Refresh</button>
+    <button class="btn-ghost" id="signOutBtn">Sign Out</button>
+  </div>
+</header>
+
+<main>
+  <div class="gk-status-banner" id="banner"></div>
+
+  <div class="toolbar">
+    <h2>Recent Activity</h2>
+    <div class="filter-row">
+      <select id="eventTypeFilter">
+        <option value="">All event types</option>
+        <option value="input_assessment">Input assessments</option>
+        <option value="output_assessment">Output assessments</option>
+        <option value="gateway_call">Gateway calls</option>
+        <option value="tool_call">Tool calls</option>
+      </select>
+      <select id="tenantScope" style="display:none;">
+        <option value="">My tenant</option>
+        <option value="__all__">All tenants</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="scan-note" id="scanNote">
+    The scan hit its byte-read cap before finding enough matching events —
+    there may be more, further back, than shown here.
+  </div>
+
+  <div id="emptyState" class="empty-state" style="display:none;">
+    <div class="glyph">—</div>
+    <h3>No activity yet</h3>
+    <div>Nothing has come through for this tenant so far.</div>
+  </div>
+
+  <div class="event-list" id="eventList"></div>
+
+  <footer>Gatekeeper Activity Feed · reads the same audit log every governance decision is written to</footer>
+</main>
+
+<script src="/ui/shared/auth.js"></script>
+<script>
+const API_BASE = window.location.origin;
+const banner = document.getElementById('banner');
+const scanNote = document.getElementById('scanNote');
+const eventList = document.getElementById('eventList');
+const emptyState = document.getElementById('emptyState');
+const refreshBtn = document.getElementById('refreshBtn');
+const signOutBtn = document.getElementById('signOutBtn');
+const identityChip = document.getElementById('identityChip');
+const navLinks = document.getElementById('navLinks');
+const eventTypeFilter = document.getElementById('eventTypeFilter');
+const tenantScope = document.getElementById('tenantScope');
+
+let currentIdentity = null;
+
+function showBanner(message, isError) {
+  banner.textContent = message;
+  banner.className = 'gk-status-banner visible' + (isError ? ' error' : '');
+}
+function hideBanner() { banner.className = 'gk-status-banner'; }
+
+function escapeHtml(s) {
+  const div = document.createElement('div');
+  div.textContent = s == null ? '' : String(s);
+  return div.innerHTML;
+}
+
+function formatTime(iso) {
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  } catch (e) {
+    return iso || '';
+  }
+}
+
+const EVENT_TYPE_LABELS = {
+  input_assessment: 'Input',
+  output_assessment: 'Output',
+  gateway_call: 'Gateway',
+  tool_call: 'Tool',
+  legacy: 'Legacy',
+};
+
+function summarize(event) {
+  switch (event.event_type) {
+    case 'tool_call':
+      return { summary: event.tool || 'tool call', detail: event.reason || '' };
+    case 'gateway_call':
+      return { summary: [event.provider, event.model].filter(Boolean).join(' / ') || 'gateway call',
+               detail: event.error || (event.latency_ms != null ? event.latency_ms + 'ms' : '') };
+    case 'output_assessment':
+      return { summary: 'response check', detail: event.source || '' };
+    case 'input_assessment':
+      return { summary: 'prompt check', detail: event.risk ? ('risk: ' + event.risk) : (event.source || '') };
+    default:
+      return { summary: event.event_type || 'event', detail: event.role ? ('role: ' + event.role) : '' };
+  }
+}
+
+function renderEvents(events) {
+  if (events.length === 0) {
+    emptyState.style.display = 'block';
+    eventList.innerHTML = '';
+    return;
+  }
+  emptyState.style.display = 'none';
+
+  eventList.innerHTML = events.map(e => {
+    const { summary, detail } = summarize(e);
+    const typeLabel = EVENT_TYPE_LABELS[e.event_type] || e.event_type;
+    const decision = e.decision;
+    const decisionBadge = decision
+      ? `<span class="decision-badge decision-${escapeHtml(decision)}">${escapeHtml(decision)}</span>`
+      : '';
+    return `
+      <div class="event-row">
+        <span class="event-type-badge">${escapeHtml(typeLabel)}</span>
+        <div class="event-main">
+          <span class="event-summary">${escapeHtml(summary)}</span>
+          ${detail ? `<span class="event-detail">${escapeHtml(detail)}</span>` : ''}
+        </div>
+        ${decisionBadge}
+        <span class="event-time">${escapeHtml(formatTime(e.timestamp))}</span>
+      </div>
+    `;
+  }).join('');
+}
+
+async function loadActivity() {
+  refreshBtn.disabled = true;
+  refreshBtn.textContent = 'Refreshing…';
+  try {
+    const params = new URLSearchParams();
+    params.set('limit', '50');
+    if (eventTypeFilter.value) params.set('event_type', eventTypeFilter.value);
+    if (currentIdentity && currentIdentity.capability === 'INTERNAL' && tenantScope.value) {
+      params.set('tenant', tenantScope.value);
+    }
+
+    const res = await fetch(API_BASE + '/api/v1/activity?' + params.toString(), { headers: gkAuthHeaders() });
+    if (res.status === 401) {
+      gkSignOut();
+      return;
+    }
+    if (!res.ok) {
+      showBanner('Request failed: HTTP ' + res.status, true);
+      renderEvents([]);
+      return;
+    }
+    const data = await res.json();
+    hideBanner();
+    scanNote.className = 'scan-note' + (data.scan_truncated ? ' visible' : '');
+    renderEvents(data.events || []);
+  } catch (e) {
+    showBanner('Could not reach the API at ' + API_BASE + ' — ' + e.message, true);
+    renderEvents([]);
+  } finally {
+    refreshBtn.disabled = false;
+    refreshBtn.textContent = 'Refresh';
+  }
+}
+
+refreshBtn.addEventListener('click', loadActivity);
+signOutBtn.addEventListener('click', gkSignOut);
+eventTypeFilter.addEventListener('change', loadActivity);
+tenantScope.addEventListener('change', loadActivity);
+document.addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'r') {
+    e.preventDefault();
+    loadActivity();
+  }
+});
+
+(async () => {
+  const identity = await gkRequireAuth();
+  if (!identity) return; // gkRequireAuth already redirected to login
+  currentIdentity = identity;
+
+  navLinks.innerHTML = gkNavLinks(identity, 'activity');
+  identityChip.innerHTML = '<b>' + escapeHtml(identity.key_id) + '</b> · ' + escapeHtml(identity.tenant) + ' · ' + escapeHtml(identity.capability);
+
+  if (identity.capability === 'INTERNAL') {
+    tenantScope.style.display = '';
+  }
+
+  loadActivity();
+  setInterval(loadActivity, 15000);
+})();
+</script>
+
+</body>
+</html>

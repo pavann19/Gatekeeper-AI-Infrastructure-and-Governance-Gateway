@@ -79,3 +79,19 @@ function gkSignOut() {
   gkClearSession();
   window.location.replace(gkLoginUrl());
 }
+
+/*
+  Cross-page nav links shown in every protected page's header. Review
+  Queue only appears for INTERNAL callers -- matching the endpoint's own
+  gate (GET /api/v1/review requires INTERNAL), so the link itself is
+  never shown to a caller who would just get a 403 for clicking it.
+*/
+function gkNavLinks(identity, activePage) {
+  const links = [{ href: "/ui/activity/index.html", label: "Activity", page: "activity" }];
+  if (identity.capability === "INTERNAL") {
+    links.push({ href: "/ui/review/index.html", label: "Review Queue", page: "review" });
+  }
+  return links.map(l =>
+    `<a href="${l.href}" class="gk-nav-link${l.page === activePage ? ' active' : ''}">${l.label}</a>`
+  ).join("");
+}

@@ -125,6 +125,7 @@
     <h1>Gatekeeper</h1>
     <span class="subtitle">Human Review</span>
   </div>
+  <nav class="gk-nav" id="navLinks"></nav>
   <div class="identity-chip" id="identityChip"></div>
   <div style="display:flex; gap:8px;">
     <button class="btn-ghost" id="refreshBtn" title="Refresh (⌘R)">Refresh</button>
@@ -161,6 +162,7 @@ const countPill = document.getElementById('countPill');
 const refreshBtn = document.getElementById('refreshBtn');
 const signOutBtn = document.getElementById('signOutBtn');
 const identityChip = document.getElementById('identityChip');
+const navLinks = document.getElementById('navLinks');
 
 function showBanner(message, isError) {
   banner.textContent = message;
@@ -291,6 +293,8 @@ document.addEventListener('keydown', (e) => {
 (async () => {
   const identity = await gkRequireAuth();
   if (!identity) return; // gkRequireAuth already redirected to login
+
+  navLinks.innerHTML = gkNavLinks(identity, 'review');
 
   if (identity.capability !== 'INTERNAL') {
     showBanner('This key has ' + identity.capability + ' capability — INTERNAL is required to view the review queue.', true);

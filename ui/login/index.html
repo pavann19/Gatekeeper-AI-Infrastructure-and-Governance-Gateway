@@ -138,11 +138,11 @@ function nextDestination(identity) {
   const params = new URLSearchParams(window.location.search);
   const requested = params.get('next');
   if (requested) return requested;
-  // No explicit destination: the review dashboard is the only protected
-  // page this client UI has today, and it is INTERNAL-only. Anyone else
-  // lands back here with their identity confirmed but nowhere further
-  // to go yet -- honest about what's actually built, not a fake redirect.
-  return identity.capability === 'INTERNAL' ? '/ui/review/index.html' : null;
+  // No explicit destination: the activity feed is every capability's home
+  // page (it's scoped to the caller's own tenant regardless of
+  // capability); INTERNAL callers can navigate to the review queue from
+  // there via the nav link.
+  return '/ui/activity/index.html';
 }
 
 // Already holding a verified session? Skip straight past login.
@@ -189,15 +189,7 @@ form.addEventListener('submit', async (e) => {
     identityPreview.className = 'gk-identity-preview visible';
     banner.className = 'gk-status-banner';
 
-    const dest = nextDestination(identity);
-    if (dest) {
-      setTimeout(() => window.location.replace(dest), 600);
-    } else {
-      showBanner(
-        identity.capability + ' capability has no dashboard section yet — ' +
-        'only the INTERNAL review queue is built so far.', false
-      );
-    }
+    setTimeout(() => window.location.replace(nextDestination(identity)), 600);
   } catch (e) {
     showBanner('Could not reach the API — ' + e.message, true);
   } finally {

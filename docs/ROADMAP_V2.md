@@ -535,8 +535,48 @@ Original estimate: ~40–65h combined — deferred until engine + gateways are s
       `tests/test_whoami_endpoint.py` (6 tests: valid key, missing
       credential, unrecognised key, malformed header, no credential leakage
       in the response, and the exact minimal response shape).
-- [ ] Client UI (remainder): dashboard/activity, privacy, protection
-      settings
+- [x] Client UI (dashboard/activity): a real activity feed —
+      `ui/activity/index.html`, backed by a new `GET /api/v1/activity`
+      endpoint (`api/main.py`) and `core/activity.py`. Reads the SAME
+      `audit.jsonl` every governance decision already writes to
+      (`core/logger.py`'s four `log_*_event` functions) — this is a read
+      view over the existing audit trail, not a new data source, and every
+      event shown (input/output assessments, gateway calls, tool calls) is
+      a record something real actually decided, not synthesized for
+      display.
+      `core/activity.py::get_recent_activity` tails the log from the end in
+      fixed-size chunks rather than loading the whole file — the real
+      `audit.jsonl` this was tested against is 14,000+ lines / 7MB+ and
+      only growing — bounded by `MAX_BYTES_SCANNED` (20MB) so a filter
+      matching almost nothing can't turn into an unbounded full-file scan;
+      hitting that cap is reported back as `scan_truncated` rather than
+      silently looking like "that's all there is." A pre-event_type legacy
+      log line (from before this project's audit schema existed) is
+      surfaced as `event_type: "legacy"` rather than dropped.
+      Every authenticated caller sees their OWN tenant's activity by
+      default (never overridable by a non-INTERNAL caller passing
+      `?tenant=`, confirmed by test); INTERNAL may additionally request one
+      other tenant or `?tenant=__all__` for everything, mirroring
+      `list_reviews`' own cross-tenant reasoning. This is now the landing
+      page after login for every capability (the review dashboard remains
+      INTERNAL-only, reachable via a nav link `ui/shared/auth.js` now adds
+      to both pages).
+      Verified two ways: `tests/test_activity.py` (13 tests against real
+      files on disk, including one that forces a tiny chunk size so a
+      single JSON line is guaranteed to straddle multiple reads --
+      catching a real infinite-loop bug in the first draft's retry logic
+      where a small file that fits in one read chunk never set the
+      "truncated" flag, so a filter matching almost nothing spun forever)
+      and `tests/test_activity_endpoint.py` (8 tests over the real HTTP
+      layer, tenant-scoping included) -- plus a live run in a real browser
+      against the actual accumulated `audit.jsonl` (14,000+ real lines from
+      this project's own dev/test history) and the actual `review_queue.json`
+      (35 real pending reviews from earlier sessions), sign-in as both a
+      GENERAL and an INTERNAL key, event-type filtering, the `__all__`
+      cross-tenant view, and cross-navigation between Activity and Review
+      Queue -- all read-only against that real data; nothing in it was
+      approved/rejected/modified by this verification pass.
+- [ ] Client UI (remainder): privacy, protection settings
 - [ ] Developer UI: request inspector, detector signals, policy editor, model
       gateway view, tool gateway view, traces, benchmarks, logs
 
