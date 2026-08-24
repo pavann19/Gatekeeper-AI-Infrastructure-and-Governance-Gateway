@@ -157,17 +157,32 @@ def test_high_risk_call_enqueues_a_real_review(key_store, isolated_review_queue)
 
 def test_review_enqueue_does_not_store_raw_arguments(key_store, isolated_review_queue):
     """Same privacy contract as every other reviewable item -- only an
-    identifying hash, never the raw call content."""
+    identifying hash, never the raw call content.
+
+    The marker value is deliberately NOT a short numeric literal like the
+    `999` this test originally used: every other ID this endpoint
+    generates (review_id, request_id, prompt_hash) is random lowercase
+    hex, and hex digits include 0-9 -- a short numeric substring has a
+    real, non-negligible chance of turning up inside one of those IDs
+    purely by coincidence (confirmed: this flaked exactly that way in
+    CI -- `999` appeared inside a randomly generated review_id). row_id
+    is schema-typed as an integer (`core/demo_tools.py`'s
+    DATABASE_DELETE_SPEC), so the fix is a long enough number that a
+    coincidental substring match becomes negligible rather than just
+    rare: an 9-digit run has roughly (1/16)^9 the collision chance a
+    3-digit one did.
+    """
     key = key_store(capability="INTERNAL")
     response = client.post(
         "/api/v1/tools/call",
-        json={"name": "demo.database.delete", "arguments": {"table": "customers", "row_id": 999}},
+        json={"name": "demo.database.delete",
+             "arguments": {"table": "customers", "row_id": 847362951}},
         headers={"Authorization": f"Bearer {key}"},
     )
     review_id = response.json()["review_id"]
     stored = isolated_review_queue.get(review_id)
     dumped = json.dumps(stored)
-    assert "999" not in dumped
+    assert "847362951" not in dumped
     assert "customers" not in dumped
     assert "prompt_hash" in stored and len(stored["prompt_hash"]) == 64  # sha256 hex digest
 
