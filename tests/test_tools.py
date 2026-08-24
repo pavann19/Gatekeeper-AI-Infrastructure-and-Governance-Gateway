@@ -11,6 +11,7 @@ from core.tools import (
     ToolRegistry,
     ToolSpec,
     check_tool_access,
+    decide_tool_call,
     get_tool_registry,
     validate_arguments,
 )
@@ -233,6 +234,56 @@ def test_unrecognised_capability_denied_not_defaulted_to_lowest():
     ok, detail = check_tool_access("SUPERADMIN", spec)
     assert ok is False
     assert "unrecognised" in detail.lower()
+
+
+# --- decide_tool_call: the combined pre-execution decision -------------------
+
+def test_low_risk_call_with_valid_args_and_access_allows():
+    spec = make_spec(risk_level="LOW")
+    result = decide_tool_call("GENERAL", spec, {"table": "orders"})
+    assert result["decision"] == "ALLOW"
+    assert result["tool"] == "database.read"
+
+
+def test_access_denial_blocks_before_validation_even_runs():
+    """A caller who fails the capability check must be blocked even if
+    their arguments would otherwise be perfectly valid -- access control
+    is checked first, cheapest-and-most-decisive-first."""
+    spec = make_spec(capability_required="INTERNAL", risk_level="LOW")
+    result = decide_tool_call("GENERAL", spec, {"table": "orders"})
+    assert result["decision"] == "BLOCK"
+    assert "INTERNAL" in result["reason"]
+
+
+def test_invalid_arguments_block_even_for_a_fully_authorized_caller():
+    spec = make_spec(capability_required="GENERAL", risk_level="LOW")
+    result = decide_tool_call("INTERNAL", spec, {})  # missing required "table"
+    assert result["decision"] == "BLOCK"
+    assert "table" in result["reason"]
+
+
+def test_high_risk_requires_review_even_for_internal_caller():
+    """The core property this item exists for: being ALLOWED to call a
+    tool does not exempt a HIGH-risk call from human approval."""
+    spec = make_spec(capability_required="GENERAL", risk_level="HIGH")
+    result = decide_tool_call("INTERNAL", spec, {"table": "orders"})
+    assert result["decision"] == "REVIEW"
+    assert "HIGH" in result["reason"]
+
+
+def test_high_risk_access_denial_still_blocks_not_review():
+    """Access control outranks approval -- a caller who can't use the
+    tool at all gets BLOCK, not REVIEW, regardless of the tool's risk
+    level."""
+    spec = make_spec(capability_required="INTERNAL", risk_level="HIGH")
+    result = decide_tool_call("GENERAL", spec, {"table": "orders"})
+    assert result["decision"] == "BLOCK"
+
+
+def test_medium_risk_authorized_call_allows():
+    spec = make_spec(risk_level="MEDIUM")
+    result = decide_tool_call("GENERAL", spec, {"table": "orders"})
+    assert result["decision"] == "ALLOW"
 
 
 # --- ToolRegistry -------------------------------------------------------------

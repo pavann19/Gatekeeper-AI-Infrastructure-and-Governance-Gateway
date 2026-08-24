@@ -292,7 +292,7 @@ your own LLM call, and starts being infrastructure you route through — a
 real architectural shift, not an incremental feature. Scope and benchmark
 incrementally rather than building it in one push.
 
-## Phase 6 — Tool / Agent Gateway (2/6 done)
+## Phase 6 — Tool / Agent Gateway (3/6 done)
 Original estimate: ~35–55h — the single largest new subsystem
 
 - [x] Tool registry + schemas — done 2026-08-24, see `core/tools.py`.
@@ -325,7 +325,25 @@ Original estimate: ~35–55h — the single largest new subsystem
       was never really a generic-gateway feature to begin with (the same
       scope OpenAI's own function-calling structural validation has). 6
       new tests, 596 passed overall (up from 590).
-- [ ] Risk levels, approval requirement
+- [x] Risk levels, approval requirement — done 2026-08-24, see `core/
+      tools.py::decide_tool_call`. Combines access control (already
+      built) with a risk-based gate: HIGH-risk tools require REVIEW even
+      for a caller whose capability already clears the access check —
+      access answers "may this caller use this tool at all", approval
+      answers "does THIS call need a human before it runs", and
+      conflating them would let an INTERNAL caller's HIGH-risk call
+      (e.g. a production delete) execute with nobody in the loop just
+      because they're generally allowed to invoke the tool. Mirrors
+      Phase 4's own REVIEW semantics exactly. Decision vocabulary
+      (BLOCK/REVIEW/ALLOW) reuses `core/policy.py`'s action names minus
+      RESTRICT, which has no obvious meaning for a tool call. NOT yet
+      wired into `core/review_queue.py` or an execution endpoint —
+      neither exists yet for tool calls, and forcing this into
+      `ReviewRecord`'s prompt-hash-shaped schema before a real caller
+      exists would repeat the "one shape serving two questions" mistake
+      `core/logger.py`'s three distinct audit functions were built to
+      avoid; that wiring belongs to whichever later item actually adds
+      an execution path. 6 new tests, 602 passed overall (up from 596).
 - [ ] Sandboxed demo tools
 - [ ] Audit events
 - [ ] MCP compatibility (explicitly deferred to after the above is solid)
