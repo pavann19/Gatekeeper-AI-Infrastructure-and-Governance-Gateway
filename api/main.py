@@ -247,6 +247,30 @@ def _enforce_rate_limit(principal, request: Request, tenant_config=None) -> None
         )
 
 
+def _reject_suspended_and_rate_limit(principal, request: Request) -> None:
+    """
+    Shared tail for every endpoint gated on a resolved principal (Phase 8
+    hardening): reject a suspended tenant, then spend one rate-limit
+    token. The original four endpoints (assess/assess_output/gateway_chat/
+    tools_call) inline this same sequence; every endpoint gaining it now
+    -- whoami, activity/trace/logs, gateway/tools/benchmarks catalogues,
+    the policy editor, and the review endpoints -- previously had NEITHER
+    check at all: a suspended tenant could poll them indefinitely, and
+    several do real work per call (a 20MB-bounded audit-log scan, a
+    policy-file write-then-validate-then-delete) that a caller with no
+    throttling could repeat as fast as the network allows, a genuine
+    resource-exhaustion gap even though none of them expose the kind of
+    secret a rate limit would meaningfully protect against guessing --
+    API keys here are 256-bit random tokens (`secrets.token_urlsafe(32)`),
+    for which online brute-forcing is not a realistic threat regardless
+    of throttling.
+    """
+    tenant_config = resolve_tenant(principal.tenant)
+    if tenant_config.suspended:
+        raise HTTPException(status_code=403, detail=f"Tenant '{principal.tenant}' is suspended.")
+    _enforce_rate_limit(principal, request, tenant_config)
+
+
 @app.on_event("startup")
 async def warm_models() -> None:
     """
@@ -650,6 +674,7 @@ def gateway_providers(request: Request):
             status_code=403,
             detail="INTERNAL capability required to view gateway configuration.",
         )
+    _reject_suspended_and_rate_limit(principal, request)
     return {
         "providers": list_provider_names(),
         "default_provider": settings.LLM_GATEWAY_DEFAULT_PROVIDER,
@@ -677,6 +702,7 @@ def list_tools(request: Request):
             status_code=403,
             detail="INTERNAL capability required to view the tool catalogue.",
         )
+    _reject_suspended_and_rate_limit(principal, request)
     registry = get_tool_registry()
     return {
         "tools": [
@@ -1005,6 +1031,7 @@ def flush_semantic_cache(request: Request):
             status_code=403,
             detail="INTERNAL capability required to flush the semantic cache.",
         )
+    _reject_suspended_and_rate_limit(principal, request)
     flush_cache()
     return {"status": "success"}
 
@@ -1031,6 +1058,7 @@ def whoami(request: Request):
             detail="Invalid or missing API key.",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    _reject_suspended_and_rate_limit(principal, request)
     return WhoAmIResponse(
         capability=principal.capability, tenant=principal.tenant, key_id=principal.key_id,
     )
@@ -1057,6 +1085,7 @@ def privacy_settings(request: Request):
                    "'Authorization: Bearer <key>'.",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    _reject_suspended_and_rate_limit(principal, request)
     return {
         "regex_categories": sorted(REGEX_PATTERNS.keys()),
         "ner_labels": sorted(NER_LABELS),
@@ -1089,6 +1118,7 @@ def protection_settings(request: Request):
                    "'Authorization: Bearer <key>'.",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    _reject_suspended_and_rate_limit(principal, request)
 
     requested_tenant = request.query_params.get("tenant")
     tenant_id = requested_tenant if (principal.capability == CAPABILITY_INTERNAL and requested_tenant) else principal.tenant
@@ -1155,6 +1185,8 @@ def activity_feed(request: Request, limit: int = 50, event_type: str = None):
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    _reject_suspended_and_rate_limit(principal, request)
+
     tenant_filter = _resolve_activity_tenant_scope(principal, request)
     event_types = [t.strip() for t in event_type.split(",")] if event_type else None
     return get_recent_activity(limit=limit, tenant=tenant_filter, event_types=event_types)
@@ -1184,6 +1216,8 @@ def activity_trace(request_id: str, request: Request):
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    _reject_suspended_and_rate_limit(principal, request)
+
     tenant_filter = _resolve_activity_tenant_scope(principal, request)
     return find_by_request_id(request_id, tenant=tenant_filter)
 
@@ -1204,6 +1238,7 @@ def raw_logs(request: Request, limit: int = 100, event_type: str = None):
             status_code=403,
             detail="INTERNAL capability required to view the raw cross-tenant log.",
         )
+    _reject_suspended_and_rate_limit(principal, request)
 
     requested_tenant = request.query_params.get("tenant")
     tenant_filter = None if not requested_tenant or requested_tenant == "__all__" else requested_tenant
@@ -1231,6 +1266,7 @@ def benchmarks(request: Request):
             status_code=403,
             detail="INTERNAL capability required to view benchmark results.",
         )
+    _reject_suspended_and_rate_limit(principal, request)
     return list_benchmark_runs()
 
 
@@ -1247,6 +1283,7 @@ def _require_internal(request: Request):
     principal = resolve_principal(authorization=request.headers.get("Authorization"))
     if principal.capability != CAPABILITY_INTERNAL:
         raise HTTPException(status_code=403, detail="INTERNAL capability required for policy administration.")
+    _reject_suspended_and_rate_limit(principal, request)
     return principal
 
 
@@ -1350,6 +1387,7 @@ def get_review_status(review_id: str, request: Request):
                    "'Authorization: Bearer <key>'.",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    _reject_suspended_and_rate_limit(principal, request)
 
     review = get_review(review_id)
     if review is None:
@@ -1375,6 +1413,7 @@ def list_reviews(request: Request):
             status_code=403,
             detail="INTERNAL capability required to list pending reviews.",
         )
+    _reject_suspended_and_rate_limit(principal, request)
     return {"pending": list_pending_reviews()}
 
 
@@ -1398,6 +1437,7 @@ def resolve_review_endpoint(review_id: str, req: ReviewResolveRequest, request: 
             status_code=403,
             detail="INTERNAL capability required to resolve a review.",
         )
+    _reject_suspended_and_rate_limit(principal, request)
 
     try:
         record = resolve_review(review_id, req.outcome, reviewer=principal.key_id)

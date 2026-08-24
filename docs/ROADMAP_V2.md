@@ -707,7 +707,58 @@ project so far (real benchmarks before/after, CI gate per change, honest
 "what this does not close" sections) rather than as a step done once at
 the end.
 
-- [ ] Integration / security / API contract tests per new subsystem
+- [~] Integration / security / API contract tests per new subsystem --
+      started with a real security audit of every Phase 7 endpoint (the
+      newest, least-scrutinized surface). Found and fixed two genuine,
+      concrete gaps, not hypothetical ones:
+      1. **Path traversal / arbitrary-file-read in the policy rollback
+         endpoint.** `core.policy_versioning.rollback_to`'s
+         `os.path.join(_versions_dir(), version_name)` was written when
+         its only caller was a local CLI operator who already had full
+         filesystem access, so an absolute path or `../` traversal in
+         `version_name` was never exploitable — `os.path.join` silently
+         DISCARDS its first argument when the second is absolute
+         (confirmed live: `os.path.join("/a", "/etc/passwd") ==
+         "/etc/passwd"`). Phase 7's `POST /api/v1/policy/rollback`
+         exposed this function to any INTERNAL-capability API key over
+         the network, turning it into a real arbitrary-file-read
+         primitive (roll back to any readable file, then
+         `GET /api/v1/policy` to read it back) — proved live against a
+         real temp file before fixing. Fixed by rejecting any
+         `version_name` that isn't a bare filename
+         (`os.path.basename(version_name) != version_name`), same
+         `FileNotFoundError` as a genuinely missing version so the
+         response can't be used to distinguish "blocked" from "doesn't
+         exist". 4 regression tests in `tests/test_policy_versioning.py`.
+      2. **No rate limiting or tenant-suspension check on any Phase 7
+         endpoint, or on the pre-existing review/cache-flush endpoints.**
+         Only the original four endpoints (assess, assess_output,
+         gateway/chat, tools/call) enforced either. A suspended tenant
+         could poll whoami/activity/trace/logs/gateways/tools/benchmarks/
+         policy/review indefinitely, several of which do real per-call
+         work (a byte-bounded audit-log scan, a policy-file
+         write-then-validate-then-delete) worth throttling regardless of
+         whether a secret is at stake. Closed in one place —
+         `api/main.py::_reject_suspended_and_rate_limit`, called from
+         all 16 affected endpoints — rather than by copy-pasting the
+         three-line check that many more times. (Considered and rejected
+         framing this as protection against API-key brute-forcing: keys
+         are 256-bit random tokens, `secrets.token_urlsafe(32)`, for
+         which online guessing is infeasible regardless of throttling —
+         the real justification is resource exhaustion, not credential
+         guessing, and the roadmap should say what's actually true.)
+      3. Also added the `max_length` bound `PolicyContentRequest.content`
+         and `PolicyRollbackRequest.version` were missing — every other
+         free-text request field in this codebase already has one
+         (`GatewayChatRequest.prompt`, etc.); these two were a real,
+         if minor, gap in an otherwise-consistent convention.
+      21 new tests (`tests/test_phase8_hardening.py`) covering suspension
+      and rate-limit enforcement across a representative cross-section of
+      every affected endpoint, plus the two new size bounds. 810 passing
+      overall (up from 785 at Phase 7's close). Marked in-progress, not
+      done — this is one security pass over one subsystem; the item stays
+      open for the rest of the codebase's subsystems as this phase
+      continues alongside future work.
 - [ ] Load testing
 - [ ] Docker improvements, graceful failure handling
 - [ ] Secrets management

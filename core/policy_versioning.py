@@ -94,8 +94,25 @@ def rollback_to(version_name: str, path: str = None) -> None:
 
     Raises FileNotFoundError if `version_name` doesn't exist, rather than
     silently no-op-ing: a rollback request that didn't roll back anything
-    must be loud, not swallowed.
+    must be loud, not swallowed. The SAME exception is raised if
+    `version_name` is anything other than a bare filename (an absolute
+    path, or containing a path separator or `..`) -- this function was
+    written when its only caller was a local CLI operator who already had
+    full filesystem access, so `os.path.join(_versions_dir(), version_name)`
+    happily resolving an absolute path (which DISCARDS the versions dir
+    entirely -- `os.path.join("/a", "/etc/passwd") == "/etc/passwd"`) or a
+    `../` traversal was never exploitable. It became exploitable the
+    moment `POST /api/v1/policy/rollback` (Phase 7) exposed this function
+    to any INTERNAL-capability API key over the network: without this
+    check, that endpoint is an arbitrary-file-read primitive (roll back to
+    any readable file, then GET /api/v1/policy to read it back). Rejected
+    the same way a missing version is, not with a distinct error, so a
+    caller can't use the response to distinguish "traversal blocked" from
+    "that literal filename doesn't exist".
     """
+    if os.path.basename(version_name) != version_name:
+        raise FileNotFoundError(f"No such policy version: {version_name}")
+
     path = path or settings.POLICY_RULES_FILE
     src = os.path.join(_versions_dir(), version_name)
     if not os.path.exists(src):
