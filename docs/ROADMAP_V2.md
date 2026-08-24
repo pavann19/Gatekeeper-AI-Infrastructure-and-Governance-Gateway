@@ -425,12 +425,35 @@ OFF — opt-in, same as the module always documented), so the endpoint has
 something real to call without a deployment writing its own tools first.
 12 new tests, 669 passed overall (up from 657).
 
-What remains genuinely unbuilt and out of this phase's scope: a real MCP
-transport server (protocol-shape compatibility only, per the MCP item's
-own writeup), and any real (non-demo) tool — a production deployment
-still has to register its own. Those are the natural next steps once an
-actual deployment needs one of them, not gaps in what this phase set out
-to build.
+**The real MCP transport server also closed out same day (2026-08-24)**,
+once asked for directly. New `core/mcp_server.py`: JSON-RPC 2.0 over
+newline-delimited stdio, hand-rolled rather than the official `mcp` SDK
+— the SDK was tried first and its dependency tree bumped `starlette` to
+a version incompatible with this project's pinned FastAPI, breaking
+every API test module on contact; reverted immediately, confirmed clean
+before writing any server code. `core/mcp_compat.py` already had every
+piece of real logic (list tools, call a tool); this is only the framing
+and method dispatch (`initialize`, `notifications/initialized`,
+`tools/list`, `tools/call`) — genuinely less code than working around
+the SDK conflict, and zero new dependencies. New `scripts/run_mcp_server.py`
+CLI entrypoint, `--demo-tools` flag to make it runnable standalone. One
+stated, deliberate scope boundary: MCP's stdio transport has no
+per-call authentication, so the server runs at ONE fixed capability for
+its whole process lifetime (`--capability`), the same trust-boundary
+shape every real local MCP server already has — not a missing feature,
+a property of the transport. 18 new tests (dispatch logic and the real
+transport loop, including malformed JSON and an internal dispatch bug
+both surviving without killing the session) plus a genuine subprocess
+end-to-end smoke test (real stdin/stdout, not `io.StringIO`) confirming
+`initialize` → `tools/list` → `tools/call` works over an actual child
+process. 687 passed overall (up from 669).
+
+What remains genuinely unbuilt and out of this phase's scope: any real
+(non-demo) tool — a production deployment still has to register its
+own — and MCP's HTTP/SSE transport (a different, per-call-authenticatable
+transport with its own auth story, not attempted here). Both are natural
+next steps once an actual deployment needs one of them, not gaps in
+what this phase set out to build.
 
 ## Phase 7 — UI Integration
 Original estimate: ~40–65h combined — deferred until engine + gateways are solid
