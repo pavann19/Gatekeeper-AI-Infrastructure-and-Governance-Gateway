@@ -1,0 +1,35 @@
+{
+  "seed": 20260824,
+  "detector": "deepset_injection",
+  "attack_classes_filter": null,
+  "fpr_budget": 0.05,
+  "n_german_rows": 4017,
+  "n_german_attacks": 1584,
+  "n_fit": 2008,
+  "n_eval": 2009,
+  "german_threshold": 0.9990038275718689,
+  "deployed_threshold": 0.9989196062088013,
+  "auc_on_held_out_german_half": {
+    "point": 0.713961226553311,
+    "lo": 0.6909812254781439,
+    "hi": 0.7343314734661224,
+    "n": 2009,
+    "n_boot_effective": 1000,
+    "ci_level": 0.95
+  },
+  "recall_at_fpr_budget_held_out": {
+    "point": 0.13291925465838508,
+    "lo": 0.0897908979089791,
+    "hi": 0.16624365482233502,
+    "n": 2009,
+    "n_boot_effective": 1000,
+    "ci_level": 0.95
+  },
+  "recall_at_german_threshold": 0.10559006211180125,
+  "fpr_at_german_threshold": 0.04318936877076412,
+  "comparison_to_deployed": {
+    "recall_at_deployed_threshold": 0.4472049689440994,
+    "fpr_at_deployed_threshold": 0.20431893687707642,
+    "recall_delta": -0.3416149068322981
+  }
+}

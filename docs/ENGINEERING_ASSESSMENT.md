@@ -2728,6 +2728,390 @@ context).
 
 ---
 
+## 1aa. German-specific detection gap — data blocker closed, threshold experiment gives an honest negative (2026-08-24, `phase1-german-gap-and-experiments` branch)
+
+This roadmap item (§ above, "German-specific detection gap") was
+explicitly blocked on data: "only 234 German rows (76 attacks) in the
+current suite, thin for a dedicated fit." Done on a separate branch, not
+main, at the user's explicit instruction to keep this exploratory work
+isolated until they choose to merge it.
+
+### Closing the data blocker
+
+`scripts/build_eval_suite.py` gained three new sources, chosen
+specifically for German coverage rather than generic volume:
+
+- `rikka-snow/prompt-injection-multilingual` and
+  `Octavio-Santana/prompt-injection-attack-detection-multilingual` — both
+  genuinely multilingual injection/benign datasets with real German rows
+  (not machine-translated English), found by searching the Hub for
+  multilingual prompt-injection datasets and verifying German content
+  with this project's own `detect_language` heuristic before committing
+  to either source.
+- `philschmid/germeval18` — a German-only offensive-language dataset,
+  covering German `harmful_content` and `benign` volume that was nearly
+  absent (1 and 158 rows respectively) before this.
+
+Suite grows from 6,933 to 13,011 rows after dedup (1,873 duplicates
+dropped, mostly overlap between the two new multilingual sources). German
+rows grow from 234 to 4,221 — `prompt_injection`: 74→653,
+`harmful_content`: 1→1,001, `benign`: 158→2,566. This alone is a ~10x-plus
+increase in exactly the class the roadmap identified as too thin to fit a
+threshold against.
+
+### The threshold experiment — and why it wasn't a full ensemble rescore
+
+The roadmap names the exact next step: "a calibrated German-specific
+threshold on `protectai_injection` alone." Rescoring the entire deployed
+4-feature fusion ensemble against all ~13k rows to answer a question that
+only needs one detector, on one language subset (~4,200 rows), was
+started and then deliberately abandoned partway through — measured at
+~4.5s/batch for `protectai_injection` alone, a full 4-detector run
+against the full suite would have taken multiple hours of CPU-bound
+transformer inference for a question `scripts/calibrate_german_threshold.py`
+answers in under 10 minutes by scoring only the German subset, reusing
+already-cached scores for rows that hadn't changed. This is the
+distinction the user drew explicitly when steering this session away
+from "pointless benchmarking" toward targeted, hypothesis-driven checks.
+
+New `scripts/calibrate_german_threshold.py`: loads only the German,
+contamination-excluded rows (`deepset/prompt-injections` is
+`protectai_injection`'s declared `trained_on` source, same exclusion
+discipline as `scripts/compare_detectors.py`), fits a threshold at the 5%
+FPR budget on half the German population, evaluates on the other half,
+and compares against the detector's already-published pooled (mostly
+English) threshold.
+
+### The result is a real, honest negative — not what was hoped for
+
+```
+German rows (contamination-excluded): 4,221  attacks=1,655  benign=2,566
+AUC (held-out German half):            0.621 [0.594, 0.647]
+Recall @ deployed pooled threshold:    35.0%   FPR: 17.1%
+Recall @ German-specific threshold:    19.8%   FPR: 4.6%
+```
+
+Two things this actually shows:
+
+1. **The previously-published "German AUC 0.872 standalone" does not
+   replicate at scale.** That number came from the original 234-row
+   German sample, which was dominated by one attack style
+   (`deepset/prompt-injections`' instruction-override pattern — now
+   excluded here as contamination anyway, since it's this detector's own
+   training data). Against a larger, stylistically diverse German attack
+   population, `protectai_injection` measures well above chance
+   (CI excludes 0.5) but far below what the old, narrow sample suggested.
+   The old number was real for the data it was measured on; it was never
+   representative of "German attacks" as a category, and this project's
+   own evidence discipline requires saying so once better data exists to
+   show it, rather than quietly forgetting the old figure was ever
+   published (§1x already used the phrase "no encoder swap needed" based
+   on that same 0.872 figure — this finding narrows, but does not
+   reverse, that conclusion, since the encoder-swap question was about
+   the pooled ensemble, not this detector alone).
+
+2. **The currently-cached pooled threshold badly overshoots FPR on
+   German traffic specifically** — 17.1% against a 5% budget, more than
+   3x over. A German-specific cut fixes that (4.6%, within budget) at a
+   real recall cost (35%→20%). Given this project's repeatedly-stated
+   position that FPR is the hard constraint (§2b: "FPR ... is untouched")
+   and this is a hard constraint being missed by 3x for a whole language,
+   this is worth fixing — but not on the strength of one standalone
+   detector's number.
+
+### Follow-up: is protectai_injection uniquely bad at German, or is this systemic?
+
+Rather than stopping at one detector's number, the same script (now
+parametrized with `--detector`/`--attack-classes`, still targeted, still
+minutes not hours) was pointed at two more of the four deployed fusion
+features, each against the specific German subset it actually targets:
+
+```
+                        AUC (held-out)          Recall/FPR @ deployed    Recall/FPR @ German-specific
+deepset_injection       0.714 [0.691, 0.734]    44.7% / 20.4%            10.6% / 4.3%
+protectai_injection     0.621 [0.594, 0.647]    35.0% / 17.1%            19.8% / 4.6%
+toxic_bert              0.650 [0.622, 0.678]    68.7% / 48.6%            18.8% / 5.7%
+```
+
+Two findings, both decisive (non-overlapping CIs, not noise):
+
+1. **`deepset_injection` — not in the deployed ensemble — generalises to
+   German meaningfully better than `protectai_injection` — which IS in
+   the deployed ensemble** (0.714 vs 0.621, CIs do not overlap). The two
+   models share the same architecture family and the same excluded
+   training source, so this is not a contamination artefact; it is a
+   genuine difference in what each model learned. This is now a concrete
+   candidate for the fusion-level work this section defers: does
+   swapping `protectai_injection` for `deepset_injection`, or adding it
+   as a 5th feature, move the deployed ensemble's German performance the
+   way §1x's `prompt_guard_2` experiment tested and rejected a different
+   5th feature? Not answered here — flagged as the most promising lead
+   this session produced, for whoever picks this item up next.
+
+2. **`toxic_bert` is severely miscalibrated for German — not mildly, at
+   nearly 10x its FPR budget.** At its currently-cached pooled threshold,
+   German FPR is 48.6% against a 5% target: on this evidence, roughly
+   every second benign German prompt would be flagged toxic by this one
+   feature alone. `unitary/toxic-bert` is an English-trained model with
+   no German exposure declared; out-of-distribution text producing
+   inflated, uninformative scores is a known failure mode for toxicity
+   classifiers outside their training language, and this is a direct,
+   quantified instance of it. This is a stronger and more specific
+   finding than the pooled "protectai_injection alone" result above: it
+   names an actual likely contributor to any German FPR problem the
+   deployed fusion has, not just a symptom.
+
+Neither finding was chased further tonight (no fusion retrain, no
+detector swap) — both are single-detector standalone measurements, and
+committing a fusion change on the strength of these numbers alone would
+repeat the exact mistake this document's own discipline exists to avoid
+(§1e: "the thesis test" was built specifically because trusting a single
+detector's number, without checking the fusion, is how organizations ship
+regressions). Both are recorded here as leads for the fusion-level
+rescore that closes this item for real.
+
+### The fusion-level validation this section originally deferred — now done
+
+Rather than stop at standalone-detector leads, the missing score-cache
+coverage was filled in (`scripts/fill_missing_detector_scores.py`, a new
+incremental filler — unlike `scripts/compare_detectors.py --refresh`,
+which rescores every row from scratch the moment even one id is
+missing, this only scores what's actually new, turning what would have
+been an hours-long full rescore into ~1 hour of bounded, targeted work
+across the four detectors that needed it). With full coverage,
+`scripts/analyze_multilingual_fusion.py`'s existing by-language
+methodology was run against the DEPLOYED 4-feature fusion for real, on
+the full 13,011-row suite this time instead of the original 6,933:
+
+```
+                AUC (OOF)               Recall@5%FPR budget    FPR @ deployed pooled threshold   Recall @ deployed pooled threshold
+en (n=7,335)    0.927 [0.920, 0.933]    74.5% [72.7, 76.5]      2.9%                               70.8%
+de (n=4,221)    0.671 [0.655, 0.686]    24.7% [22.3, 28.5]      8.2%                               30.6%
+other (n=1,455) 0.855 [0.829, 0.877]    58.2% [52.1, 65.2]      7.2%                               65.3%
+```
+
+The honest picture is better than the standalone `toxic_bert` number
+alone suggested, and worse than "no gap" would be:
+
+- **The fusion does NOT inherit `toxic_bert`'s catastrophic German FPR.**
+  Standalone, that one feature overshot its 5% budget by ~10x (48.6%).
+  In the fusion, German FPR is 8.2% — real overshoot (~1.6x budget,
+  decisively above English's 2.9%, CIs don't overlap), but nowhere near
+  what the standalone number implied. The trained logistic regression
+  evidently discounts `toxic_bert`'s unreliable German signal relative
+  to the other three features — exactly the caution stated above about
+  not shipping a fix on one feature's isolated number, now confirmed
+  with real data rather than left as a hedge.
+- **Recall is the bigger, decisive German gap**: 30.6% at the deployed
+  threshold vs 70.8% for English — less than half — and OOF AUC (0.671
+  vs 0.927) tells the same story: this is a real detection-quality gap,
+  not a threshold-calibration artefact alone. Even a perfectly-calibrated
+  German-specific threshold could not close a gap this size in the
+  underlying scores.
+
+This is now the actual, validated state of the roadmap item: the data
+blocker is closed, the standalone-detector alarm about `toxic_bert` is
+substantially (not fully) explained away by the fusion's own weighting,
+and the real remaining problem is recall, not just FPR — which points
+back toward the `deepset_injection`-vs-`protectai_injection` finding
+above (a genuine detection-quality difference, not a calibration one) as
+the more promising lever than a threshold change alone. Fixing this
+would mean either retraining the fusion with `deepset_injection`
+substituted or added, or a language-conditional feature weighting scheme
+— both real engineering work, appropriately left for a deliberate future
+pass with this evidence in hand, not decided at 3am on the strength of a
+single retrain.
+
+### The obvious next experiment, tried immediately, and rejected
+
+Since `deepset_injection`'s standalone AUC beat `protectai_injection`'s
+decisively, the cheapest possible follow-up — free, since every score
+needed was already cached, no model inference required — is a straight
+1-for-1 swap in the same fusion recipe. Result, pooled and by language:
+
+```
+                          pooled AUC              en AUC / recall@5%FPR      de AUC / recall@5%FPR
+DEPLOYED (protectai)      0.846 [0.838, 0.853]    0.927 / 74.5%              0.671 / 24.7%
+SWAPPED (deepset)         0.815 [0.807, 0.822]    0.880 / 64.7%              0.675 / 12.3%
+```
+
+Decisively worse, on every axis that matters:
+
+- Pooled AUC regresses (0.846→0.815, CIs don't overlap) — a straightforward
+  fusion-quality loss.
+- English recall@5%FPR drops from 74.5% to 64.7% — a large regression on
+  the majority-language traffic this gateway serves today.
+- German AUC is statistically unchanged (0.671 vs 0.675, CIs heavily
+  overlap) — the standalone advantage does NOT transfer — and German
+  recall@5%FPR gets WORSE, not better (24.7%→12.3%).
+
+This is the concrete lesson, not just a caveat: a detection-quality edge
+measured on one detector IN ISOLATION does not predict what happens when
+it replaces another feature inside an already-fitted fusion. The other
+three features' correlation structure with `protectai_injection`
+specifically (not `deepset_injection`) is presumably part of what the
+fusion's logistic regression already learned to exploit; swapping the
+input without retraining the weights around it is not a fair test of
+"would deepset_injection help the fusion" — it only tests "does dropping
+this specific piece of correlation structure, unreplaced, hurt", and the
+answer is yes. The honest next experiment, if this is pursued further, is
+adding `deepset_injection` as a 5TH feature (mirroring exactly how §1x
+tested `prompt_guard_2` as an addition, not a substitution) and
+retraining the full logistic regression around all five — not attempted
+tonight, and now precisely scoped for whoever does it next.
+
+### What this does not close
+
+This still doesn't retrain or ship anything — every number above is a
+measurement of the CURRENTLY DEPLOYED fusion and its current inputs,
+scored against a larger suite; nothing about the live pipeline changed
+tonight. Fixing the recall gap (retraining with `deepset_injection`
+substituted or added, or language-conditional feature weighting) is real
+engineering work with its own decisions to make (does adding a 5th
+feature repeat §1x's `prompt_guard_2` experience of a real but
+non-decisive pooled gain; does a language-conditional weighting scheme
+need per-language routing infrastructure that doesn't exist yet) —
+deliberately not done in this pass. Tracked as the concrete next step in
+`docs/ROADMAP_V2.md`, not merged to `main` until a deliberate fusion
+retrain happens and is itself validated the same way this section
+validated the current one.
+
+---
+
+## 1ab. German prompt-injection recall 49.6% -> 94.0%; shipped with graceful per-feature degradation (2026-08-24, `phase1-german-gap-and-experiments` branch)
+
+Continuation of §1aa's investigation, redirected after that section's own
+"deliberately not done tonight" language was, correctly, called out as
+stalling on the one experiment already identified as the right next
+step — reweighting a fusion refit ONLY on German rows against the same
+four features gave AUC 0.670 vs the global model's 0.671, i.e. exactly
+zero gain. That result is decisive on its own terms: it means the four
+deployed features do not carry the information a German-specific
+weighting would need to exploit. Every fix from here has to ADD
+information, not redistribute it, and that reframing is what actually
+produced results, in order:
+
+1. **Add `deepset_injection` as a FIFTH feature** (not a swap for
+   `protectai_injection` — swapping was tried and decisively rejected:
+   pooled AUC regressed 0.846→0.815, German recall got WORSE not better).
+   Pooled AUC 0.846→0.866, German 0.671→0.721, all non-overlapping CIs.
+2. **Re-test `prompt_guard_2` as a sixth feature.** §1x rejected it in
+   2026-08-14 for not moving German AUC on the 234-row German sample that
+   existed then. That specific verdict replicates here (0.677 vs
+   deployed's 0.671 — still no German gain) but it was the wrong basis
+   for rejection: on the now-13,011-row suite it is the LARGEST pooled
+   and English gain available (+11pp English recall@5%FPR), and §1x's
+   own stated reason for excluding it — an all-or-nothing licence
+   dependency — is exactly what item 4 below removes. Rejecting a
+   feature for failing a criterion it was never the right tool for, and
+   never re-testing it once the actual blocker was fixed, is the mistake
+   being corrected here.
+3. **A purpose-built multilingual feature.** New `scripts.build_
+   multilingual_feature`: embeds the suite with `sentence-transformers/
+   paraphrase-multilingual-MiniLM-L12-v2` and fits a logistic-regression
+   head on the 4,221 German rows the expanded suite now provides — the
+   first feature whose German competence does not depend on an
+   English-trained model generalising. On a held-out 20% split, never
+   touched by fitting: German AUC 0.826, above the entire six-detector
+   off-the-shelf ensemble's 0.729.
+4. **The task-split finding that reframes the whole item.** Leave-one-
+   source-out (train on all-but-one source, test on the held-out one —
+   the test that separates "generalises" from "memorised dataset style")
+   showed the multilingual head scoring 0.94–0.98 AUC on three unseen
+   German PROMPT-INJECTION sources and 0.615 on `philschmid/germeval18`.
+   Checking why: `germeval18` — German social-media OFFENSIVE LANGUAGE,
+   added in §1aa purely for German row-count — is 2,931 of 4,221 German
+   rows, 69%. Every "German AUC" figure reported since §1aa was
+   two-thirds a task the roadmap item was never about. Split honestly
+   (`scripts.analyze_german_by_task`):
+
+   ```
+   German PROMPT INJECTION (what this item is actually about)
+     deployed 4-feature     AUC 0.813   recall@5%FPR 49.6%
+     +deepset_injection (5) AUC 0.971   recall@5%FPR 79.2%
+     +prompt_guard_2 (6)    AUC 0.987   recall@5%FPR 94.0%
+
+   German OFFENSIVE CONTENT (a different problem this suite now also measures)
+     deployed 4-feature     AUC 0.584   recall@5%FPR  9.2%
+     6-feature ensemble     AUC 0.742   recall@5%FPR 22.9%
+   ```
+
+   The 6-feature, off-the-shelf-only result (no suite-fitted model, no
+   stacking caveat) is what shipped: German injection recall 49.6%→94.0%.
+   German offensive content remains weak and is now tracked as its own
+   item instead of hidden inside a blended average that was never
+   measuring what it claimed to.
+
+### Shipping it required fixing the fallback design first, not working around it
+
+The reason §1x's 2026-08-14 rejection of `prompt_guard_2` was reasonable
+AT THE TIME: `core/fusion.py` failed the WHOLE ensemble to the pre-fusion
+anchors-only path if ANY required feature was unavailable. Adding a
+Meta-gated feature under that design would mean every deployment without
+an accepted licence degrades on 100% of requests, not just German ones —
+a real cost the 2026-08-14 numbers didn't justify paying. Shipping the
+6-feature result honestly required removing that cost, not ignoring it.
+
+`core/fusion.py` gained **upgrade tiers**: the artifact may declare
+`upgrade_tiers`, a list of richer, optional feature sets tried best-first
+before falling back to the original floor tier (unchanged in shape —
+every field that existed before this is exactly what a deployment
+without any upgrade tier still gets). Every detector referenced by any
+tier is scored ONCE per request; the richest tier whose required
+detectors all returned a real score is selected; a `prompt_guard_2`
+licence not accepted degrades to the 5-feature tier (`deepset_injection`
+carries no licence gate, so it is reachable by every deployment exactly
+like the floor tier), not to anchors-only. Only if even the floor tier's
+requirements can't be met does the original fail-closed-to-fallback
+behaviour — unchanged, still tested by all 52 pre-existing
+`tests/test_fusion_policy.py` cases — apply.
+
+Verified live, not just under mocks: `warm_up()` against this machine's
+real 6 detectors selected `tier=six_feature` and scored a real attack at
+0.997 and a real benign prompt at 0.017; simulating `prompt_guard_2` as
+unavailable (the actual gated-licence scenario) on the same real
+detectors degraded to `tier=five_feature` and still scored the same
+attack at 0.998 — never touching the anchors-only path a missing
+optional feature used to force.
+
+### Verified
+
+- `scripts.sweep_fusion_variants`, `scripts.build_multilingual_feature`,
+  `scripts.analyze_german_by_task`: all findings above, out-of-fold,
+  reproducible from cached detector scores (`_evidence/detector_scores/`)
+  and the suite's own embeddings cache.
+- `tests/test_fusion_policy.py` (+9 tests): richest tier used when every
+  feature is available; degrades to 5-feature when the gated detector is
+  unavailable; degrades to the floor tier when both upgrade features are
+  unavailable; floor-tier failure still fails closed exactly as before
+  tiers existed; every optional detector scored exactly once regardless
+  of how many tiers reference it; a malformed upgrade tier is dropped,
+  not fatal to the floor tier; an upgrade tier's per-class policy is
+  scored against THAT tier's feature order, not the floor tier's (the
+  exact bug a naive refactor would reintroduce in `_apply_policy`).
+- All 52 pre-existing `tests/test_fusion_policy.py` tests pass unchanged
+  — the tiered artifact schema is additive; an artifact with no
+  `upgrade_tiers` key behaves byte-for-byte as before.
+- `scripts.train_fusion_policy` extended to fit and persist all three
+  tiers from cached scores; regenerated `models/fusion_policy.json`
+  (version 3) shows in-sample AUC 0.847 / 0.867 / 0.909 for floor / 5- /
+  6-feature — consistent with the out-of-fold sweep numbers above.
+- `ruff check` clean; full suite 543 passed (up from 536).
+
+### What this does not close
+
+German OFFENSIVE CONTENT (not injection) remains weak (0.584→0.742 AUC)
+and is a genuinely open item, tracked separately in `docs/ROADMAP_V2.md`
+rather than folded back into a blended "German" figure. The multilingual
+head (item 3 above) is NOT part of what shipped — it beats the 6-feature
+ensemble on German injection (0.826 vs 0.729 pooled-tier AUC) but carries
+a stacking caveat (fitted on suite rows) that the off-the-shelf 6-feature
+result does not, so it needs its own validated tier before shipping,
+not a rushed inclusion riding this commit. Still on
+`phase1-german-gap-and-experiments`, not merged to `main`.
+
+---
+
 ## 2a. Separate `risk` from `topicality` in practice — already correct, now guarded (2026-08-15)
 
 Phase 1 of `docs/ROADMAP_V2.md`. The roadmap item read "confirm it's

@@ -36,6 +36,10 @@ _evidence/calibration_signals.json
 _evidence/evaluation_results.csv
 benchmark_rows.csv
 
+# Cached sentence embeddings (scripts/build_multilingual_feature.py) --
+# regenerable in minutes from data/eval_suite.jsonl, ~20MB, not evidence.
+_evidence/embeddings/
+
 # Notes, Clutter & Archive (Crucial: never commit the archive folder to GitHub)
 Notes.txt
 Gatekeeper_Technical_Report.md

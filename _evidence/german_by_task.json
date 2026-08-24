@@ -1,0 +1,133 @@
+{
+  "n_de_injection": 1263,
+  "n_de_offensive": 2958,
+  "fpr_budget": 0.05,
+  "variants": {
+    "deployed_4": {
+      "german_injection": {
+        "n": 1263,
+        "n_attack": 653,
+        "auc": {
+          "point": 0.8134712424371752,
+          "lo": 0.7883612255471552,
+          "hi": 0.834916566774166,
+          "n": 1263,
+          "n_boot_effective": 500,
+          "ci_level": 0.95
+        },
+        "recall_at_fpr": {
+          "point": 0.49617151607963245,
+          "lo": 0.4400656814449918,
+          "hi": 0.5490506329113924,
+          "n": 1263,
+          "n_boot_effective": 500,
+          "ci_level": 0.95
+        }
+      },
+      "german_offensive": {
+        "n": 2958,
+        "n_attack": 1002,
+        "auc": {
+          "point": 0.5836552865638865,
+          "lo": 0.5631625301250426,
+          "hi": 0.6027609532435186,
+          "n": 2958,
+          "n_boot_effective": 500,
+          "ci_level": 0.95
+        },
+        "recall_at_fpr": {
+          "point": 0.09181636726546906,
+          "lo": 0.06542056074766354,
+          "hi": 0.1346153846153846,
+          "n": 2958,
+          "n_boot_effective": 500,
+          "ci_level": 0.95
+        }
+      }
+    },
+    "plus_both_6": {
+      "german_injection": {
+        "n": 1263,
+        "n_attack": 653,
+        "auc": {
+          "point": 0.9708106343986143,
+          "lo": 0.961600156887986,
+          "hi": 0.9791944149858515,
+          "n": 1263,
+          "n_boot_effective": 500,
+          "ci_level": 0.95
+        },
+        "recall_at_fpr": {
+          "point": 0.7917304747320061,
+          "lo": 0.7296875,
+          "hi": 0.8923076923076924,
+          "n": 1263,
+          "n_boot_effective": 500,
+          "ci_level": 0.95
+        }
+      },
+      "german_offensive": {
+        "n": 2958,
+        "n_attack": 1002,
+        "auc": {
+          "point": 0.5973533505585965,
+          "lo": 0.5753418803418804,
+          "hi": 0.6175486549250909,
+          "n": 2958,
+          "n_boot_effective": 500,
+          "ci_level": 0.95
+        },
+        "recall_at_fpr": {
+          "point": 0.11776447105788423,
+          "lo": 0.09,
+          "hi": 0.14564102564102563,
+          "n": 2958,
+          "n_boot_effective": 500,
+          "ci_level": 0.95
+        }
+      }
+    },
+    "all_7": {
+      "german_injection": {
+        "n": 1263,
+        "n_attack": 653,
+        "auc": {
+          "point": 0.9874074260035649,
+          "lo": 0.9824349367496575,
+          "hi": 0.9918211970450777,
+          "n": 1263,
+          "n_boot_effective": 500,
+          "ci_level": 0.95
+        },
+        "recall_at_fpr": {
+          "point": 0.9402756508422665,
+          "lo": 0.9049919484702094,
+          "hi": 0.9736024844720497,
+          "n": 1263,
+          "n_boot_effective": 500,
+          "ci_level": 0.95
+        }
+      },
+      "german_offensive": {
+        "n": 2958,
+        "n_attack": 1002,
+        "auc": {
+          "point": 0.7416644216679116,
+          "lo": 0.7214842622754771,
+          "hi": 0.760772792022792,
+          "n": 2958,
+          "n_boot_effective": 500,
+          "ci_level": 0.95
+        },
+        "recall_at_fpr": {
+          "point": 0.22854291417165667,
+          "lo": 0.1945288753799392,
+          "hi": 0.2701923076923077,
+          "n": 2958,
+          "n_boot_effective": 500,
+          "ci_level": 0.95
+        }
+      }
+    }
+  }
+}
