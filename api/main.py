@@ -835,7 +835,20 @@ async def gateway_chat(req: GatewayChatRequest, request: Request, background_tas
 
 
 @app.post("/api/v1/cache/flush")
-def flush_semantic_cache():
+def flush_semantic_cache(request: Request):
+    """
+    INTERNAL capability required — same bar as the review endpoints above.
+    Previously had no check at all (issue #5): any unauthenticated caller
+    could repeatedly flush the semantic cache, forcing every subsequent
+    request to pay the uncached detection cost again — a latency/cost
+    amplification vector, not just an inconvenience.
+    """
+    principal = resolve_principal(authorization=request.headers.get("Authorization"))
+    if principal.capability != CAPABILITY_INTERNAL:
+        raise HTTPException(
+            status_code=403,
+            detail="INTERNAL capability required to flush the semantic cache.",
+        )
     flush_cache()
     return {"status": "success"}
 
