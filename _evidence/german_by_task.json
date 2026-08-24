@@ -128,6 +128,132 @@
           "ci_level": 0.95
         }
       }
+    },
+    "shipped_6": {
+      "german_injection": {
+        "n": 1263,
+        "n_attack": 653,
+        "auc": {
+          "point": 0.9708106343986143,
+          "lo": 0.961600156887986,
+          "hi": 0.9791944149858515,
+          "n": 1263,
+          "n_boot_effective": 500,
+          "ci_level": 0.95
+        },
+        "recall_at_fpr": {
+          "point": 0.7917304747320061,
+          "lo": 0.7296875,
+          "hi": 0.8923076923076924,
+          "n": 1263,
+          "n_boot_effective": 500,
+          "ci_level": 0.95
+        }
+      },
+      "german_offensive": {
+        "n": 2958,
+        "n_attack": 1002,
+        "auc": {
+          "point": 0.5973533505585965,
+          "lo": 0.5753418803418804,
+          "hi": 0.6175486549250909,
+          "n": 2958,
+          "n_boot_effective": 500,
+          "ci_level": 0.95
+        },
+        "recall_at_fpr": {
+          "point": 0.11776447105788423,
+          "lo": 0.09,
+          "hi": 0.14564102564102563,
+          "n": 2958,
+          "n_boot_effective": 500,
+          "ci_level": 0.95
+        }
+      }
+    },
+    "plus_german_tox_8": {
+      "german_injection": {
+        "n": 1263,
+        "n_attack": 653,
+        "auc": {
+          "point": 0.9650064017272111,
+          "lo": 0.954339900088631,
+          "hi": 0.9738523557571177,
+          "n": 1263,
+          "n_boot_effective": 500,
+          "ci_level": 0.95
+        },
+        "recall_at_fpr": {
+          "point": 0.7090352220520674,
+          "lo": 0.6240369799691834,
+          "hi": 0.8180379746835443,
+          "n": 1263,
+          "n_boot_effective": 500,
+          "ci_level": 0.95
+        }
+      },
+      "german_offensive": {
+        "n": 2958,
+        "n_attack": 1002,
+        "auc": {
+          "point": 0.741482270632559,
+          "lo": 0.7229624491118628,
+          "hi": 0.758316254219057,
+          "n": 2958,
+          "n_boot_effective": 500,
+          "ci_level": 0.95
+        },
+        "recall_at_fpr": {
+          "point": 0.16666666666666666,
+          "lo": 0.13136456211812628,
+          "hi": 0.20079129574678536,
+          "n": 2958,
+          "n_boot_effective": 500,
+          "ci_level": 0.95
+        }
+      }
+    },
+    "no_toxic_bert_plus_german_tox_7": {
+      "german_injection": {
+        "n": 1263,
+        "n_attack": 653,
+        "auc": {
+          "point": 0.9661863279190621,
+          "lo": 0.9565842135355541,
+          "hi": 0.9743479571837781,
+          "n": 1263,
+          "n_boot_effective": 500,
+          "ci_level": 0.95
+        },
+        "recall_at_fpr": {
+          "point": 0.7105666156202144,
+          "lo": 0.6479076479076479,
+          "hi": 0.8179148311306902,
+          "n": 1263,
+          "n_boot_effective": 500,
+          "ci_level": 0.95
+        }
+      },
+      "german_offensive": {
+        "n": 2958,
+        "n_attack": 1002,
+        "auc": {
+          "point": 0.7195634293784618,
+          "lo": 0.699830243986906,
+          "hi": 0.7373076781920425,
+          "n": 2958,
+          "n_boot_effective": 500,
+          "ci_level": 0.95
+        },
+        "recall_at_fpr": {
+          "point": 0.06986027944111776,
+          "lo": 0.04405737704918033,
+          "hi": 0.10531400966183575,
+          "n": 2958,
+          "n_boot_effective": 500,
+          "ci_level": 0.95
+        }
+      }
     }
   }
 }

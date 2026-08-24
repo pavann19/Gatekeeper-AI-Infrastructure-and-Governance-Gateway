@@ -35,6 +35,7 @@ declared sources, and any number that ignores this is not a fair comparison.
 """
 from __future__ import annotations
 
+import json
 import os
 import threading
 
@@ -211,6 +212,116 @@ class TransformerDetector(Detector):
                 positive = probs[:, self._positive_ids].max(dim=-1).values
                 scores.extend(positive.tolist())
         return scores
+
+
+# ---------------------------------------------------------------------------
+# Embedding + fitted-head detectors (this project's own multilingual head)
+# ---------------------------------------------------------------------------
+
+class EmbeddingHeadDetector(Detector):
+    """
+    Wraps a sentence-embedding model plus a small logistic-regression head
+    FITTED ON THIS PROJECT'S OWN eval suite (`scripts.train_multilingual_
+    head_artifact`) — structurally different from every other detector in
+    this registry, which are all pretrained third-party classifiers used
+    as-is. This is the multilingual-injection/offensive-content feature
+    from issue #4: an off-the-shelf English-trained classifier has no
+    reason to generalise to German, so this one is trained directly on
+    the German (and other-language) rows the suite now provides.
+
+    WHY `trained_on` IS MEANINGLESS HERE, NOT JUST EMPTY
+    -------------------------------------------------------
+    Every other detector's `trained_on` names eval-suite sources to
+    EXCLUDE from its own evaluation (contamination). This detector's
+    artifact is refit on 100% of `data/eval_suite.jsonl` by design (see
+    `scripts.train_multilingual_head_artifact`'s docstring) — there is no
+    subset of the suite this detector wasn't trained on, so declaring a
+    `trained_on` exclusion list would be meaningless; the correct
+    exclusion is "the entire suite, always, for this detector specifically."
+    Its unbiased numbers come from splits done BEFORE the deployed refit
+    (`scripts.build_multilingual_feature`'s held-out test and leave-one-
+    source-out; `scripts.validate_multilingual_head_nested`'s fully
+    disjoint three-way split), never from scoring the deployed artifact
+    against the suite directly.
+
+    PERSISTENCE: PLAIN JSON, SAME REASONING AS `models/fusion_policy.json`
+    --------------------------------------------------------------------
+    A scaler + logistic regression over a fixed-size embedding is a
+    handful of numbers per dimension — applying them by hand at inference
+    time (see `_apply_head` below) avoids tying this detector's runtime to
+    the exact sklearn/Python version that trained the artifact.
+    """
+
+    def __init__(self, name, artifact_path, targets, description=""):
+        self.name = name
+        self.artifact_path = artifact_path
+        self.targets = tuple(targets)
+        self.trained_on = ()  # see class docstring — this field doesn't apply here
+        self.description = description
+        self._encoder = None
+        self._artifact = None
+        self._lock = threading.Lock()
+        self._load_error = None
+
+    def _load(self):
+        if self._encoder is not None or self._load_error is not None:
+            return
+        with self._lock:
+            if self._encoder is not None or self._load_error is not None:
+                return
+            try:
+                if not os.path.exists(self.artifact_path):
+                    raise FileNotFoundError(
+                        f"{self.artifact_path} not found. Train it with: "
+                        f"python -m scripts.train_multilingual_head_artifact"
+                    )
+                with open(self.artifact_path, "r", encoding="utf-8") as f:
+                    artifact = json.load(f)
+                required = {"model_id", "scaler_mean", "scaler_scale", "coefficients", "intercept"}
+                missing = required - set(artifact)
+                if missing:
+                    raise ValueError(f"artifact missing fields: {sorted(missing)}")
+                n = len(artifact["scaler_mean"])
+                if not (len(artifact["scaler_scale"]) == len(artifact["coefficients"]) == n):
+                    raise ValueError("scaler/coefficients length mismatch")
+
+                from sentence_transformers import SentenceTransformer
+                logger.info(f"Loading detector '{self.name}' ({artifact['model_id']})...")
+                self._encoder = SentenceTransformer(artifact["model_id"])
+                self._artifact = artifact
+            except Exception as e:
+                self._load_error = f"{type(e).__name__}: {str(e)[:200]}"
+                logger.warning(f"Detector '{self.name}' unavailable: {self._load_error}")
+
+    def available(self):
+        self._load()
+        if self._load_error:
+            return False, self._load_error
+        return True, f"loaded {self._artifact['model_id']} + {self.artifact_path}"
+
+    def _apply_head(self, vec):
+        import math
+        a = self._artifact
+        z = a["intercept"]
+        for x, mean, scale, coef in zip(vec, a["scaler_mean"], a["scaler_scale"], a["coefficients"]):
+            standardized = (x - mean) / scale if scale else 0.0
+            z += coef * standardized
+        if z < -60:
+            return 0.0
+        if z > 60:
+            return 1.0
+        return 1.0 / (1.0 + math.exp(-z))
+
+    def score_batch(self, texts, batch_size=64):
+        self._load()
+        if self._encoder is None:
+            raise RuntimeError(f"detector '{self.name}' unavailable: {self._load_error}")
+
+        vecs = self._encoder.encode(
+            [t if t.strip() else " " for t in texts],
+            batch_size=batch_size, convert_to_numpy=True, normalize_embeddings=True,
+        )
+        return [self._apply_head(v) for v in vecs]
 
 
 # ---------------------------------------------------------------------------
@@ -748,6 +859,50 @@ def _build_registry():
             targets=(CLASS_HARMFUL,),
             multi_label=True,
             description="Unitary toxic-bert, multi-label toxicity",
+        ),
+
+        # German-specific toxicity/offensive-language classifiers (issue #3:
+        # `toxic_bert` above is English-trained and measured severely
+        # miscalibrated on German — 48.6% FPR standalone against a 5% budget,
+        # docs/ENGINEERING_ASSESSMENT.md §1aa). `trained_on=()` here is
+        # UNKNOWN-not-verified-clean, same honest caveat NemoGuardJailbreak-
+        # Detector's own docstring uses — neither model card names
+        # philschmid/germeval18 explicitly, but neither publishes a full
+        # training-data manifest either, so this is not the same guarantee
+        # as protectai_injection/deepset_injection's own `trained_on`
+        # declarations, which come from reading the paper/card directly.
+        "german_toxicity_eistakovskii": TransformerDetector(
+            name="german_toxicity_eistakovskii",
+            model_id="EIStakovskii/german_toxicity_classifier_plus_v2",
+            positive_labels=["toxic"],
+            targets=(CLASS_HARMFUL,),
+            description="German BERT toxicity classifier (dbmdz/bert-base-german-cased "
+                        "fine-tune; trained_on unknown, not verified clean)",
+        ),
+        "german_toxicity_ankekat": TransformerDetector(
+            name="german_toxicity_ankekat",
+            model_id="ankekat1000/toxic-bert-german",
+            positive_labels=["toxic"],
+            targets=(CLASS_HARMFUL,),
+            description="German BERT toxicity classifier (deepset/bert-base-german-cased "
+                        "fine-tune; trained_on unknown, not verified clean)",
+        ),
+
+        # --- This project's own multilingual head (issue #4) ---
+        # Fitted on data/eval_suite.jsonl itself, not a pretrained public
+        # classifier — see EmbeddingHeadDetector's docstring for why
+        # `trained_on` doesn't apply the normal way here, and why this
+        # detector's unbiased numbers come from splits done BEFORE its
+        # deployed refit, never from scoring it against the suite directly.
+        "multilingual_head": EmbeddingHeadDetector(
+            name="multilingual_head",
+            artifact_path=os.path.join("models", "multilingual_head.json"),
+            targets=(CLASS_INJECTION, CLASS_HARMFUL),
+            description="Multilingual sentence-embedding + logistic-regression head, "
+                        "fitted on this project's own eval suite (scripts.train_"
+                        "multilingual_head_artifact) — closes the residual German gap "
+                        "off-the-shelf English-trained detectors cannot (nested-"
+                        "validated, see docs/ENGINEERING_ASSESSMENT.md).",
         ),
 
         # --- Established vendor framework, open licence (benchmark target) ---
