@@ -175,6 +175,7 @@
 
   <div class="lookup-row">
     <input type="text" id="requestIdInput" placeholder="request_id (e.g. from an activity feed row, or a caller's own logs)">
+    <input type="text" id="tenantInput" placeholder="tenant (INTERNAL only)" style="max-width:200px; display:none;">
     <button class="btn-primary" id="lookupBtn">Trace</button>
   </div>
 
@@ -203,6 +204,7 @@ const traceList = document.getElementById('traceList');
 const emptyState = document.getElementById('emptyState');
 const lookupBtn = document.getElementById('lookupBtn');
 const requestIdInput = document.getElementById('requestIdInput');
+const tenantInput = document.getElementById('tenantInput');
 const signOutBtn = document.getElementById('signOutBtn');
 const identityChip = document.getElementById('identityChip');
 const navLinks = document.getElementById('navLinks');
@@ -279,8 +281,12 @@ async function runTrace() {
   lookupBtn.disabled = true;
   lookupBtn.innerHTML = '<span class="gk-spinner"></span>Tracing…';
   try {
-    const res = await fetch(API_BASE + '/api/v1/activity/trace/' + encodeURIComponent(requestId),
-      { headers: gkAuthHeaders() });
+    const params = new URLSearchParams();
+    if (tenantInput.value.trim()) params.set('tenant', tenantInput.value.trim());
+    const res = await fetch(
+      API_BASE + '/api/v1/activity/trace/' + encodeURIComponent(requestId) + '?' + params.toString(),
+      { headers: gkAuthHeaders() }
+    );
     if (res.status === 401) { gkSignOut(); return; }
     if (!res.ok) {
       showBanner('Request failed: HTTP ' + res.status, true);
@@ -308,8 +314,14 @@ signOutBtn.addEventListener('click', gkSignOut);
   navLinks.innerHTML = gkNavLinks(identity, 'trace');
   identityChip.innerHTML = '<b>' + escapeHtml(identity.key_id) + '</b> · ' + escapeHtml(identity.tenant) + ' · ' + escapeHtml(identity.capability);
 
+  if (identity.capability === 'INTERNAL') {
+    tenantInput.style.display = '';
+  }
+
   const params = new URLSearchParams(window.location.search);
   const prefill = params.get('request_id');
+  const tenantPrefill = params.get('tenant');
+  if (tenantPrefill) tenantInput.value = tenantPrefill;
   if (prefill) {
     requestIdInput.value = prefill;
     runTrace();
