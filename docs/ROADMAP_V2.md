@@ -292,7 +292,7 @@ your own LLM call, and starts being infrastructure you route through — a
 real architectural shift, not an incremental feature. Scope and benchmark
 incrementally rather than building it in one push.
 
-## Phase 6 — Tool / Agent Gateway (1/6 done)
+## Phase 6 — Tool / Agent Gateway (2/6 done)
 Original estimate: ~35–55h — the single largest new subsystem
 
 - [x] Tool registry + schemas — done 2026-08-24, see `core/tools.py`.
@@ -311,14 +311,20 @@ Original estimate: ~35–55h — the single largest new subsystem
       merge (a JSON `true` would have silently passed an integer-typed
       argument check — `isinstance(True, int)` is `True` in Python).
       590 passed overall (up from 560).
-- [~] Allow/deny, argument validation — argument validation's STRUCTURAL
-      half (required fields, types, enums) already exists via `core/
-      tools.py::validate_arguments`, built alongside the registry above
-      since a schema with nothing checking against it isn't very useful.
-      What remains: semantic/business-rule validation (tool-specific,
-      needs a real tool to define), and allow/deny entirely (capability-
-      based tool access, mirroring `core/policy.py`'s existing pattern —
-      not started).
+- [x] Allow/deny, argument validation — done 2026-08-24, see `core/
+      tools.py::check_tool_access`. Capability-based, minimum-privilege
+      rank (`CAPABILITY_RANK`) reusing GENERAL/ELEVATED/INTERNAL, matching
+      the ordering every policy actually shipped in this project follows
+      in practice (documented as an observed convention, not a structural
+      guarantee `core/policy.py`'s per-tenant JSON config could ever
+      technically violate). Unrecognised capability values are denied,
+      not defaulted to the lowest tier — fail closed. Argument validation
+      covers structural checks only (required fields, types, enums);
+      semantic/business-rule validation is inherently per-tool and
+      deliberately deferred until a real tool exists to define it — that
+      was never really a generic-gateway feature to begin with (the same
+      scope OpenAI's own function-calling structural validation has). 6
+      new tests, 596 passed overall (up from 590).
 - [ ] Risk levels, approval requirement
 - [ ] Sandboxed demo tools
 - [ ] Audit events
