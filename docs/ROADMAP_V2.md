@@ -292,7 +292,7 @@ your own LLM call, and starts being infrastructure you route through — a
 real architectural shift, not an incremental feature. Scope and benchmark
 incrementally rather than building it in one push.
 
-## Phase 6 — Tool / Agent Gateway (5/6 done)
+## Phase 6 — Tool / Agent Gateway (6/6 done)
 Original estimate: ~35–55h — the single largest new subsystem
 
 - [x] Tool registry + schemas — done 2026-08-24, see `core/tools.py`.
@@ -385,7 +385,38 @@ Original estimate: ~35–55h — the single largest new subsystem
       order, no-hash-when-no-arguments) and the wiring (exactly one
       event per `execute_tool` call, on every branch). 643 passed
       overall (up from 628).
-- [ ] MCP compatibility (explicitly deferred to after the above is solid)
+- [x] MCP compatibility — done 2026-08-24, see `core/mcp_compat.py`. Scoped
+      honestly as PROTOCOL-SHAPE compatibility, not a transport server:
+      `tool_spec_to_mcp`/`list_mcp_tools` produce MCP's `Tool` descriptor
+      shape (close to a field rename, not real translation logic, because
+      `ToolSpec.parameters` was JSON-Schema-shaped from the very first
+      commit in this phase specifically so this step would be cheap), and
+      `handle_mcp_tool_call` routes every call through `execute_tool`'s
+      full pipeline (access, validation, risk, execution, audit)
+      unchanged, reshaping the result into MCP's `CallToolResult`. A real
+      stdio/SSE MCP server — the actual transport layer — is explicitly
+      NOT built here: that is separate infrastructure with its own
+      integration surface, belonging to whichever deployment actually
+      needs to expose these tools over MCP, not to a compatibility layer
+      built speculatively ahead of one. One stated, real protocol
+      limitation: MCP's `CallToolResult` only distinguishes success from
+      error, so Gatekeeper's BLOCK and REVIEW both become `isError: true`
+      — the full decision is still completely audited underneath either
+      way, only the MCP-facing response loses that distinction, because
+      MCP's own shape has nowhere to put it. 14 new tests, 657 passed
+      overall (up from 643).
+
+**Phase 6 (Tool / Agent Gateway) is now complete, 6/6.** Registry and
+schemas, allow/deny, risk-based approval, sandboxed demo tools, audit
+events, and MCP-shape compatibility — built in that order specifically
+so each item was driven by what using the previous one actually needed,
+never speculatively ahead of a real caller. What remains genuinely
+unbuilt and out of this phase's scope: a real MCP transport server, a
+production HTTP endpoint for tool calls (nothing in `api/main.py` calls
+`execute_tool` yet), wiring REVIEW decisions into `core/review_queue.py`
+(deliberately deferred in the risk-based-approval item's own writeup),
+and any real (non-demo) tool. Those are the natural next steps once an
+actual deployment needs one of them.
 
 ## Phase 7 — UI Integration
 Original estimate: ~40–65h combined — deferred until engine + gateways are solid
