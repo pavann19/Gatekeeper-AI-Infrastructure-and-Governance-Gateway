@@ -474,3 +474,180 @@ def test_v1_artifact_without_per_class_still_works(artifact_file, monkeypatch):
     assert result["available"] is True
     assert result["triggering_class"] is None
     assert result["threshold_high"] == ARTIFACT["threshold_high"]
+
+
+# --- upgrade tiers: graceful per-feature degradation -------------------------
+#
+# Before this, ANY missing required feature dropped the whole ensemble to
+# anchors-only (core/risk.py's fallback), all-or-nothing. Upgrade tiers add
+# richer, optional feature sets tried best-first; only if even the floor
+# tier (the original 4-feature policy, unchanged) can't be met does the old
+# fail-closed-to-fallback behaviour above still apply.
+
+UPGRADE_TIER_5 = {
+    "tier_id": "five_feature",
+    "feature_order": ["anchors", "protectai_injection", "madhurjindal_jailbreak",
+                      "toxic_bert", "deepset_injection"],
+    "scaler_mean": [0.2, 0.1, 0.1, 0.05, 0.1],
+    "scaler_scale": [0.25, 0.2, 0.2, 0.1, 0.2],
+    "coefficients": [1.0, 1.0, 0.5, 0.5, 2.0],
+    "intercept": -1.5,
+    "threshold_high": 0.30,
+    "threshold_medium": 0.12,
+}
+
+UPGRADE_TIER_6 = {
+    "tier_id": "six_feature",
+    "feature_order": ["anchors", "protectai_injection", "madhurjindal_jailbreak",
+                      "toxic_bert", "deepset_injection", "prompt_guard_2"],
+    "scaler_mean": [0.2, 0.1, 0.1, 0.05, 0.1, 0.1],
+    "scaler_scale": [0.25, 0.2, 0.2, 0.1, 0.2, 0.2],
+    "coefficients": [1.0, 1.0, 0.5, 0.5, 1.5, 1.5],
+    "intercept": -1.8,
+    "threshold_high": 0.35,
+    "threshold_medium": 0.15,
+}
+
+TIERED_ARTIFACT = {**ARTIFACT, "upgrade_tiers": [UPGRADE_TIER_6, UPGRADE_TIER_5]}
+
+
+@pytest.fixture
+def tiered_artifact_file(tmp_path, monkeypatch):
+    path = tmp_path / "fusion_policy.json"
+    path.write_text(json.dumps(TIERED_ARTIFACT), encoding="utf-8")
+    monkeypatch.setattr(fusion_mod, "ARTIFACT_FILE", str(path))
+    return path
+
+
+def test_richest_tier_used_when_every_feature_available(tiered_artifact_file, monkeypatch):
+    _patch_detectors(monkeypatch, {
+        "protectai_injection": 0.5, "madhurjindal_jailbreak": 0.5, "toxic_bert": 0.5,
+        "deepset_injection": 0.5, "prompt_guard_2": 0.5,
+    })
+    result = fusion_mod.fused_threat_score("text", anchor_score=0.5)
+
+    assert result["available"] is True
+    assert result["threshold_high"] == UPGRADE_TIER_6["threshold_high"]
+    assert "six_feature" in result["detail"]
+
+
+def test_degrades_to_five_feature_when_gated_detector_unavailable(tiered_artifact_file, monkeypatch):
+    """prompt_guard_2 gated/not-licensed must degrade to the 5-feature tier
+    -- NOT straight to anchors-only, which is the whole point of tiers."""
+    _patch_detectors(monkeypatch, {
+        "protectai_injection": 0.5, "madhurjindal_jailbreak": 0.5, "toxic_bert": 0.5,
+        "deepset_injection": 0.5,
+        "prompt_guard_2": StubDetector(available=False, detail="gated repo, licence not accepted"),
+    })
+    result = fusion_mod.fused_threat_score("text", anchor_score=0.5)
+
+    assert result["available"] is True
+    assert result["threshold_high"] == UPGRADE_TIER_5["threshold_high"]
+    assert "five_feature" in result["detail"]
+
+
+def test_degrades_to_floor_tier_when_all_upgrade_features_unavailable(tiered_artifact_file, monkeypatch):
+    _patch_detectors(monkeypatch, {
+        "protectai_injection": 0.5, "madhurjindal_jailbreak": 0.5, "toxic_bert": 0.5,
+        "deepset_injection": StubDetector(available=False, detail="down"),
+        "prompt_guard_2": StubDetector(available=False, detail="gated"),
+    })
+    result = fusion_mod.fused_threat_score("text", anchor_score=0.5)
+
+    assert result["available"] is True
+    assert result["threshold_high"] == ARTIFACT["threshold_high"]  # floor tier
+    assert "tier=" not in result["detail"]  # floor tier carries no tier suffix
+
+
+def test_floor_tier_failure_still_fails_closed_even_with_upgrade_tiers(tiered_artifact_file, monkeypatch):
+    """The ultimate safety net is unchanged: if a FLOOR-required detector is
+    down, no tier can save the request, and it falls back exactly as before
+    upgrade tiers existed."""
+    _patch_detectors(monkeypatch, {
+        "protectai_injection": StubDetector(available=False, detail="oom"),
+        "madhurjindal_jailbreak": 0.5, "toxic_bert": 0.5,
+        "deepset_injection": 0.5, "prompt_guard_2": 0.5,
+    })
+    result = fusion_mod.fused_threat_score("text", anchor_score=0.5)
+
+    assert result["available"] is False
+    assert result["score"] is None
+    assert "protectai_injection" in result["detail"]
+
+
+def test_each_optional_detector_scored_exactly_once_regardless_of_tier_count(
+    tiered_artifact_file, monkeypatch
+):
+    """Trying multiple tiers must not mean re-scoring a detector once per
+    tier that references it — every named detector across every tier is
+    scored a single time per request."""
+    call_counts = {"deepset_injection": 0, "prompt_guard_2": 0}
+
+    class CountingStub(StubDetector):
+        def score_batch(self, texts):
+            call_counts[self._name] += 1
+            return super().score_batch(texts)
+
+    def fake_get_detector(name):
+        base_scores = {"protectai_injection": 0.5, "madhurjindal_jailbreak": 0.5, "toxic_bert": 0.5}
+        if name in base_scores:
+            return StubDetector(score=base_scores[name])
+        stub = CountingStub(score=0.5)
+        stub._name = name
+        return stub
+
+    monkeypatch.setattr("core.detectors.get_detector", fake_get_detector)
+    fusion_mod.fused_threat_score("text", anchor_score=0.5)
+
+    assert call_counts["deepset_injection"] == 1
+    assert call_counts["prompt_guard_2"] == 1
+
+
+def test_malformed_upgrade_tier_is_dropped_not_fatal(tmp_path, monkeypatch):
+    """One bad upgrade tier must not take down the floor tier that IS valid
+    -- same per-entry tolerance as core/tenancy.py's TenantStore."""
+    bad_tier = {"tier_id": "broken", "feature_order": ["anchors", "x"],
+               "coefficients": [1.0]}  # length mismatch
+    artifact = {**ARTIFACT, "upgrade_tiers": [bad_tier]}
+    path = tmp_path / "fusion_policy.json"
+    path.write_text(json.dumps(artifact), encoding="utf-8")
+    monkeypatch.setattr(fusion_mod, "ARTIFACT_FILE", str(path))
+
+    ok, detail = fusion_mod.policy_available()
+    assert ok is True
+    assert fusion_mod._policy["upgrade_tiers"] == []
+
+
+def test_upgrade_tier_per_class_scoring_uses_the_chosen_tiers_feature_order(
+    tmp_path, monkeypatch
+):
+    """A per-class policy attached to an upgrade tier must be scored against
+    THAT tier's feature order, not the floor tier's — the exact bug a naive
+    refactor would reintroduce (see _apply_policy's feature_order param)."""
+    tier_with_per_class = {
+        **UPGRADE_TIER_5,
+        "per_class": {
+            "prompt_injection": {
+                "scaler_mean": UPGRADE_TIER_5["scaler_mean"],
+                "scaler_scale": UPGRADE_TIER_5["scaler_scale"],
+                "coefficients": [0.1, 3.0, 0.1, 0.1, 0.1],
+                "intercept": -1.0,
+                "threshold_high": 0.2,
+                "threshold_medium": 0.05,
+            },
+        },
+    }
+    artifact = {**ARTIFACT, "upgrade_tiers": [tier_with_per_class]}
+    path = tmp_path / "fusion_policy.json"
+    path.write_text(json.dumps(artifact), encoding="utf-8")
+    monkeypatch.setattr(fusion_mod, "ARTIFACT_FILE", str(path))
+    monkeypatch.setattr(fusion_mod.settings, "FUSION_PER_CLASS", True)
+
+    _patch_detectors(monkeypatch, {
+        "protectai_injection": 1.0, "madhurjindal_jailbreak": 0.0, "toxic_bert": 0.0,
+        "deepset_injection": 0.0,
+    })
+    result = fusion_mod.fused_threat_score("injection text", anchor_score=0.1)
+
+    assert result["available"] is True
+    assert result["triggering_class"] == "prompt_injection"

@@ -13,22 +13,41 @@ available data, because held-out folds buy nothing at deploy time and only cost
 data efficiency. Cross-validation validates the APPROACH; this script produces
 the ARTIFACT.
 
-WHY ONLY FOUR DETECTORS
------------------------
-The full comparison found Prompt Guard 2 and Llama Guard measurably strengthen
-the ensemble, but both are Meta-gated: a fresh deployment needs its own licence
-acceptance before either loads, and Llama Guard is far too slow for a live
-request path (~seconds, not milliseconds, on CPU). The live fusion is
-deliberately restricted to detectors that are (a) unencumbered by external
-licensing and (b) fast enough for synchronous request handling:
+FLOOR TIER: FOUR DETECTORS, ALWAYS DEPLOYABLE
+-----------------------------------------------
+The floor tier — the one every deployment can reach with no external
+licence — is exactly the four-detector pool from the FIRST ensemble_
+analysis run: anchors, protectai_injection, madhurjindal_jailbreak,
+toxic_bert (AUC 0.944 [0.936, 0.951] against the best single detector's
+0.909 [0.899, 0.919] — non-overlapping, validated). Llama Guard remains
+excluded from every tier: it is far too slow for a live request path
+(~seconds, not milliseconds, on CPU), which is an inference-speed problem
+no amount of graceful degradation fixes.
 
-    anchors, protectai_injection, madhurjindal_jailbreak, toxic_bert
+UPGRADE TIERS: RICHER, OPTIONAL, GRACEFULLY DEGRADING
+--------------------------------------------------------
+`core/fusion.py`'s tier mechanism (added 2026-08-24) tries the RICHEST
+tier whose required detectors are all available and only falls back to a
+poorer tier when one is missing — never straight to the pre-fusion
+anchors-only path the way a missing feature used to. That capability is
+what makes adding `prompt_guard_2` (Meta-gated) no longer the all-or-
+nothing bet it was when this script only produced one policy: a
+deployment without the licence simply runs one tier down, not zero tiers.
 
-This is exactly the four-detector pool from the FIRST ensemble_analysis run,
-which showed AUC 0.944 [0.936, 0.951] against the best single detector's 0.909
-[0.899, 0.919] — non-overlapping, validated. Prompt Guard 2 / Llama Guard remain
-available as an opt-in upgrade for deployments that complete the licence step;
-wiring that in is future work, not this script's job.
+Measured out-of-fold on the 13,011-row suite (`scripts.sweep_fusion_
+variants`, `scripts.analyze_german_by_task` for the language split), all
+deltas non-overlapping-CI decisive:
+
+    floor (4-feature)                    pooled AUC 0.846, German-injection 0.813
+    +deepset_injection (5, no licence)   pooled AUC 0.866, German-injection 0.971
+    +prompt_guard_2 too (6, licence)     pooled AUC 0.908, German-injection 0.987
+
+`deepset_injection` carries no licence gate, so the 5-feature tier is
+reachable by every deployment exactly like the floor tier is — it exists
+as a distinct tier (rather than just raising the floor to 5 features)
+specifically so a `deepset_injection` outage alone still degrades one
+step, not to the floor, and so the floor tier itself stays the
+minimal, maximally-portable baseline this project has always shipped.
 
 PERSISTENCE FORMAT
 -------------------
@@ -65,9 +84,14 @@ SUITE_FILE = os.path.join("data", "eval_suite.jsonl")
 SCORES_DIR = os.path.join("_evidence", "detector_scores")
 ARTIFACT_FILE = os.path.join("models", "fusion_policy.json")
 
-# Order matters: this list IS the feature order baked into the artifact.
-# core/fusion.py must score detectors in this exact order at inference time.
-LIVE_FEATURES = ["anchors", "protectai_injection", "madhurjindal_jailbreak", "toxic_bert"]
+# Order matters: each list IS the feature order baked into its tier.
+# core/fusion.py scores detectors in this exact order at inference time.
+FLOOR_FEATURES = ["anchors", "protectai_injection", "madhurjindal_jailbreak", "toxic_bert"]
+TIER_5_FEATURES = FLOOR_FEATURES + ["deepset_injection"]
+TIER_6_FEATURES = TIER_5_FEATURES + ["prompt_guard_2"]
+
+# Kept for backward compatibility with anything importing this name.
+LIVE_FEATURES = FLOOR_FEATURES
 
 HIGH_FPR_BUDGET = 0.05
 MEDIUM_FPR_BUDGET = 0.20
@@ -106,31 +130,36 @@ def load_scores(name):
     return out
 
 
-def main():
-    rows = load_suite()
-    caches = {name: load_scores(name) for name in LIVE_FEATURES}
-
-    # Every row must have a score from every live feature — no detector here
-    # has a contamination exclusion (none of the four were trained on a suite
-    # source), so nothing needs to be dropped.
-    usable = [r for r in rows if all(r["id"] in caches[f] for f in LIVE_FEATURES)]
+def fit_tier(features, rows, caches, tier_id=None):
+    """
+    Fits one complete tier (global policy + per-class policies) for the
+    given feature list, refit on ALL usable data — see module docstring
+    for why the deployed artifact is refit rather than reusing an
+    out-of-fold model. Returns a self-contained tier dict; the floor
+    tier's dict IS the artifact's top-level fields (tier_id=None omits the
+    key so the floor tier's shape matches every artifact before tiers
+    existed), an upgrade tier's dict carries its own `tier_id`.
+    """
+    usable = [r for r in rows if all(r["id"] in caches[f] for f in features if f != "anchors")]
     dropped = len(rows) - len(usable)
     if dropped:
-        print(f"Dropping {dropped} rows missing a cached score for one or more features.")
+        print(f"  [{tier_id or 'floor'}] dropping {dropped} rows missing a cached score")
 
-    X = [[caches[f][r["id"]] for f in LIVE_FEATURES] for r in usable]
+    def feature_value(r, f):
+        return r["_anchor_placeholder"] if f == "anchors" else caches[f][r["id"]]
+
+    X = [[feature_value(r, f) for f in features] for r in usable]
     y = [r["label"] for r in usable]
 
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
-
     model = LogisticRegression(max_iter=2000, C=1.0)
     model.fit(X_scaled, y)
 
     # Threshold selection operates on the PROBABILITY output, on the same data
     # the model was fit on. This is the deploy-time artifact, not an unbiased
-    # accuracy estimate — the unbiased estimate is scripts.ensemble_analysis's
-    # out-of-fold AUC (0.944), already reported in the engineering assessment.
+    # accuracy estimate — the unbiased estimate is scripts.sweep_fusion_
+    # variants' out-of-fold AUC, reported in the engineering assessment.
     probs = model.predict_proba(X_scaled)[:, 1]
     auc_insample = roc_auc(list(probs), y)
     threshold_high = threshold_at_fpr(list(probs), y, budget=HIGH_FPR_BUDGET)
@@ -138,20 +167,10 @@ def main():
 
     # ---- PER-CLASS POLICIES ----
     # One policy per attack class (that class positive, benign negative), so
-    # each gets its own decision boundary. This is what "harmful_content
-    # should be more sensitive without loosening injection/jailbreak"
-    # actually requires: a per-class threshold is only meaningful against a
-    # per-class SCORE, since at inference the class is unknown — determining
-    # it is the job being done.
-    #
-    # Budgets are per-class, so three policies each at 5% would give a UNION
-    # false-positive rate approaching 15%, not 5%. PER_CLASS_*_FPR_BUDGET are
-    # therefore set to the shared budget that
-    # scripts/analyze_per_class_thresholds.py binary-searched to make the
-    # union match the global policy's 5% — measured at equal FPR, per-class
-    # improved harmful_content recall 28.7% -> 31.5% out-of-fold, with
-    # overall recall not regressing. Anything else would be comparing a
-    # looser operating point and calling the difference an improvement.
+    # each gets its own decision boundary — see module docstring for why a
+    # per-class threshold needs a per-class score. Budgets are per-class
+    # (PER_CLASS_*_FPR_BUDGET), calibrated so the union of all classes' FPR
+    # lands on the global policy's own budget, not three times it.
     classes = sorted({r["attack_class"] for r in usable if r["label"] == 1})
     per_class = {}
     for cls in classes:
@@ -159,6 +178,8 @@ def main():
                if r["label"] == 0 or r["attack_class"] == cls]
         Xc = [X[i] for i in idx]
         yc = [1 if usable[i]["attack_class"] == cls else 0 for i in idx]
+        if len(set(yc)) < 2:
+            continue
 
         cls_scaler = StandardScaler()
         Xc_scaled = cls_scaler.fit_transform(Xc)
@@ -176,13 +197,8 @@ def main():
             "n_positive": int(sum(yc)),
         }
 
-    artifact = {
-        # v2 adds `per_class`. The top-level global policy fields are kept
-        # verbatim so an older core/fusion.py, or a deployment that disables
-        # per-class scoring, still loads and behaves exactly as before.
-        "version": 2,
-        "trained_at": datetime.now(timezone.utc).isoformat(),
-        "feature_order": LIVE_FEATURES,
+    tier = {
+        "feature_order": features,
         "scaler_mean": scaler.mean_.tolist(),
         "scaler_scale": scaler.scale_.tolist(),
         "coefficients": model.coef_[0].tolist(),
@@ -202,23 +218,57 @@ def main():
             "note": "in-sample AUC is NOT an accuracy estimate (fit and scored on "
                     "the same data) - it exists only as a load-bearing sanity "
                     "check that persistence round-trips correctly. The unbiased "
-                    "estimate is scripts.ensemble_analysis's out-of-fold AUC: "
-                    "0.944 [0.936, 0.951] against this exact 4-detector pool.",
+                    "estimate is scripts.sweep_fusion_variants' out-of-fold AUC "
+                    "for this exact feature pool, reported in "
+                    "docs/ENGINEERING_ASSESSMENT.md.",
         },
+    }
+    if tier_id is not None:
+        tier["tier_id"] = tier_id
+
+    print(f"  [{tier_id or 'floor'}] {len(usable)} rows, features={features}")
+    print(f"    threshold_high={threshold_high:.4f}  threshold_medium={threshold_medium:.4f}  "
+          f"in-sample AUC={auc_insample:.4f}")
+    return tier
+
+
+def main():
+    rows_raw = load_suite()
+    all_features = sorted({f for f in TIER_6_FEATURES if f != "anchors"})
+    caches = {name: load_scores(name) for name in all_features}
+
+    # "anchors" isn't a cached detector score (core/fusion.py receives it
+    # from the caller — see module docstring) but every row needs SOME
+    # value in that column to fit against; anchors' own score is cached by
+    # scripts.compare_detectors like any other feature, so reuse it here
+    # too rather than inventing a placeholder.
+    anchor_cache = load_scores("anchors")
+    rows = [r for r in rows_raw if r["id"] in anchor_cache]
+    for r in rows:
+        r["_anchor_placeholder"] = anchor_cache[r["id"]]
+
+    floor = fit_tier(FLOOR_FEATURES, rows, caches)
+    tier_5 = fit_tier(TIER_5_FEATURES, rows, caches, tier_id="five_feature")
+    tier_6 = fit_tier(TIER_6_FEATURES, rows, caches, tier_id="six_feature")
+
+    artifact = {
+        # v3 adds `upgrade_tiers`. Every top-level field is exactly the
+        # floor tier's own — an artifact with no upgrade_tiers key (or a
+        # core/fusion.py that predates tiers) behaves identically to
+        # every artifact before this version.
+        "version": 3,
+        "trained_at": datetime.now(timezone.utc).isoformat(),
+        **floor,
+        "upgrade_tiers": [tier_6, tier_5],  # richest first
     }
 
     os.makedirs(os.path.dirname(ARTIFACT_FILE), exist_ok=True)
     with open(ARTIFACT_FILE, "w", encoding="utf-8") as f:
         json.dump(artifact, f, indent=2)
 
-    print(f"Trained on {len(usable)} rows ({sum(y)} attack / {len(y) - sum(y)} benign)")
-    print(f"Features (order matters): {LIVE_FEATURES}")
-    print(f"Coefficients: {dict(zip(LIVE_FEATURES, artifact['coefficients']))}")
-    print(f"Intercept: {artifact['intercept']:.4f}")
-    print(f"threshold_high   (<= {HIGH_FPR_BUDGET:.0%} FPR): {threshold_high:.4f}")
-    print(f"threshold_medium (<= {MEDIUM_FPR_BUDGET:.0%} FPR): {threshold_medium:.4f}")
-    print(f"In-sample AUC (sanity check only): {auc_insample:.4f}")
     print(f"\nArtifact -> {ARTIFACT_FILE}")
+    print(f"Floor: {FLOOR_FEATURES}")
+    print("Upgrade tiers (richest first): six_feature, five_feature")
 
 
 if __name__ == "__main__":
