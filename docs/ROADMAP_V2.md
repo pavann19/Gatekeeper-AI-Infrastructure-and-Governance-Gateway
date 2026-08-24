@@ -487,9 +487,28 @@ needs it, not a gap in what was asked for.
 ## Phase 7 — UI Integration
 Original estimate: ~40–65h combined — deferred until engine + gateways are solid
 
-- [ ] Client UI: auth, dashboard, activity, privacy, approvals, protection settings
-      (near-term subset already planned separately: general-user + operator
-      views on top of the existing `gatekeeper-ui`)
+- [x] Client UI (operator slice): human-review approval dashboard —
+      `ui/review_dashboard/index.html`, mounted at `/ui/review/` by
+      `api/main.py`. Started fresh rather than building on the pre-existing
+      `ui/web_app.py` Streamlit prototype (found to reference a dead
+      `/api/v1/update` endpoint removed back in Phase 1 §1z — legacy,
+      disposable). Built as a single static page (system-font stack,
+      card-based layout, restrained neutral palette with light/dark support
+      via `prefers-color-scheme`, no build tooling) rather than Streamlit or
+      a full SPA — the smallest real slice that still lets an operator poll
+      `GET /api/v1/review`, and approve/reject via
+      `POST /api/v1/review/{id}/resolve`, with an operator-supplied API key
+      kept in `sessionStorage` (never persisted server-side). Verified live,
+      end-to-end, against a real running instance: real INTERNAL API key
+      issued via `scripts/manage_api_keys.py`, real reviews enqueued into a
+      real (scratch) `ReviewQueue`, dashboard loaded in a real browser,
+      approve/reject exercised against the real endpoints — confirmed the
+      resulting `ReviewRecord`s carried the correct `status`,
+      `final_decision`, and `reviewer` fields, not just a 200 response.
+      Full remaining scope (auth, activity, privacy, protection settings)
+      still open below.
+- [ ] Client UI (remainder): auth, dashboard, activity, privacy, protection
+      settings
 - [ ] Developer UI: request inspector, detector signals, policy editor, model
       gateway view, tool gateway view, traces, benchmarks, logs
 
