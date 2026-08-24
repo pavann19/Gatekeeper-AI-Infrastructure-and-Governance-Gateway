@@ -263,27 +263,48 @@ def decide_tool_call(capability: str, spec: ToolSpec, arguments: Dict[str, Any])
 
 class ToolRegistry:
     """
-    Maps tool name -> ToolSpec. Mirrors `core/detectors.py`'s registry
-    shape deliberately: a plain dict, register-then-look-up usage, one
-    place that owns "what tools exist" — consistency with this
-    codebase's other pluggable-component registry beats a marginally
-    different interface here.
+    Maps tool name -> (ToolSpec, handler). Mirrors `core/detectors.py`'s
+    registry shape deliberately: a plain dict, register-then-look-up
+    usage, one place that owns "what tools exist" — consistency with
+    this codebase's other pluggable-component registry beats a
+    marginally different interface here.
+
+    `handler` is OPTIONAL and separate from the spec on purpose: a spec
+    is a declared contract (what a tool is, its risk, who may call it) —
+    something a policy or a UI needs to reason about even for a tool this
+    process cannot itself execute (e.g. one a different service runs).
+    Registering a spec without a handler is a normal, supported state;
+    `execute` on such a tool fails with a clear message rather than a
+    silent no-op or an `AttributeError` from calling `None`.
     """
 
     def __init__(self):
         self._tools: Dict[str, ToolSpec] = {}
+        self._handlers: Dict[str, Any] = {}
 
-    def register(self, spec: ToolSpec) -> None:
+    def register(self, spec: ToolSpec, handler=None) -> None:
         if spec.name in self._tools:
             raise ValueError(f"tool {spec.name!r} is already registered")
         self._tools[spec.name] = spec
+        if handler is not None:
+            self._handlers[spec.name] = handler
         logger.info(f"Registered tool {spec.name!r} (risk={spec.risk_level}, "
-                   f"capability_required={spec.capability_required})")
+                   f"capability_required={spec.capability_required}, "
+                   f"handler={'yes' if handler is not None else 'no'})")
 
     def get(self, name: str) -> ToolSpec:
         if name not in self._tools:
             raise KeyError(f"unknown tool {name!r}; available: {sorted(self._tools)}")
         return self._tools[name]
+
+    def get_handler(self, name: str):
+        """Returns the registered handler, or None if this tool has no
+        handler (spec-only, or executed elsewhere). Never raises for an
+        unregistered handler — raises KeyError only if `name` itself
+        isn't a registered tool, same as `get`."""
+        if name not in self._tools:
+            raise KeyError(f"unknown tool {name!r}; available: {sorted(self._tools)}")
+        return self._handlers.get(name)
 
     def list_tools(self) -> List[ToolSpec]:
         return list(self._tools.values())
@@ -293,6 +314,55 @@ class ToolRegistry:
 
     def __contains__(self, name: str) -> bool:
         return name in self._tools
+
+
+def execute_tool(capability: str, name: str, arguments: Dict[str, Any],
+                 registry: "ToolRegistry" = None) -> Dict[str, Any]:
+    """
+    The full call path: look up the tool, decide (access + validation +
+    risk), and only invoke the handler if the decision is ALLOW.
+
+    A handler NEVER runs for BLOCK or REVIEW — this is the actual
+    enforcement point Phase 6 exists to build, not just a decision
+    function nobody consults. "Sandboxed" for the demo tools registered
+    in `core/demo_tools.py` means what it should always mean for a
+    handler with unknown provenance: it operates on in-memory, fake data
+    only, with no filesystem, network, or real-database access — the
+    sandbox is a property of what a handler is ALLOWED to touch, not
+    something this function itself enforces at the process level (no
+    subprocess isolation, no seccomp, no container). A handler that
+    reached into real infrastructure would defeat the sandbox regardless
+    of what this function does; the safety property lives in which
+    handlers get registered, not in `execute_tool`'s own code.
+
+    A handler that raises is reported as an execution error, distinct
+    from a security decision — the tool call was ALLOWED to attempt
+    running, and failed on its own terms (bad input the schema didn't
+    catch, a downstream dependency down), not because Gatekeeper decided
+    against it. Conflating the two would make a flaky tool look like a
+    security block in the audit trail.
+    """
+    reg = registry if registry is not None else _registry
+    try:
+        spec = reg.get(name)
+    except KeyError as e:
+        return {"decision": "BLOCK", "reason": str(e), "tool": name}
+
+    result = decide_tool_call(capability, spec, arguments)
+    if result["decision"] != "ALLOW":
+        return result
+
+    handler = reg.get_handler(name)
+    if handler is None:
+        return {"decision": "BLOCK", "reason": f"tool {name!r} has no registered handler",
+                "tool": name}
+
+    try:
+        output = handler(**arguments)
+    except Exception as e:
+        return {**result, "error": f"{type(e).__name__}: {e}"}
+
+    return {**result, "output": output}
 
 
 # Module-level singleton, same reasoning as core/rate_limit.py's

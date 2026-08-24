@@ -292,7 +292,7 @@ your own LLM call, and starts being infrastructure you route through — a
 real architectural shift, not an incremental feature. Scope and benchmark
 incrementally rather than building it in one push.
 
-## Phase 6 — Tool / Agent Gateway (3/6 done)
+## Phase 6 — Tool / Agent Gateway (4/6 done)
 Original estimate: ~35–55h — the single largest new subsystem
 
 - [x] Tool registry + schemas — done 2026-08-24, see `core/tools.py`.
@@ -344,7 +344,27 @@ Original estimate: ~35–55h — the single largest new subsystem
       `core/logger.py`'s three distinct audit functions were built to
       avoid; that wiring belongs to whichever later item actually adds
       an execution path. 6 new tests, 602 passed overall (up from 596).
-- [ ] Sandboxed demo tools
+- [x] Sandboxed demo tools — done 2026-08-24, see `core/demo_tools.py`
+      and `core/tools.py::execute_tool`. First real tools run through
+      the full pipeline end to end (access control → structural
+      validation → risk-based approval → execution), not just unit-
+      tested against synthetic specs. Four tools chosen to exercise
+      every branch `decide_tool_call` has: `demo.echo`/`demo.calculator.
+      add` (LOW/GENERAL, trivial ALLOW), `demo.database.query` (MEDIUM/
+      ELEVATED, capability gate matters), `demo.database.delete` (HIGH/
+      INTERNAL, triggers REVIEW even for a caller who clears access
+      control). "Sandboxed" means every handler touches only an
+      in-memory fake dataset defined in the module — no filesystem,
+      network, or real database — not a process-level sandbox
+      (container/seccomp) enforced by `execute_tool` itself; the safety
+      property lives in which handlers get registered, stated explicitly
+      rather than implied. Not registered automatically on import —
+      explicit opt-in via `register_demo_tools()`, so a production
+      deployment doesn't get demo tools by default. `execute_tool` is
+      also the first real enforcement point: a handler never runs for
+      BLOCK or REVIEW, and a handler's own exception is reported
+      distinctly from a security decision (the call WAS allowed to
+      attempt running). 16 new tests, 628 passed overall (up from 602).
 - [ ] Audit events
 - [ ] MCP compatibility (explicitly deferred to after the above is solid)
 

@@ -12,6 +12,7 @@ from core.tools import (
     ToolSpec,
     check_tool_access,
     decide_tool_call,
+    execute_tool,
     get_tool_registry,
     validate_arguments,
 )
@@ -284,6 +285,103 @@ def test_medium_risk_authorized_call_allows():
     spec = make_spec(risk_level="MEDIUM")
     result = decide_tool_call("GENERAL", spec, {"table": "orders"})
     assert result["decision"] == "ALLOW"
+
+
+# --- ToolRegistry: handlers ---------------------------------------------------
+
+def test_get_handler_returns_none_for_spec_only_tool():
+    reg = ToolRegistry()
+    reg.register(make_spec())
+    assert reg.get_handler("database.read") is None
+
+
+def test_get_handler_returns_registered_handler():
+    reg = ToolRegistry()
+    handler = lambda table, limit=None: []  # noqa: E731
+    reg.register(make_spec(), handler=handler)
+    assert reg.get_handler("database.read") is handler
+
+
+def test_get_handler_raises_for_unknown_tool():
+    reg = ToolRegistry()
+    with pytest.raises(KeyError, match="unknown tool"):
+        reg.get_handler("does_not_exist")
+
+
+# --- execute_tool: the enforcement point ---------------------------------------
+
+def test_execute_runs_handler_on_allow():
+    reg = ToolRegistry()
+    reg.register(make_spec(risk_level="LOW"), handler=lambda table, limit=None: [f"row from {table}"])
+    result = execute_tool("GENERAL", "database.read", {"table": "orders"}, registry=reg)
+    assert result["decision"] == "ALLOW"
+    assert result["output"] == ["row from orders"]
+
+
+def test_execute_never_calls_handler_on_block():
+    calls = []
+    reg = ToolRegistry()
+    reg.register(make_spec(capability_required="INTERNAL", risk_level="LOW"),
+                handler=lambda table, limit=None: calls.append(table))
+    result = execute_tool("GENERAL", "database.read", {"table": "orders"}, registry=reg)
+    assert result["decision"] == "BLOCK"
+    assert calls == []
+
+
+def test_execute_never_calls_handler_on_review():
+    calls = []
+    reg = ToolRegistry()
+    reg.register(make_spec(risk_level="HIGH"),
+                handler=lambda table, limit=None: calls.append(table))
+    result = execute_tool("INTERNAL", "database.read", {"table": "orders"}, registry=reg)
+    assert result["decision"] == "REVIEW"
+    assert calls == []
+
+
+def test_execute_unknown_tool_blocks_cleanly():
+    reg = ToolRegistry()
+    result = execute_tool("INTERNAL", "does_not_exist", {}, registry=reg)
+    assert result["decision"] == "BLOCK"
+    assert "does_not_exist" in result["reason"]
+
+
+def test_execute_allowed_tool_with_no_handler_blocks():
+    reg = ToolRegistry()
+    reg.register(make_spec(risk_level="LOW"))  # no handler
+    result = execute_tool("GENERAL", "database.read", {"table": "orders"}, registry=reg)
+    assert result["decision"] == "BLOCK"
+    assert "handler" in result["reason"]
+
+
+def test_execute_handler_exception_is_reported_not_raised():
+    """A handler that fails on its own terms (bad downstream state, not a
+    security concern) must not crash the caller, and must not be
+    reported as if Gatekeeper itself blocked the call."""
+    def boom(table, limit=None):
+        raise RuntimeError("downstream database unreachable")
+
+    reg = ToolRegistry()
+    reg.register(make_spec(risk_level="LOW"), handler=boom)
+    result = execute_tool("GENERAL", "database.read", {"table": "orders"}, registry=reg)
+    assert result["decision"] == "ALLOW"  # the call WAS allowed to attempt running
+    assert "RuntimeError" in result["error"]
+    assert "downstream database unreachable" in result["error"]
+
+
+def test_execute_uses_shared_registry_by_default():
+    from core.tools import get_tool_registry
+    shared = get_tool_registry()
+    spec = make_spec(name="shared_test_tool", risk_level="LOW")
+    shared.register(spec, handler=lambda table, limit=None: "ok")
+    try:
+        result = execute_tool("GENERAL", "shared_test_tool", {"table": "orders"})
+        assert result["decision"] == "ALLOW"
+        assert result["output"] == "ok"
+    finally:
+        # No public unregister -- reach in directly rather than leaking
+        # state across the rest of the suite via the process-wide singleton.
+        del shared._tools["shared_test_tool"]
+        shared._handlers.pop("shared_test_tool", None)
 
 
 # --- ToolRegistry -------------------------------------------------------------
