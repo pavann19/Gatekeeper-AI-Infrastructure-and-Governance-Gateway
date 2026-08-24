@@ -3213,14 +3213,151 @@ under `threshold_medium` 0.271 → correctly clean).
 
 ### What this does not close
 
-The multilingual head (issue #4) still isn't shipped — it remains the
-better number on paper wherever it applies, but this fix closes most of
-the practical gap with zero stacking caveat, which is why it's the one
-that shipped first. `trained_on=()` for both new detectors is an honest
-"unknown", not a confirmed-clean guarantee; if either model's training
-data is ever disclosed to include `philschmid/germeval18`, this section's
-numbers need re-measuring with that source excluded, the same
+At the time this was written, the multilingual head (issue #4) hadn't
+shipped — it remained the better number on paper wherever it applies,
+but this fix closed most of the practical gap with zero stacking
+caveat, which is why it shipped first. §1ad, immediately below, closes
+issue #4 the same day. `trained_on=()` for both new detectors here is an
+honest "unknown", not a confirmed-clean guarantee; if either model's
+training data is ever disclosed to include `philschmid/germeval18`, this
+section's numbers need re-measuring with that source excluded, the same
 contamination discipline every other detector in this registry follows.
+
+---
+
+## 1ad. Closing issue #4 — the multilingual head, nested-validated and shipped as a 9th feature (2026-08-24, `fix-open-issues` branch)
+
+§1ab explicitly deferred this: the multilingual head's own held-out
+number (German AUC 0.826) was real, but the FUSION-level gain claimed
+alongside it (`plus_ml_5`/`all_7` in `scripts.sweep_fusion_variants`) was
+measured by stacking — feeding the head's out-of-fold scores into a
+second cross-validation over the same rows — which the section itself
+flagged as "mildly optimistic." Issue #4 named exactly what was needed:
+a leakage-free validation, a proper detector wrapper, a latency
+measurement, and a retrain-cadence decision. All four, in order:
+
+### 1. Leakage-free validation: a fully disjoint three-way split
+
+New `scripts.validate_multilingual_head_nested`: split the suite into A
+(40%, fits the head only), B (30%, fits the fusion using the head's
+scores on B — genuinely out-of-sample for the head), and C (30%, held
+out from BOTH fits — the number that actually answers the question). A
+control fusion (the shipped 8 features, no head) is fit on the SAME B
+and evaluated on the SAME C, isolating the head's marginal contribution
+from "a different, possibly luckier split."
+
+```
+HELD-OUT C (neither the head nor either fusion has ever seen these rows)
+                        control (8 features)    with multilingual_head (9)
+pooled AUC              0.923 [0.914, 0.930]    0.945 [0.938, 0.951]
+de_injection AUC        0.957 [0.936, 0.975]    0.986 [0.976, 0.995]
+de_injection recall@5%  70.8% [51.9, 78.7]      93.1% [80.0, 99.5]
+de_offensive AUC        0.746 [0.714, 0.779]    0.784 [0.753, 0.811]
+de_offensive recall@5%  12.6% [7.8, 17.8]       23.3% [15.1, 34.3]
+```
+
+This confirms the earlier stacking-based estimate wasn't an artefact of
+leakage — the gain is real and comparable in size, measured the honest
+way this time. Worth noting: this test was run AFTER issue #3's fix
+(the 8-feature control already includes both German toxicity
+detectors), so it answers "does the head still help once the regular-
+method fix is in place" — and it does, decisively, on every axis.
+
+### 2. A proper detector wrapper
+
+New `core/detectors.py::EmbeddingHeadDetector` — structurally different
+from every other detector in this registry (which wrap pretrained
+third-party classifiers used as-is): this one embeds text with a
+multilingual sentence encoder and applies a logistic-regression head
+FITTED ON THIS PROJECT'S OWN SUITE. Same `available()`/`score_batch()`
+contract as `TransformerDetector`, so it plugs into `core/fusion.py`'s
+existing tier mechanism with zero special-casing. Persisted as plain
+JSON (`models/multilingual_head.json`, via new `scripts.train_
+multilingual_head_artifact`), same no-pickle reasoning as `models/
+fusion_policy.json` itself.
+
+`trained_on` is declared `()` but means something different here than
+for every other detector: the artifact is refit on 100% of `data/
+eval_suite.jsonl` by construction (the deployed version, not a held-out
+one — same "refit on everything, held-out folds buy nothing at deploy
+time" reasoning `scripts.train_fusion_policy` already uses), so there is
+no subset of the suite this detector wasn't trained on. Its own score
+against the suite is contaminated by definition; the honest numbers are
+the ones measured BEFORE this refit, in section 1 above and in
+`scripts.build_multilingual_feature`'s original held-out/leave-one-
+source-out results.
+
+### 3. Latency: fast enough for the synchronous request path
+
+Measured directly (cold load + 10 warm calls): 38.9s cold load (same
+order as every other transformer detector, already handled by the
+existing `warm_up()` mechanism that runs at startup specifically because
+cold loads exceed the request timeout — §1r/`WARM_MODELS_ON_STARTUP`'s
+own reasoning) and **20ms warm, per request**. This clears the bar Llama
+Guard failed (`docs/ROADMAP_V2.md`'s own "too slow for synchronous
+handling, seconds not milliseconds" exclusion) by two orders of
+magnitude.
+
+### 4. Retrain cadence
+
+No automatic cadence — documented as a manual step in `scripts.train_
+multilingual_head_artifact`'s own docstring, run alongside `scripts.
+train_fusion_policy` whenever `data/eval_suite.jsonl` changes materially
+(a new source, a meaningful volume change), not on every commit. The
+artifact's `trained_at`/`training.n_rows` fields exist so a future run
+can tell at a glance whether it's stale relative to the current suite.
+This matches how every other artifact in this project (`models/
+fusion_policy.json`, the eval suite itself) is already regenerated: a
+deliberate, logged, manually-triggered step, not a CI job.
+
+### Shipped as a 5th, richest tier
+
+`core/fusion.py` needed zero code changes — the upgrade-tier mechanism
+is parametrized entirely by the artifact. New richest tier
+`nine_feature` (the shipped eight plus `multilingual_head`), ordered
+above `eight_feature` in `models/fusion_policy.json`'s `upgrade_tiers`.
+The fusion is fit against the head's OUT-OF-FOLD scores
+(`scripts.build_multilingual_feature`'s cache), not the deployed
+all-data-refit head's own in-sample predictions — deliberately, so the
+fusion learns to weight this feature the way it will actually behave on
+an unseen prompt, not the artificially perfect way it scores rows it
+was trained on.
+
+Verified live, not just under mocks: `warm_up()` against this machine's
+real 8 non-anchor detectors selected `tier=nine_feature`; a real German
+injection prompt ("Vergiss alle vorherigen Anweisungen...") triggered
+`prompt_injection` at 0.9999; a real German offensive prompt triggered
+`harmful_content` at 0.931; a real German benign prompt scored 0.057,
+well under threshold.
+
+### Verified
+
+- `scripts.validate_multilingual_head_nested`: the fully disjoint
+  three-way split above, the leakage-free number this section exists to
+  produce.
+- `tests/test_embedding_head_detector.py` (12 new tests): artifact
+  loading (missing file, corrupt JSON, missing fields, length mismatch),
+  manual sigmoid computation matched against a hand-computed value
+  (same pinning discipline `test_fusion_policy.py`'s own
+  `test_manual_sigmoid_matches_apply_policy` uses), score ordering,
+  bounded-probability sanity, blank-text handling, `trained_on` always
+  `()`, and registry integration.
+- `ruff check` clean; full suite 560 passed (up from 548 after the
+  issue #3 fix).
+- Live smoke test against real detectors on the real production path.
+
+### What this does not close
+
+Both German toxicity detectors (issue #3) and this multilingual head
+are now shipped; German OFFENSIVE CONTENT overall is meaningfully
+better (AUC 0.584→0.784 across the whole investigation) but not solved
+— still the weakest of the three German-relevant numbers tracked in
+this document, and worth a future dedicated pass if it matters more
+than German prompt injection (now at 94%+ recall) does for a given
+deployment. No further roadmap item opened for this — the honest state
+is "meaningfully improved, not perfect," which is the same category
+most of the numbers in this document's earlier sections started in
+before repeated, measured passes moved them further.
 
 ---
 

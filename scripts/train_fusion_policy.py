@@ -112,6 +112,14 @@ TIER_6_FEATURES = TIER_5_FEATURES + ["prompt_guard_2"]
 # overlapping CIs (not a regression). German OFFENSIVE CONTENT specifically
 # (the task tier 6 barely touched): AUC 0.597->0.741.
 TIER_8_FEATURES = TIER_6_FEATURES + ["german_toxicity_eistakovskii", "german_toxicity_ankekat"]
+# issue #4's multilingual_head, nested-validated (scripts.validate_
+# multilingual_head_nested) on a fully disjoint 3-way split -- not the
+# OOF-stacking estimate, the leakage-free one: fusion-level pooled AUC
+# 0.923->0.945, German-injection recall@5%FPR 70.8%->93.1%, German-
+# offensive AUC 0.746->0.784, all on data neither the head nor the
+# fusion had seen. 20ms warm per-request (measured), well under this
+# project's existing synchronous-request budgets.
+TIER_9_FEATURES = TIER_8_FEATURES + ["multilingual_head"]
 
 # Kept for backward compatibility with anything importing this name.
 LIVE_FEATURES = FLOOR_FEATURES
@@ -257,7 +265,7 @@ def fit_tier(features, rows, caches, tier_id=None):
 
 def main():
     rows_raw = load_suite()
-    all_features = sorted({f for f in TIER_8_FEATURES if f != "anchors"})
+    all_features = sorted({f for f in TIER_9_FEATURES if f != "anchors"})
     caches = {name: load_scores(name) for name in all_features}
 
     # "anchors" isn't a cached detector score (core/fusion.py receives it
@@ -274,6 +282,14 @@ def main():
     tier_5 = fit_tier(TIER_5_FEATURES, rows, caches, tier_id="five_feature")
     tier_6 = fit_tier(TIER_6_FEATURES, rows, caches, tier_id="six_feature")
     tier_8 = fit_tier(TIER_8_FEATURES, rows, caches, tier_id="eight_feature")
+    # multilingual_head's cached score here is 5-fold OUT-OF-FOLD (from
+    # scripts.build_multilingual_feature), not the deployed all-data-refit
+    # artifact's own prediction — deliberately: fitting the fusion against
+    # in-sample-perfect scores from a head that has seen every row would
+    # teach the fusion to over-trust this one feature. OOF is the honest
+    # stand-in for "what this feature looks like on a prompt it hasn't
+    # seen", which is the only case that matters at inference time.
+    tier_9 = fit_tier(TIER_9_FEATURES, rows, caches, tier_id="nine_feature")
 
     artifact = {
         # v3 adds `upgrade_tiers`. Every top-level field is exactly the
@@ -283,7 +299,7 @@ def main():
         "version": 3,
         "trained_at": datetime.now(timezone.utc).isoformat(),
         **floor,
-        "upgrade_tiers": [tier_8, tier_6, tier_5],  # richest first
+        "upgrade_tiers": [tier_9, tier_8, tier_6, tier_5],  # richest first
     }
 
     os.makedirs(os.path.dirname(ARTIFACT_FILE), exist_ok=True)
@@ -292,7 +308,7 @@ def main():
 
     print(f"\nArtifact -> {ARTIFACT_FILE}")
     print(f"Floor: {FLOOR_FEATURES}")
-    print("Upgrade tiers (richest first): eight_feature, six_feature, five_feature")
+    print("Upgrade tiers (richest first): nine_feature, eight_feature, six_feature, five_feature")
 
 
 if __name__ == "__main__":
