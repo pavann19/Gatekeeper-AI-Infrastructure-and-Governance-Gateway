@@ -40,8 +40,9 @@ Original estimate: ~20–30h
       84.7% vs 47.4% recall@5%FPR, English vs German) — replaced below
       with the honestly-scoped follow-up.
 - [x] German-specific detection gap (renamed from "multilingual encoder"
-      per the above) — SHIPPED 2026-08-24 on
-      `phase1-german-gap-and-experiments` (not yet merged to `main`), see
+      per the above) — SHIPPED 2026-08-24, merged to `main` via
+      [PR #2](https://github.com/pavann19/Gatekeeper-AI-Infrastructure-and-Governance-Gateway/pull/2)
+      (branch `phase1-german-gap-and-experiments`, deleted post-merge), see
       `docs/ENGINEERING_ASSESSMENT.md` §1aa (investigation) and §1ab
       (the fix and what shipped). Data blocker closed first (234→4,221
       German rows, 3 new sources). Reweighting the existing 4 features on
@@ -62,11 +63,17 @@ Original estimate: ~20–30h
       **upgrade tiers** — richer optional feature sets tried best-first,
       degrading one step (not to anchors-only) when an optional detector
       (e.g. a `prompt_guard_2` licence not yet accepted) is unavailable.
-      Verified live on real detectors, not just mocks. German OFFENSIVE
-      CONTENT (0.584→0.742 AUC) remains a distinct, open, weaker item —
-      see §1ab's "what this does not close" — as does the purpose-built
-      multilingual feature that beats this result but isn't shipped yet
-      (stacking caveat, needs its own tier).
+      Verified live on real detectors, not just mocks. Two follow-ups
+      filed rather than left as loose prose: German OFFENSIVE CONTENT
+      (0.584→0.742 AUC) remains a distinct, open, weaker item — tracked
+      as [issue #3](https://github.com/pavann19/Gatekeeper-AI-Infrastructure-and-Governance-Gateway/issues/3)
+      — and the purpose-built multilingual feature that beats this result
+      but isn't shipped yet (stacking caveat, needs its own tier and a
+      proper `core/detectors.py` wrapper) is
+      [issue #4](https://github.com/pavann19/Gatekeeper-AI-Infrastructure-and-Governance-Gateway/issues/4).
+      A pre-existing, unrelated gap noticed along the way — `/api/v1/
+      cache/flush` has no auth check — is
+      [issue #5](https://github.com/pavann19/Gatekeeper-AI-Infrastructure-and-Governance-Gateway/issues/5).
 - [x] Clean threat taxonomy — done 2026-08-14, see
       `docs/ENGINEERING_ASSESSMENT.md` §1y. Two fixes: (1) added a
       `jailbreak` anchor class to `policies.json` — anchor layer previously
