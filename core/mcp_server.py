@@ -58,6 +58,19 @@ PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "gatekeeper"
 SERVER_VERSION = "1.0.0"
 
+# Phase 8 hardening: `for line in stream` buffers an entire line into
+# memory before yielding it, so one line with no newline is an unbounded
+# read. This module's stated trust model (a stdio MCP client is a trusted
+# local process, the process IS the security boundary) is why this was
+# not treated as a network-facing vulnerability -- but a bounded read
+# costs nothing and turns "a misbehaving client wedges this process by
+# accident" into a clean, loud protocol error instead of unbounded memory
+# growth, so it is worth having regardless of trust level. 1MB
+# comfortably covers any real JSON-RPC message this server's own methods
+# produce or accept (tools/call arguments are themselves capped at 100KB
+# serialized -- see api/schemas.py::ToolCallRequest).
+MAX_LINE_BYTES = 1_000_000
+
 # Standard JSON-RPC 2.0 error codes (https://www.jsonrpc.org/specification).
 PARSE_ERROR = -32700
 INVALID_REQUEST = -32600
@@ -154,15 +167,38 @@ def run_stdio_server(capability: str = "GENERAL", registry: ToolRegistry = None,
     when the request itself couldn't be parsed) — logged and continued,
     never crashes the loop, matching this project's consistent
     fail-closed-not-fail-crashed posture for a malformed input rather
-    than an internal fault.
+    than an internal fault. A line longer than `MAX_LINE_BYTES` gets the
+    same treatment (see that constant's own docstring) — read via
+    `readline(MAX_LINE_BYTES + 1)`, which bounds a single read regardless
+    of whether a newline ever appears, rather than `for line in stream`,
+    which does not.
     """
     input_stream = input_stream if input_stream is not None else sys.stdin
     output_stream = output_stream if output_stream is not None else sys.stdout
 
     logger.info(f"MCP stdio server starting (capability={capability!r}, tenant={tenant!r}).")
 
-    for line in input_stream:
-        line = line.strip()
+    while True:
+        raw = input_stream.readline(MAX_LINE_BYTES + 1)
+        if raw == "":
+            break  # EOF -- the client closed its side.
+
+        if len(raw) > MAX_LINE_BYTES and not raw.endswith("\n"):
+            # Hit the cap without finding a newline: this "line" is
+            # oversized. Report it, then keep discarding reads until the
+            # real newline is found (or EOF) so the NEXT readline() call
+            # starts at a genuine line boundary again, rather than
+            # treating an arbitrary later fragment as if it were a fresh
+            # message.
+            logger.warning(f"Dropping oversized MCP line (> {MAX_LINE_BYTES} bytes).")
+            response = _error_response(None, PARSE_ERROR, f"Line exceeds {MAX_LINE_BYTES} byte limit.")
+            output_stream.write(json.dumps(response) + "\n")
+            output_stream.flush()
+            while not raw.endswith("\n") and raw != "":
+                raw = input_stream.readline(MAX_LINE_BYTES + 1)
+            continue
+
+        line = raw.strip()
         if not line:
             continue
 

@@ -225,6 +225,32 @@ def test_requires_auth_when_auth_mode_required(monkeypatch):
     assert response.status_code == 401
 
 
+# --- Phase 8 hardening: model/provider had no size bound before, unlike ---
+# --- every other free-text field in this schema -----------------------------
+
+def test_oversized_model_name_is_rejected():
+    response = client.post("/api/v1/gateway/chat", json={"prompt": "hello", "model": "x" * 201})
+    assert response.status_code == 422
+
+
+def test_oversized_provider_name_is_rejected():
+    response = client.post("/api/v1/gateway/chat", json={"prompt": "hello", "provider": "x" * 101})
+    assert response.status_code == 422
+
+
+@patch("api.main.assess_risk", return_value=LOW_RISK)
+def test_reasonably_sized_model_and_provider_still_work(mock_assess, monkeypatch):
+    monkeypatch.setattr("api.main.settings.RATE_LIMIT_ENABLED", False)
+    mock_llm_response = LLMResponse(content="hi", model="llama-guard3", provider="ollama")
+    with patch("core.llm_providers.OllamaProvider.complete", return_value=mock_llm_response), \
+         patch("core.output_guardrails.assess_output", return_value=("ALLOW", {"clean_response": "hi"})):
+        response = client.post(
+            "/api/v1/gateway/chat",
+            json={"prompt": "hello", "provider": "ollama", "model": "llama-guard3"},
+        )
+    assert response.status_code == 200
+
+
 @patch("api.main.assess_risk", return_value=LOW_RISK)
 def test_valid_key_authenticates_the_call(mock_assess, key_store):
     key = key_store(capability="GENERAL")
