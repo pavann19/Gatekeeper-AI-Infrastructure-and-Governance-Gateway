@@ -292,11 +292,33 @@ your own LLM call, and starts being infrastructure you route through — a
 real architectural shift, not an incremental feature. Scope and benchmark
 incrementally rather than building it in one push.
 
-## Phase 6 — Tool / Agent Gateway
+## Phase 6 — Tool / Agent Gateway (1/6 done)
 Original estimate: ~35–55h — the single largest new subsystem
 
-- [ ] Tool registry + schemas
-- [ ] Allow/deny, argument validation
+- [x] Tool registry + schemas — done 2026-08-24, see `core/tools.py`.
+      `ToolSpec` (name, description, JSON-Schema-shaped `parameters`,
+      `risk_level`, `capability_required`) and `ToolRegistry`
+      (register/get/list, mirrors `core/detectors.py`'s registry
+      pattern), plus `validate_arguments` for structural checks
+      (required fields, declared types, enum membership — not full JSON
+      Schema, not semantic validation). Deliberately stops there: no
+      allow/deny wiring, no risk-based approval, no sandbox, no audit
+      event, and no actual tools registered yet — this is schema-only
+      groundwork, built before any of those so each later item is driven
+      by what using this piece actually reveals is needed, not designed
+      speculatively ahead of a real tool. 30 new tests (`tests/
+      test_tools.py`), one real bug caught by its own test suite before
+      merge (a JSON `true` would have silently passed an integer-typed
+      argument check — `isinstance(True, int)` is `True` in Python).
+      590 passed overall (up from 560).
+- [~] Allow/deny, argument validation — argument validation's STRUCTURAL
+      half (required fields, types, enums) already exists via `core/
+      tools.py::validate_arguments`, built alongside the registry above
+      since a schema with nothing checking against it isn't very useful.
+      What remains: semantic/business-rule validation (tool-specific,
+      needs a real tool to define), and allow/deny entirely (capability-
+      based tool access, mirroring `core/policy.py`'s existing pattern —
+      not started).
 - [ ] Risk levels, approval requirement
 - [ ] Sandboxed demo tools
 - [ ] Audit events
