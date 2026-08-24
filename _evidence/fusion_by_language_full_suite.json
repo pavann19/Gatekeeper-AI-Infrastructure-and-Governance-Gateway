@@ -1,0 +1,91 @@
+{
+  "n_rows": 13011,
+  "n_dropped": 0,
+  "fpr_budget": 0.05,
+  "deployed_features": [
+    "anchors",
+    "protectai_injection",
+    "madhurjindal_jailbreak",
+    "toxic_bert"
+  ],
+  "oof_auc_and_recall_by_language": {
+    "de": {
+      "n": 4221,
+      "n_attack": 1655,
+      "auc": {
+        "point": 0.6709326940963989,
+        "lo": 0.6550644848735702,
+        "hi": 0.6861664267415597,
+        "n": 4221,
+        "n_boot_effective": 500,
+        "ci_level": 0.95
+      },
+      "recall_at_fpr": {
+        "point": 0.24652567975830816,
+        "lo": 0.22321428571428573,
+        "hi": 0.28511655708308425,
+        "n": 4221,
+        "n_boot_effective": 500,
+        "ci_level": 0.95
+      }
+    },
+    "en": {
+      "n": 7335,
+      "n_attack": 2359,
+      "auc": {
+        "point": 0.926958259331097,
+        "lo": 0.9203530570965314,
+        "hi": 0.9332467047417482,
+        "n": 7335,
+        "n_boot_effective": 500,
+        "ci_level": 0.95
+      },
+      "recall_at_fpr": {
+        "point": 0.7452310300974989,
+        "lo": 0.7268085106382979,
+        "hi": 0.7647562018819504,
+        "n": 7335,
+        "n_boot_effective": 500,
+        "ci_level": 0.95
+      }
+    },
+    "other": {
+      "n": 1455,
+      "n_attack": 450,
+      "auc": {
+        "point": 0.8554184632393588,
+        "lo": 0.828703723794356,
+        "hi": 0.8774841092941087,
+        "n": 1455,
+        "n_boot_effective": 500,
+        "ci_level": 0.95
+      },
+      "recall_at_fpr": {
+        "point": 0.5822222222222222,
+        "lo": 0.5212121212121212,
+        "hi": 0.6524663677130045,
+        "n": 1455,
+        "n_boot_effective": 500,
+        "ci_level": 0.95
+      }
+    }
+  },
+  "pooled_threshold_at_fpr_budget": 0.5405968484860724,
+  "per_language_at_pooled_threshold": {
+    "en": {
+      "n": 7335,
+      "fpr": 0.028938906752411574,
+      "recall": 0.7079270877490462
+    },
+    "de": {
+      "n": 4221,
+      "fpr": 0.0818394388152767,
+      "recall": 0.3057401812688822
+    },
+    "other": {
+      "n": 1455,
+      "fpr": 0.07164179104477612,
+      "recall": 0.6533333333333333
+    }
+  }
+}

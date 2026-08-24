@@ -39,15 +39,34 @@ Original estimate: ~20–30h
       closed; a real, decisive residual gap remains (0.950 vs 0.819 AUC,
       84.7% vs 47.4% recall@5%FPR, English vs German) — replaced below
       with the honestly-scoped follow-up.
-- [ ] German-specific detection gap (renamed from "multilingual encoder"
-      per the above): investigate a language-aware threshold or per-
-      language policy (mirrors the per-class mechanism §1w already
-      surfaces) rather than another pooled feature — likely starting point
-      is a calibrated German-specific threshold on `protectai_injection`
-      alone (German AUC 0.872 standalone, higher than the 0.819 it
-      contributes diluted inside the pooled ensemble). Blocked on data
-      volume: only 234 German rows (76 attacks) in the current suite, thin
-      for a dedicated fit — may need more German-labelled data first.
+- [x] German-specific detection gap (renamed from "multilingual encoder"
+      per the above) — SHIPPED 2026-08-24 on
+      `phase1-german-gap-and-experiments` (not yet merged to `main`), see
+      `docs/ENGINEERING_ASSESSMENT.md` §1aa (investigation) and §1ab
+      (the fix and what shipped). Data blocker closed first (234→4,221
+      German rows, 3 new sources). Reweighting the existing 4 features on
+      German rows alone gave zero gain (AUC 0.670 vs 0.671) — decisive
+      proof the features, not the weights, were the constraint, which
+      reframed every subsequent attempt around adding information rather
+      than redistributing it. Splitting German by task
+      (`scripts.analyze_german_by_task`) found the pooled "German AUC"
+      figure was 69% a different problem (`germeval18` offensive-content
+      rows, not prompt injection) — corrected, and now tracked as two
+      separate items. For German PROMPT INJECTION, the actual item:
+      recall@5%FPR 49.6%→94.0% (AUC 0.813→0.987), using 2 more off-the-
+      shelf detectors (`deepset_injection`, and a revived
+      `prompt_guard_2` — §1x's 2026-08-14 rejection of it was right about
+      German but wrong to treat that as the deciding criterion; it is the
+      largest English/pooled gain available). Shipping required fixing
+      `core/fusion.py`'s all-or-nothing fallback first: it now supports
+      **upgrade tiers** — richer optional feature sets tried best-first,
+      degrading one step (not to anchors-only) when an optional detector
+      (e.g. a `prompt_guard_2` licence not yet accepted) is unavailable.
+      Verified live on real detectors, not just mocks. German OFFENSIVE
+      CONTENT (0.584→0.742 AUC) remains a distinct, open, weaker item —
+      see §1ab's "what this does not close" — as does the purpose-built
+      multilingual feature that beats this result but isn't shipped yet
+      (stacking caveat, needs its own tier).
 - [x] Clean threat taxonomy — done 2026-08-14, see
       `docs/ENGINEERING_ASSESSMENT.md` §1y. Two fixes: (1) added a
       `jailbreak` anchor class to `policies.json` — anchor layer previously
