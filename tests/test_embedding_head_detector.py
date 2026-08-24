@@ -9,9 +9,19 @@ manual logistic-regression application, availability contract), not the
 real model's classification quality — that is what scripts.build_
 multilingual_feature's held-out/leave-one-source-out numbers and
 scripts.validate_multilingual_head_nested's disjoint-split numbers are for.
+
+CI DOES NOT INSTALL sentence-transformers (see requirements-ci.txt: "no
+heavy ML MODEL DOWNLOADS needed for unit tests — sentence-transformers
+and real HF weights are still excluded/mocked"), so these tests must
+never `import sentence_transformers` for real — `_install_fake_encoder`
+injects a fake module into `sys.modules` instead, which satisfies
+`core/detectors.py`'s local `from sentence_transformers import
+SentenceTransformer` without the real package ever needing to exist.
 """
 import json
 import math
+import sys
+import types
 
 import numpy as np
 import pytest
@@ -51,8 +61,9 @@ class FakeEncoder:
 
 
 def _install_fake_encoder(monkeypatch, encoder):
-    import sentence_transformers
-    monkeypatch.setattr(sentence_transformers, "SentenceTransformer", lambda model_id: encoder)
+    fake_module = types.ModuleType("sentence_transformers")
+    fake_module.SentenceTransformer = lambda model_id: encoder
+    monkeypatch.setitem(sys.modules, "sentence_transformers", fake_module)
 
 
 # --- artifact loading --------------------------------------------------------
