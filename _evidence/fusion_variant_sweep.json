@@ -372,6 +372,192 @@
         }
       }
     },
+    "plus_ml_5": {
+      "features": [
+        "anchors",
+        "protectai_injection",
+        "madhurjindal_jailbreak",
+        "toxic_bert",
+        "multilingual_head"
+      ],
+      "trained_on": "all languages",
+      "by_language": {
+        "en": {
+          "n": 7335,
+          "n_attack": 2359,
+          "auc": {
+            "point": 0.9635857031087073,
+            "lo": 0.9590126146980699,
+            "hi": 0.9677955827592991,
+            "n": 7335,
+            "n_boot_effective": 500,
+            "ci_level": 0.95
+          },
+          "recall_at_fpr": {
+            "point": 0.8304366256888512,
+            "lo": 0.8112652374947457,
+            "hi": 0.8501061571125266,
+            "n": 7335,
+            "n_boot_effective": 500,
+            "ci_level": 0.95
+          }
+        },
+        "de": {
+          "n": 4221,
+          "n_attack": 1655,
+          "auc": {
+            "point": 0.8252443644874998,
+            "lo": 0.8124180959699664,
+            "hi": 0.8366510390030384,
+            "n": 4221,
+            "n_boot_effective": 500,
+            "ci_level": 0.95
+          },
+          "recall_at_fpr": {
+            "point": 0.4,
+            "lo": 0.3605200945626478,
+            "hi": 0.4295220810647308,
+            "n": 4221,
+            "n_boot_effective": 500,
+            "ci_level": 0.95
+          }
+        },
+        "other": {
+          "n": 1455,
+          "n_attack": 450,
+          "auc": {
+            "point": 0.9509718076285241,
+            "lo": 0.9389203151348602,
+            "hi": 0.9625362078496407,
+            "n": 1455,
+            "n_boot_effective": 500,
+            "ci_level": 0.95
+          },
+          "recall_at_fpr": {
+            "point": 0.7911111111111111,
+            "lo": 0.7392290249433107,
+            "hi": 0.8333333333333334,
+            "n": 1455,
+            "n_boot_effective": 500,
+            "ci_level": 0.95
+          }
+        }
+      },
+      "pooled": {
+        "n": 13011,
+        "n_attack": 4464,
+        "auc": {
+          "point": 0.9281517587969201,
+          "lo": 0.9233382375270298,
+          "hi": 0.9323679332667075,
+          "n": 13011,
+          "n_boot_effective": 500,
+          "ci_level": 0.95
+        },
+        "recall_at_fpr": {
+          "point": 0.6792114695340502,
+          "lo": 0.6594558429973238,
+          "hi": 0.7002953874119519,
+          "n": 13011,
+          "n_boot_effective": 500,
+          "ci_level": 0.95
+        }
+      }
+    },
+    "all_7": {
+      "features": [
+        "anchors",
+        "protectai_injection",
+        "madhurjindal_jailbreak",
+        "toxic_bert",
+        "deepset_injection",
+        "prompt_guard_2",
+        "multilingual_head"
+      ],
+      "trained_on": "all languages",
+      "by_language": {
+        "en": {
+          "n": 7335,
+          "n_attack": 2359,
+          "auc": {
+            "point": 0.9636812869642022,
+            "lo": 0.9581345835215123,
+            "hi": 0.9685293944991201,
+            "n": 7335,
+            "n_boot_effective": 500,
+            "ci_level": 0.95
+          },
+          "recall_at_fpr": {
+            "point": 0.8876642645188639,
+            "lo": 0.8718170047475183,
+            "hi": 0.9035553739272578,
+            "n": 7335,
+            "n_boot_effective": 500,
+            "ci_level": 0.95
+          }
+        },
+        "de": {
+          "n": 4221,
+          "n_attack": 1655,
+          "auc": {
+            "point": 0.8436279207766917,
+            "lo": 0.8317067356435263,
+            "hi": 0.8546849130794701,
+            "n": 4221,
+            "n_boot_effective": 500,
+            "ci_level": 0.95
+          },
+          "recall_at_fpr": {
+            "point": 0.40725075528700905,
+            "lo": 0.3740648379052369,
+            "hi": 0.44281345565749236,
+            "n": 4221,
+            "n_boot_effective": 500,
+            "ci_level": 0.95
+          }
+        },
+        "other": {
+          "n": 1455,
+          "n_attack": 450,
+          "auc": {
+            "point": 0.9719380873410725,
+            "lo": 0.9623670563221112,
+            "hi": 0.9812019975009915,
+            "n": 1455,
+            "n_boot_effective": 500,
+            "ci_level": 0.95
+          },
+          "recall_at_fpr": {
+            "point": 0.8577777777777778,
+            "lo": 0.8144104803493449,
+            "hi": 0.9013157894736842,
+            "n": 1455,
+            "n_boot_effective": 500,
+            "ci_level": 0.95
+          }
+        }
+      },
+      "pooled": {
+        "n": 13011,
+        "n_attack": 4464,
+        "auc": {
+          "point": 0.9399025649025649,
+          "lo": 0.9354185965053914,
+          "hi": 0.9436424924309077,
+          "n": 13011,
+          "n_boot_effective": 500,
+          "ci_level": 0.95
+        },
+        "recall_at_fpr": {
+          "point": 0.7278225806451613,
+          "lo": 0.7096774193548387,
+          "hi": 0.745340220076353,
+          "n": 13011,
+          "n_boot_effective": 500,
+          "ci_level": 0.95
+        }
+      }
+    },
     "de_conditional": {
       "features": [
         "anchors",

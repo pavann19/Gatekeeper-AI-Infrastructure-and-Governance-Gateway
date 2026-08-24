@@ -1,0 +1,194 @@
+{
+  "model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+  "feature_name": "multilingual_head",
+  "seed": 20260723,
+  "folds": 5,
+  "fpr_budget": 0.05,
+  "test_fraction": 0.2,
+  "n_rows": 13011,
+  "n_train": 10408,
+  "n_test": 2603,
+  "embedding_dim": 384,
+  "oof_train_by_language": {
+    "en": {
+      "n": 5912,
+      "n_attack": 1896,
+      "auc": {
+        "point": 0.9497306134113336,
+        "lo": 0.944068692564179,
+        "hi": 0.955655614041057,
+        "n": 5912,
+        "n_boot_effective": 500,
+        "ci_level": 0.95
+      },
+      "recall_at_fpr": {
+        "point": 0.7684599156118144,
+        "lo": 0.7352472089314195,
+        "hi": 0.7937267410951622,
+        "n": 5912,
+        "n_boot_effective": 500,
+        "ci_level": 0.95
+      }
+    },
+    "de": {
+      "n": 3348,
+      "n_attack": 1313,
+      "auc": {
+        "point": 0.820995114064421,
+        "lo": 0.807199938942552,
+        "hi": 0.8351475524644401,
+        "n": 3348,
+        "n_boot_effective": 500,
+        "ci_level": 0.95
+      },
+      "recall_at_fpr": {
+        "point": 0.3115003808073115,
+        "lo": 0.28262548262548265,
+        "hi": 0.37257824143070045,
+        "n": 3348,
+        "n_boot_effective": 500,
+        "ci_level": 0.95
+      }
+    },
+    "other": {
+      "n": 1148,
+      "n_attack": 362,
+      "auc": {
+        "point": 0.9377117512265756,
+        "lo": 0.9219326780284279,
+        "hi": 0.952117777013201,
+        "n": 1148,
+        "n_boot_effective": 500,
+        "ci_level": 0.95
+      },
+      "recall_at_fpr": {
+        "point": 0.7044198895027625,
+        "lo": 0.6263736263736264,
+        "hi": 0.7784431137724551,
+        "n": 1148,
+        "n_boot_effective": 500,
+        "ci_level": 0.95
+      }
+    }
+  },
+  "held_out_test_by_language": {
+    "en": {
+      "n": 1423,
+      "n_attack": 463,
+      "auc": {
+        "point": 0.9509696724262059,
+        "lo": 0.9379476457541639,
+        "hi": 0.9628898733610776,
+        "n": 1423,
+        "n_boot_effective": 500,
+        "ci_level": 0.95
+      },
+      "recall_at_fpr": {
+        "point": 0.7948164146868251,
+        "lo": 0.7488888888888889,
+        "hi": 0.8407494145199064,
+        "n": 1423,
+        "n_boot_effective": 500,
+        "ci_level": 0.95
+      }
+    },
+    "de": {
+      "n": 873,
+      "n_attack": 342,
+      "auc": {
+        "point": 0.8258774683098203,
+        "lo": 0.7938134699081197,
+        "hi": 0.8555898907405364,
+        "n": 873,
+        "n_boot_effective": 500,
+        "ci_level": 0.95
+      },
+      "recall_at_fpr": {
+        "point": 0.3538011695906433,
+        "lo": 0.27123287671232876,
+        "hi": 0.44126984126984126,
+        "n": 873,
+        "n_boot_effective": 500,
+        "ci_level": 0.95
+      }
+    },
+    "other": {
+      "n": 307,
+      "n_attack": 88,
+      "auc": {
+        "point": 0.9518991282689913,
+        "lo": 0.9241784745251733,
+        "hi": 0.9733768283699884,
+        "n": 307,
+        "n_boot_effective": 500,
+        "ci_level": 0.95
+      },
+      "recall_at_fpr": {
+        "point": 0.7613636363636364,
+        "lo": 0.6071428571428571,
+        "hi": 0.8539325842696629,
+        "n": 307,
+        "n_boot_effective": 500,
+        "ci_level": 0.95
+      }
+    }
+  },
+  "held_out_test_pooled_auc": {
+    "point": 0.9167246223060451,
+    "lo": 0.9055488140767337,
+    "hi": 0.9277163166052055,
+    "n": 2603,
+    "n_boot_effective": 500,
+    "ci_level": 0.95
+  },
+  "leave_one_source_out_german": {
+    "Octavio-Santana/prompt-injection-attack-detection-multilingual": {
+      "n": 364,
+      "n_attack": 208,
+      "de_auc": {
+        "point": 0.9413523175542406,
+        "lo": 0.91603517186251,
+        "hi": 0.9658008658008658,
+        "n": 364,
+        "n_boot_effective": 500,
+        "ci_level": 0.95
+      }
+    },
+    "deepset/prompt-injections": {
+      "n": 204,
+      "n_attack": 71,
+      "de_auc": {
+        "point": 0.9821031451869109,
+        "lo": 0.9690473700721531,
+        "hi": 0.9941809398331137,
+        "n": 204,
+        "n_boot_effective": 500,
+        "ci_level": 0.95
+      }
+    },
+    "philschmid/germeval18": {
+      "n": 2931,
+      "n_attack": 1000,
+      "de_auc": {
+        "point": 0.6149854997410668,
+        "lo": 0.5953862601398718,
+        "hi": 0.6362960962471118,
+        "n": 2931,
+        "n_boot_effective": 500,
+        "ci_level": 0.95
+      }
+    },
+    "rikka-snow/prompt-injection-multilingual": {
+      "n": 692,
+      "n_attack": 371,
+      "de_auc": {
+        "point": 0.946267979948107,
+        "lo": 0.9283485155195681,
+        "hi": 0.9619287634408602,
+        "n": 692,
+        "n_boot_effective": 500,
+        "ci_level": 0.95
+      }
+    }
+  }
+}

@@ -131,6 +131,46 @@ def report_by_language(scores, labels, langs, prefix="   "):
     return out
 
 
+def leave_one_source_out(rows, vecs, y, langs):
+    """
+    The test that separates "fits this data" from "actually works".
+
+    A random held-out split still draws test rows from sources the model
+    trained on, so it cannot distinguish a model that learned what an
+    attack looks like from one that learned each dataset's house style
+    (annotation quirks, prompt templates, scraping artefacts). Holding out
+    an ENTIRE SOURCE and training on the rest asks the question that
+    matters for deployment: does this work on German text from somewhere it
+    has never seen?
+
+    Reported per German-bearing source. A model that only memorised source
+    style collapses here; one that generalises degrades gracefully.
+    """
+    print("\n[LEAVE-ONE-SOURCE-OUT -- generalisation to unseen sources]")
+    sources = sorted({r["source"] for r in rows})
+    de_idx_all = [i for i, la in enumerate(langs) if la == "de"]
+    de_sources = sorted({rows[i]["source"] for i in de_idx_all})
+
+    out = {}
+    for src in sources:
+        if src not in de_sources:
+            continue
+        test_idx = [i for i, r in enumerate(rows) if r["source"] == src and langs[i] == "de"]
+        train_idx = [i for i, r in enumerate(rows) if r["source"] != src]
+        test_labels = [int(y[i]) for i in test_idx]
+        if len(test_idx) < 50 or len(set(test_labels)) < 2:
+            print(f"   {src:<52} skipped (n={len(test_idx)}, single-class or too small)")
+            continue
+
+        clf = make_pipeline(StandardScaler(), LogisticRegression(max_iter=3000, C=1.0))
+        clf.fit(vecs[train_idx], y[train_idx])
+        scores = clf.predict_proba(vecs[test_idx])[:, 1]
+        auc = bootstrap_ci(list(scores), test_labels, roc_auc, n_boot=N_BOOT)
+        print(f"   {src:<52} n={len(test_idx):<5} de AUC={fmt_ci(auc, pct=False)}")
+        out[src] = {"n": len(test_idx), "n_attack": int(sum(test_labels)), "de_auc": auc}
+    return out
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default=DEFAULT_MODEL)
@@ -170,6 +210,8 @@ def main():
                               roc_auc, n_boot=N_BOOT)
     print(f"   {'pooled':<8} n={len(idx_test):<6} AUC={fmt_ci(pooled_auc, pct=False)}")
 
+    loso = leave_one_source_out(rows, vecs, y, langs)
+
     # --- Emit as a fusion feature, using OOF over the FULL suite so no row
     #     ever receives a score from a model that saw its own label.
     print("\nEmitting full-suite out-of-fold scores as a fusion feature ...")
@@ -191,6 +233,7 @@ def main():
         "oof_train_by_language": oof_by_lang,
         "held_out_test_by_language": test_by_lang,
         "held_out_test_pooled_auc": pooled_auc,
+        "leave_one_source_out_german": loso,
     }
     os.makedirs(os.path.dirname(REPORT_FILE), exist_ok=True)
     with open(REPORT_FILE, "w", encoding="utf-8") as f:
