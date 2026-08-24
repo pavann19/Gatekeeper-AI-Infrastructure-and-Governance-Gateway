@@ -153,7 +153,14 @@ HTTP_GET_SPEC = ToolSpec(
                 "non-sandboxed tool -- makes an actual outbound network call.",
     parameters={
         "type": "object",
-        "properties": {"url": {"type": "string"}},
+        # maxLength=2048: comfortably covers any real URL (common browser/
+        # server limits sit around 2000-8000 chars) while bounding the
+        # worst case -- a deliberately oversized url doing real work
+        # (urlsplit, a DNS lookup, string formatting into log/error
+        # messages) before the allowlist check even gets a chance to
+        # reject it on hostname grounds (core/tools.py's validate_arguments
+        # now enforces JSON-Schema maxLength; this is the one caller of it).
+        "properties": {"url": {"type": "string", "maxLength": 2048}},
         "required": ["url"],
     },
     risk_level="MEDIUM",
