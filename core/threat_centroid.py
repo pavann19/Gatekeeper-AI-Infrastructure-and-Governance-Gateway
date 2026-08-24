@@ -6,6 +6,9 @@
 import json
 import os
 
+from core.logger import get_logger
+
+logger = get_logger(__name__)
 
 POLICY_FILE = "policies.json"
 
@@ -17,7 +20,7 @@ _threat_centroid_initialized = False
 def load_threat_anchors():
     """Load threat anchor strings from policies.json."""
     if not os.path.exists(POLICY_FILE):
-        print(f"WARNING: {POLICY_FILE} not found. Threat centroid disabled.")
+        logger.warning(f"{POLICY_FILE} not found. Threat centroid disabled.")
         return []
     try:
         with open(POLICY_FILE, "r") as f:
@@ -33,10 +36,10 @@ def load_threat_anchors():
             anchors = [a for group in classes.values() for a in group]
         else:
             anchors = data.get("threat_anchors", [])
-        print(f"Loaded {len(anchors)} threat anchors for centroid computation.")
+        logger.info(f"Loaded {len(anchors)} threat anchors for centroid computation.")
         return anchors
     except Exception as e:
-        print(f"WARNING: Failed to load threat anchors: {e}")
+        logger.warning(f"Failed to load threat anchors: {e}")
         return []
 
 
@@ -68,7 +71,7 @@ def build_malicious_centroid(anchors):
     for i in range(dim):
         centroid[i] /= len(vectors)
 
-    print(f"Malicious centroid built from {len(vectors)} vectors (dim={dim}).")
+    logger.info(f"Malicious centroid built from {len(vectors)} vectors (dim={dim}).")
     return centroid
 
 

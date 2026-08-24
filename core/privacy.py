@@ -2,6 +2,9 @@ import re
 import spacy
 
 from core.config import SPACY_MODEL
+from core.logger import get_logger
+
+logger = get_logger(__name__)
 
 # --- CONFIGURATION ---
 # Load spaCy small model for efficiency (Research Grade: Lightweight)
@@ -11,7 +14,7 @@ try:
     # to keep latency under 20ms.
     NLP_MODEL.disable_pipes(["parser", "tagger", "lemmatizer", "attribute_ruler"])
 except OSError:
-    print(f"⚠️ Warning: spaCy model '{SPACY_MODEL}' not found. Run: python -m spacy download {SPACY_MODEL}")
+    logger.warning(f"spaCy model '{SPACY_MODEL}' not found. Run: python -m spacy download {SPACY_MODEL}")
     NLP_MODEL = None
 
 # 1. DETERMINISTIC PATTERNS (The "Fast Path")

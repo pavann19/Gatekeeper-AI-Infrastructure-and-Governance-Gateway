@@ -2,6 +2,9 @@
 import json
 import os
 from core.config import DOMAIN_THRESHOLD
+from core.logger import get_logger
+
+logger = get_logger(__name__)
 
 DOMAIN_CORPUS_FILE = "policies/domain_corpus.json"
 
@@ -9,14 +12,14 @@ def _load_domain_corpus():
     """Loads domain corpus documents from external JSON file.
     Returns list of document strings, or empty list if file missing/invalid."""
     if not os.path.exists(DOMAIN_CORPUS_FILE):
-        print(f"WARNING: {DOMAIN_CORPUS_FILE} not found. Domain guardrail will default to allow.")
+        logger.warning(f"{DOMAIN_CORPUS_FILE} not found. Domain guardrail will default to allow.")
         return []
     try:
         with open(DOMAIN_CORPUS_FILE, "r") as f:
             data = json.load(f)
             return data.get("documents", [])
     except Exception as e:
-        print(f"WARNING: Failed to load domain corpus: {e}")
+        logger.warning(f"Failed to load domain corpus: {e}")
         return []
 
 def _compute_centroid(documents):
@@ -55,7 +58,7 @@ def _get_domain_centroid():
         _corpus_documents = _load_domain_corpus()
         _domain_centroid_cache = _compute_centroid(_corpus_documents)
         if _domain_centroid_cache is None:
-            print("WARNING: Domain centroid not computed. Domain check will default to allow.")
+            logger.warning("Domain centroid not computed. Domain check will default to allow.")
         _centroid_initialized = True
     return _domain_centroid_cache
 
