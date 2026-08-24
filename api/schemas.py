@@ -223,3 +223,43 @@ class GatewayChatResponse(BaseModel):
     review_id: Optional[str] = Field(None, description="Set when decision is REVIEW.")
     details: Dict[str, Any] = Field(default_factory=dict, description="Metadata and scores.")
     process_time_ms: float = Field(default=0.0, description="Server-side processing latency, including the provider call.")
+
+
+# --- Tool / Agent Gateway (Phase 6) ---
+
+class ToolCallRequest(BaseModel):
+    name: str = Field(..., min_length=1, description="The registered tool name to call, e.g. 'demo.database.query'.")
+    arguments: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Arguments for the tool, validated against its declared JSON-Schema "
+                    "parameters (core/tools.py::validate_arguments) before the tool runs.",
+    )
+
+    model_config = {"extra": "forbid"}
+
+
+class ToolCallResponse(BaseModel):
+    decision: str = Field(..., description="BLOCK, REVIEW, or ALLOW -- core/tools.py's decision "
+                                           "vocabulary, distinct from prompt-assessment's "
+                                           "BLOCK/RESTRICT/ALLOW/REVIEW (RESTRICT has no meaning "
+                                           "for a tool call that either runs or doesn't).")
+    tool: str = Field(..., description="The tool name from the request, echoed back.")
+    reason: str = Field(..., description="Why this decision was reached -- an access denial, a "
+                                         "validation failure, 'HIGH risk; human approval required', "
+                                         "or 'ok' for ALLOW.")
+    output: Optional[Any] = Field(
+        None, description="The handler's return value. Present only when decision is ALLOW "
+                          "and the handler ran without raising.",
+    )
+    error: Optional[str] = Field(
+        None, description="Set when decision is ALLOW but the handler itself raised -- "
+                          "distinct from a BLOCK/REVIEW security decision. The call WAS "
+                          "authorized to attempt running and failed on its own terms.",
+    )
+    review_id: Optional[str] = Field(
+        None, description="Set when decision is REVIEW. Poll GET /api/v1/review/{review_id} "
+                          "for the eventual human decision, same as a REVIEW from /api/v1/assess.",
+    )
+    process_time_ms: float = Field(default=0.0, description="Server-side processing latency in milliseconds.")
+
+    model_config = {"extra": "forbid"}

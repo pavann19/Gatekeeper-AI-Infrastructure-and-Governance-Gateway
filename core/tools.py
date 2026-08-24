@@ -240,25 +240,39 @@ def decide_tool_call(capability: str, spec: ToolSpec, arguments: Dict[str, Any])
     tool-call review into `core/review_queue.py`'s prompt-hash-shaped
     `ReviewRecord` would be exactly the "one shape serving two different
     questions" mistake `core/logger.py`'s three distinct audit-event
-    functions were built to avoid. That wiring is the next item's
-    problem once there is a real caller.
+    functions were built to avoid — that concern was about the AUDIT
+    LOG's shape specifically (a compliance record answering a fixed set
+    of questions), not the review QUEUE's, which already generalises: a
+    `ReviewRecord`'s `prompt_hash` field is documented as "an identifying
+    hash, never raw content" — a tool call's name+arguments hash fits
+    that same contract exactly, even though the field name is inherited
+    from Phase 4's prompt-oriented origin. `POST /api/v1/tools/call`
+    (added once this function had a real caller to wire it to) does
+    exactly that.
+
+    `risk_level` is included in every returned dict — not just useful
+    context, but what a caller enqueuing a REVIEW needs to populate
+    `ReviewRecord.risk` without a second lookup against the registry.
     """
     access_ok, access_detail = check_tool_access(capability, spec)
     if not access_ok:
-        return {"decision": "BLOCK", "reason": access_detail, "tool": spec.name}
+        return {"decision": "BLOCK", "reason": access_detail, "tool": spec.name,
+                "risk_level": spec.risk_level}
 
     valid_ok, valid_detail = validate_arguments(spec, arguments)
     if not valid_ok:
-        return {"decision": "BLOCK", "reason": valid_detail, "tool": spec.name}
+        return {"decision": "BLOCK", "reason": valid_detail, "tool": spec.name,
+                "risk_level": spec.risk_level}
 
     if spec.risk_level == "HIGH":
         return {
             "decision": "REVIEW",
             "reason": f"tool {spec.name!r} is HIGH risk; human approval required",
             "tool": spec.name,
+            "risk_level": spec.risk_level,
         }
 
-    return {"decision": "ALLOW", "reason": "ok", "tool": spec.name}
+    return {"decision": "ALLOW", "reason": "ok", "tool": spec.name, "risk_level": spec.risk_level}
 
 
 class ToolRegistry:
@@ -348,11 +362,11 @@ def execute_tool(capability: str, name: str, arguments: Dict[str, Any],
     security block in the audit trail.
 
     `tenant`/`request_id` default to "unset" the same way every other
-    audit-emitting function in this codebase does — there is no real
-    HTTP endpoint calling this yet to supply them, and "unset" lets a
-    future query distinguish "no request context existed" from "this
-    caller resolved to a default", same reasoning `core/logger.py::
-    log_event`'s own docstring gives for that field.
+    audit-emitting function in this codebase does — "unset" lets a query
+    distinguish "no request context existed" from "this caller resolved
+    to a default", same reasoning `core/logger.py::log_event`'s own
+    docstring gives for that field. `POST /api/v1/tools/call` supplies
+    real values for both.
     """
     from core.logger import log_tool_event
 
@@ -363,7 +377,7 @@ def execute_tool(capability: str, name: str, arguments: Dict[str, Any],
         detail = str(e)
         log_tool_event(capability, name, "BLOCK", risk_level=None, reason=detail,
                        arguments=arguments, tenant=tenant, request_id=request_id)
-        return {"decision": "BLOCK", "reason": detail, "tool": name}
+        return {"decision": "BLOCK", "reason": detail, "tool": name, "risk_level": None}
 
     result = decide_tool_call(capability, spec, arguments)
     if result["decision"] != "ALLOW":
@@ -377,7 +391,7 @@ def execute_tool(capability: str, name: str, arguments: Dict[str, Any],
         detail = f"tool {name!r} has no registered handler"
         log_tool_event(capability, name, "BLOCK", risk_level=spec.risk_level, reason=detail,
                        arguments=arguments, tenant=tenant, request_id=request_id)
-        return {"decision": "BLOCK", "reason": detail, "tool": name}
+        return {"decision": "BLOCK", "reason": detail, "tool": name, "risk_level": spec.risk_level}
 
     try:
         output = handler(**arguments)

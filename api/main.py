@@ -1,5 +1,6 @@
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
 import hashlib
+import json
 import time
 import asyncio
 import functools
@@ -12,6 +13,7 @@ from core import metrics
 from api.schemas import (
     AssessRequest, AssessResponse, AssessOutputRequest, AssessOutputResponse,
     ReviewStatusResponse, ReviewResolveRequest, GatewayChatRequest, GatewayChatResponse,
+    ToolCallRequest, ToolCallResponse,
 )
 from core.auth import auth_required, resolve_principal
 from core.privacy import redact_pii
@@ -22,6 +24,7 @@ from core.cache import flush_cache
 from core.logger import get_logger, log_event, log_output_event, log_gateway_event
 from core.policy import policy_decision
 from core.review_queue import enqueue_review, get_review, list_pending_reviews, resolve_review
+from core.tools import execute_tool
 from core.llm_providers import get_provider, LLMProviderError
 from core.token_quota import gateway_token_quota, extract_total_tokens, seconds_until_utc_midnight
 from core.config import settings, CAPABILITY_INTERNAL
@@ -271,6 +274,12 @@ async def warm_models() -> None:
             logger.warning(f"Model warm-up incomplete after {elapsed:.1f}s — {detail}")
     except Exception:
         logger.exception("Model warm-up failed; models will load on first request.")
+
+    if settings.REGISTER_DEMO_TOOLS:
+        from core.demo_tools import register_demo_tools
+        register_demo_tools()
+        logger.info("Demo tools registered (REGISTER_DEMO_TOOLS=true) — "
+                   "POST /api/v1/tools/call can reach demo.* tools.")
 
 
 @app.middleware("http")
@@ -830,6 +839,71 @@ async def gateway_chat(req: GatewayChatRequest, request: Request, background_tas
         usage=llm_response.usage,
         review_id=None,
         details=details,
+        process_time_ms=process_time_ms,
+    )
+
+
+@app.post("/api/v1/tools/call", response_model=ToolCallResponse)
+async def tools_call(req: ToolCallRequest, request: Request):
+    """
+    Real LLM Gateway's tool-calling counterpart (Phase 6, Tool/Agent
+    Gateway) — the endpoint `core/tools.py::execute_tool` existed without
+    since the item that built it, wired up now that there is a caller to
+    give it real `tenant`/`request_id` context and a real REVIEW path.
+
+    Same auth/tenant/rate-limit boundary as every other endpoint. The
+    actual decision — access control, structural validation, risk-based
+    approval, execution, audit — is entirely `execute_tool`'s; this
+    endpoint's own job is the HTTP contract and, for a REVIEW decision,
+    enqueuing it so a human can actually resolve it (previously
+    documented as deferred in `execute_tool`'s own docstring: "no real
+    tool call path to enforce this against" — there is one now).
+    """
+    request.state.start_time = time.perf_counter()
+
+    principal = resolve_principal(authorization=request.headers.get("Authorization"))
+    if auth_required() and not principal.authenticated:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required. Present a valid API key as "
+                   "'Authorization: Bearer <key>'.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    tenant_config = resolve_tenant(principal.tenant)
+    if tenant_config.suspended:
+        raise HTTPException(status_code=403, detail=f"Tenant '{principal.tenant}' is suspended.")
+    _enforce_rate_limit(principal, request, tenant_config)
+
+    result = execute_tool(
+        principal.capability, req.name, req.arguments,
+        tenant=principal.tenant, request_id=request.state.request_id,
+    )
+
+    review_id = None
+    if result["decision"] == "REVIEW":
+        # Same identifying-hash-not-raw-content contract ReviewRecord's
+        # prompt_hash already promises (core/review_queue.py) — a tool
+        # call's name+arguments hash fits it exactly, even though the
+        # field name is inherited from Phase 4's prompt-oriented origin.
+        call_hash = hashlib.sha256(
+            json.dumps({"tool": req.name, "arguments": req.arguments},
+                      sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest()
+        review = enqueue_review(
+            reason=result["reason"], capability=principal.capability,
+            risk=result.get("risk_level") or "HIGH", tenant=principal.tenant,
+            prompt_hash=call_hash, request_id=request.state.request_id,
+        )
+        review_id = review.review_id
+
+    process_time_ms = round((time.perf_counter() - request.state.start_time) * 1000, 2)
+    return ToolCallResponse(
+        decision=result["decision"],
+        tool=result["tool"],
+        reason=result["reason"],
+        output=result.get("output"),
+        error=result.get("error"),
+        review_id=review_id,
         process_time_ms=process_time_ms,
     )
 
