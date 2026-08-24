@@ -158,14 +158,27 @@ class PolicyContentRequest(BaseModel):
     """Candidate policy file content, exactly as it would be written to
     disk (JSON or YAML text, matching the live file's own extension) --
     validated or deployed as a whole file, not a partial patch, mirroring
-    how `scripts/manage_policy_versions.py deploy` already works."""
-    content: str = Field(..., min_length=1)
+    how `scripts/manage_policy_versions.py deploy` already works.
+
+    max_length=1_000_000 (1MB) matches this codebase's existing convention
+    of bounding every free-text request field (see GatewayChatRequest's
+    prompt/response_text below) -- a policy file is small, structured,
+    repetitive JSON/YAML, so even a deployment with hundreds of tenants
+    fits comfortably; this exists to bound the worst case (an oversized
+    body used to waste memory/disk on the temp-file write this content
+    goes through), not to constrain a realistic policy file."""
+    content: str = Field(..., min_length=1, max_length=1_000_000)
 
     model_config = {"extra": "forbid"}
 
 
 class PolicyRollbackRequest(BaseModel):
-    version: str = Field(..., min_length=1, description="A version filename from GET /api/v1/policy's 'versions' list.")
+    # A version filename is `<timestamp>__<sha256[:12]>.<ext>` (see
+    # core/policy_versioning.py) -- always well under 100 chars. Bounded
+    # so an oversized value can't be used to probe filesystem behaviour
+    # with an absurdly long path component.
+    version: str = Field(..., min_length=1, max_length=255,
+                        description="A version filename from GET /api/v1/policy's 'versions' list.")
 
     model_config = {"extra": "forbid"}
 

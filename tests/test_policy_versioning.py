@@ -78,6 +78,57 @@ def test_rollback_to_nonexistent_version_raises(live_policy):
         rollback_to("nonexistent-version.json", path=live_policy)
 
 
+# --- Phase 8 hardening: path traversal via version_name -----------------------
+#
+# rollback_to's only caller used to be a local CLI operator who already had
+# full filesystem access, so os.path.join(_versions_dir(), version_name)
+# happily resolving an absolute path or a `../` traversal was never
+# exploitable. Phase 7 exposed this function over HTTP
+# (POST /api/v1/policy/rollback, INTERNAL capability) -- without a guard,
+# any INTERNAL API key could roll back to an arbitrary readable file and
+# then read its content back via GET /api/v1/policy, an arbitrary-file-read
+# primitive. These tests prove the fix and pin the behaviour.
+
+def test_rollback_rejects_absolute_path(tmp_path, live_policy):
+    secret = tmp_path / "secret.txt"
+    secret.write_text("TOP SECRET", encoding="utf-8")
+    original = open(live_policy, encoding="utf-8").read()
+
+    with pytest.raises(FileNotFoundError):
+        rollback_to(str(secret), path=live_policy)
+
+    assert open(live_policy, encoding="utf-8").read() == original
+
+
+def test_rollback_rejects_relative_traversal(tmp_path, live_policy):
+    secret = tmp_path / "secret.txt"
+    secret.write_text("TOP SECRET", encoding="utf-8")
+    original = open(live_policy, encoding="utf-8").read()
+
+    with pytest.raises(FileNotFoundError):
+        rollback_to("../secret.txt", path=live_policy)
+
+    assert open(live_policy, encoding="utf-8").read() == original
+
+
+def test_rollback_rejects_path_separator_even_for_a_real_versions_dir_file(live_policy):
+    """A version_name containing a separator is rejected outright, even if
+    it happens to resolve to a real file inside the versions dir -- the
+    contract is "bare filename only", not "anything os.path.exists() finds
+    after joining"."""
+    version = snapshot_policy(live_policy)
+    with pytest.raises(FileNotFoundError):
+        rollback_to("./" + version, path=live_policy)
+
+
+def test_legitimate_version_name_still_works(live_policy):
+    """The fix must not collateral-damage the normal case."""
+    version = snapshot_policy(live_policy)
+    with open(live_policy, "a", encoding="utf-8") as f:
+        f.write(" ")
+    rollback_to(version, path=live_policy)  # must not raise
+
+
 def test_rollback_itself_is_snapshotted_and_therefore_undoable(live_policy):
     """A rollback is itself a policy change; it must not destroy the
     ability to undo it."""
@@ -121,7 +172,10 @@ def test_first_deploy_with_no_prior_policy_returns_none(tmp_path, monkeypatch):
 
     live = tmp_path / "policy_rules.json"  # does not exist yet
     candidate = tmp_path / "candidate.json"
-    candidate.write_text(json.dumps({"default_action": "BLOCK", "tenants": {"default": {"policies": {"GENERAL": {"HIGH": "BLOCK"}}}}}), encoding="utf-8")
+    candidate.write_text(json.dumps({
+        "default_action": "BLOCK",
+        "tenants": {"default": {"policies": {"GENERAL": {"HIGH": "BLOCK"}}}},
+    }), encoding="utf-8")
 
     previous_version = deploy_policy(str(candidate), live_path=str(live))
     assert previous_version is None
