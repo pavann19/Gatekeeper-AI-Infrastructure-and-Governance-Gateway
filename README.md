@@ -60,7 +60,9 @@ Key engineering outcomes:
 
 Gatekeeper utilizes a clean, decoupled microservices model to separate client concerns from high-performance machine learning workloads:
 
-1.  **Gatekeeper UI (`ui/web_app.py`)**: A Streamlit control panel that provides administrative configuration, real-time threat simulation, and auditing dashboards.
+1.  **Gatekeeper Client UI (`ui/login/`, `ui/activity/`, `ui/review/`, `ui/trace/`, `ui/gateways/`, `ui/logs/`, `ui/benchmarks/`, `ui/policy/`, `ui/settings/`)**: Static pages served directly by `api/main.py` (mounted at `/ui/`, no separate container or build step) that talk to the real Gatekeeper API — sign-in, an activity feed and per-request trace over the real audit log, the human-review approval queue, and (INTERNAL capability) the model/tool gateway catalogues, raw logs, benchmark results, and a policy editor that validates before it ever deploys. This is the UI actually exercised by this project's own test suite and CI.
+
+    `ui/web_app.py` is an EARLIER, now-superseded Streamlit prototype: it calls Ollama directly rather than the Gatekeeper API, so it never reaches `core/risk.py`'s pipeline (no fusion, cache, tenancy, or policy enforcement) and references at least one endpoint (`/api/v1/update`) removed early in this project's history. Kept in the repo for historical reference only — do not deploy it as "the" Gatekeeper UI. `docker-compose.yml`'s `gatekeeper-ui` service builds this prototype specifically, not the real client UI above (which ships for free inside the `gatekeeper-api` image/container, reachable at `http://<gatekeeper-api host>:8000/ui/login/index.html`).
 2.  **Gatekeeper API Gateway (`api/main.py`)**: An asynchronous FastAPI service that exposes assessment and configuration endpoints, processes payloads, and manages the execution flow.
 3.  **Neuro-Symbolic Engine (`core/`)**: The core evaluation system containing distinct detection components, including normalizers, classifiers, threat vectorizers, and local semantic judges.
 4.  **Vector Store (`core/vector_store.py`)**: Powered by Facebook AI Similarity Search (FAISS) for sub-millisecond similarity calculations against known threat anchors and educational safe harbors.
@@ -388,6 +390,15 @@ python -m scripts.manage_api_keys revoke --key-id acme-elevated-01
 ## 🐳 13. Dockerized Deployment
 
 Gatekeeper provides a containerized multi-service configuration in `docker-compose.yml` to ensure consistent execution environments across staging and production.
+
+The snippet below is illustrative and has drifted from the real
+`docker-compose.yml` (which now uses named volumes with directory-level
+mounts, not the single-file bind mounts shown here, and adds `redis`,
+`model-pull`, `prometheus`, and `grafana` services) — treat the real file
+as authoritative. In particular, `gatekeeper-ui` here builds
+`Dockerfile.ui` / `ui/web_app.py`, the superseded Streamlit prototype
+described in §3 above, not the real client UI — that one ships inside
+`gatekeeper-api` itself and needs no separate service.
 
 ```yaml
 version: '3.8'

@@ -191,3 +191,51 @@ def test_rollback_restores_the_previous_live_policy(key_store, _isolated_policy_
                                     headers={"Authorization": f"Bearer {key}"})
     assert rollback_response.status_code == 200
     assert json.loads(_isolated_policy_files.read_text(encoding="utf-8")) == VALID_POLICY
+
+
+# --- Phase 8 hardening: policy changes are a distinct, security-relevant metric ---
+
+def _counter_value(action, outcome):
+    from core.metrics import policy_changes_total
+    return policy_changes_total.labels(action=action, outcome=outcome)._value.get()
+
+
+def test_successful_deploy_increments_the_success_counter(key_store):
+    key = key_store(capability="INTERNAL")
+    before = _counter_value("deploy", "success")
+    new_policy = {"default_action": "BLOCK", "tenants": {"default": {"policies": {"GENERAL": {"HIGH": "ALLOW"}}}}}
+    client.post("/api/v1/policy/deploy", json={"content": json.dumps(new_policy)},
+               headers={"Authorization": f"Bearer {key}"})
+    assert _counter_value("deploy", "success") == before + 1
+
+
+def test_rejected_deploy_increments_the_rejected_counter_not_success(key_store):
+    key = key_store(capability="INTERNAL")
+    before_rejected = _counter_value("deploy", "rejected")
+    before_success = _counter_value("deploy", "success")
+    bad = {"default_action": "BLOCK", "tenants": {"acme": {"policies": {}}}}
+    client.post("/api/v1/policy/deploy", json={"content": json.dumps(bad)},
+               headers={"Authorization": f"Bearer {key}"})
+    assert _counter_value("deploy", "rejected") == before_rejected + 1
+    assert _counter_value("deploy", "success") == before_success
+
+
+def test_successful_rollback_increments_the_success_counter(key_store):
+    key = key_store(capability="INTERNAL")
+    new_policy = {"default_action": "BLOCK", "tenants": {"default": {"policies": {"GENERAL": {"HIGH": "ALLOW"}}}}}
+    deploy_response = client.post("/api/v1/policy/deploy", json={"content": json.dumps(new_policy)},
+                                  headers={"Authorization": f"Bearer {key}"})
+    previous_version = deploy_response.json()["previous_version"]
+
+    before = _counter_value("rollback", "success")
+    client.post("/api/v1/policy/rollback", json={"version": previous_version},
+               headers={"Authorization": f"Bearer {key}"})
+    assert _counter_value("rollback", "success") == before + 1
+
+
+def test_failed_rollback_increments_the_rejected_counter(key_store):
+    key = key_store(capability="INTERNAL")
+    before = _counter_value("rollback", "rejected")
+    client.post("/api/v1/policy/rollback", json={"version": "no-such-version.json"},
+               headers={"Authorization": f"Bearer {key}"})
+    assert _counter_value("rollback", "rejected") == before + 1

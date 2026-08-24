@@ -223,6 +223,19 @@ circuit_breaker_open = Gauge(
     ["backend"],
 )
 
+# --- Phase 7 (Policy Editor) / Phase 8 hardening: a live policy change is
+# a distinct, security-relevant event -- "how many times did the ENFORCED
+# policy actually change, and did the attempt succeed" is a question worth
+# answering without joining generic HTTP request logs, the same reasoning
+# gateway_call_total exists as its own counter rather than being read off
+# request_duration_seconds' status label.
+policy_changes_total = Counter(
+    "gatekeeper_policy_changes_total",
+    "Live policy changes via the Policy Editor API, by action "
+    "(deploy/rollback) and outcome (success/rejected).",
+    ["action", "outcome"],
+)
+
 unknown_source_total = Counter(
     "gatekeeper_metrics_unknown_source_total",
     "Verdict sources not in the known set, collapsed to 'other'. Non-zero "
