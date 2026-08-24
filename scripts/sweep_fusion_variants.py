@@ -78,11 +78,30 @@ PLUS_BOTH_6 = DEPLOYED_4 + ["deepset_injection", "prompt_guard_2"]
 PLUS_ML_5 = DEPLOYED_4 + ["multilingual_head"]
 ALL_7 = DEPLOYED_4 + ["deepset_injection", "prompt_guard_2", "multilingual_head"]
 
+# German offensive-content detectors (issue #3) -- OFF-THE-SHELF, no
+# stacking caveat, unlike multilingual_head. SHIPPED_6 is exactly what's
+# deployed after PR #2 (six_feature tier); PLUS_GERMAN_TOX_8 adds both
+# German toxicity classifiers on top of it, the direct candidate for
+# closing the offensive-content gap the same way deepset_injection/
+# prompt_guard_2 closed the injection one.
+SHIPPED_6 = DEPLOYED_4 + ["deepset_injection", "prompt_guard_2"]
+GERMAN_TOX_FEATURES = ["german_toxicity_eistakovskii", "german_toxicity_ankekat"]
+PLUS_GERMAN_TOX_8 = SHIPPED_6 + GERMAN_TOX_FEATURES
+
+# toxic_bert is English-trained and separately measured as severely
+# miscalibrated on German standalone (48.6% FPR against a 5% budget,
+# docs/ENGINEERING_ASSESSMENT.md §1aa) -- this variant asks whether it is
+# net NOISE once two German-native toxicity signals are present, not just
+# redundant.
+NO_TOXIC_BERT_PLUS_GERMAN_TOX_7 = [
+    f for f in SHIPPED_6 if f != "toxic_bert"
+] + GERMAN_TOX_FEATURES
+
 # Every feature needed by any variant, so one coverage filter serves all of
 # them and every variant is scored on exactly the same rows (otherwise a
 # variant using a thinner-cached feature would be measured on a different,
 # quietly easier population).
-ALL_FEATURES = DEPLOYED_4 + ["deepset_injection", "prompt_guard_2", "multilingual_head"]
+ALL_FEATURES = DEPLOYED_4 + ["deepset_injection", "prompt_guard_2", "multilingual_head"] + GERMAN_TOX_FEATURES
 
 
 def load_scores(name):
@@ -127,7 +146,9 @@ def main():
                        ("plus_pg2_5", PLUS_PG2_5),
                        ("plus_both_6", PLUS_BOTH_6),
                        ("plus_ml_5", PLUS_ML_5),
-                       ("all_7", ALL_7)):
+                       ("all_7", ALL_7),
+                       ("shipped_6", SHIPPED_6),
+                       ("plus_german_tox_8", PLUS_GERMAN_TOX_8)):
         print(f"\n[{tag}] features={feats}")
         scores = oof(feats, rows, caches, y)
         entry = {"features": feats, "trained_on": "all languages", "by_language": {}}
