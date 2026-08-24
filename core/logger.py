@@ -1,5 +1,6 @@
 # core/logger.py
 import hashlib
+import json
 import os
 from datetime import datetime
 import logging
@@ -170,3 +171,57 @@ def log_gateway_event(capability, provider, model, success, latency_ms, decision
 
     audit_logger = logging.getLogger("gatekeeper.audit")
     audit_logger.info("Gateway Call", extra=log_entry)
+
+
+def log_tool_event(capability, tool_name, decision, risk_level, reason,
+                   arguments=None, success=None, error=None,
+                   tenant="unset", request_id="unset"):
+    """
+    Audit record for a TOOL CALL (Phase 6, Tool/Agent Gateway,
+    "Audit events" roadmap item) — a FOURTH distinct `event_type`
+    alongside `log_event`'s "input_assessment", `log_output_event`'s
+    "output_assessment", and `log_gateway_event`'s "gateway_call", for
+    the same reason all three are already separate from each other: this
+    answers a fourth, different question ("was this tool call allowed to
+    run, and did it succeed?") that none of the others answer. Emitted
+    for EVERY decision core/tools.py::execute_tool reaches — BLOCK and
+    REVIEW included, not just ALLOW — because "an agent tried to call a
+    tool it wasn't authorized for" is itself an auditable security event,
+    arguably more interesting than a routine successful call.
+
+    `arguments` is never logged verbatim — only its SHA-256 hash, same
+    privacy discipline `log_event`'s `prompt_hash` and `log_output_event`'s
+    `response_hash` already apply: a tool argument can carry the same
+    sensitive content a prompt can (a customer ID, a file path, a query
+    string), and this audit trail's existing guarantee — no raw content,
+    ever — must not have a silent exception for tool calls. Hashed as
+    `json.dumps(arguments, sort_keys=True)` so the same call always hashes
+    identically regardless of dict key order.
+
+    `success`/`error` are only meaningful when `decision == "ALLOW"` — a
+    BLOCK or REVIEW never reached the handler at all (see
+    `execute_tool`'s own docstring), so both stay `None` for those rows
+    rather than being coerced into a misleading `False`.
+    """
+    arguments_hash = None
+    if arguments is not None:
+        canonical = json.dumps(arguments, sort_keys=True, default=str)
+        arguments_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    log_entry = {
+        "timestamp": datetime.now().isoformat(),
+        "event_type": "tool_call",
+        "request_id": request_id,
+        "tenant": tenant,
+        "capability": capability,
+        "tool": tool_name,
+        "decision": decision,
+        "risk_level": risk_level,
+        "reason": reason,
+        "arguments_hash": arguments_hash,
+        "success": success,
+        "error": error,
+    }
+
+    audit_logger = logging.getLogger("gatekeeper.audit")
+    audit_logger.info("Tool Call", extra=log_entry)

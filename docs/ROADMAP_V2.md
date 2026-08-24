@@ -292,7 +292,7 @@ your own LLM call, and starts being infrastructure you route through — a
 real architectural shift, not an incremental feature. Scope and benchmark
 incrementally rather than building it in one push.
 
-## Phase 6 — Tool / Agent Gateway (4/6 done)
+## Phase 6 — Tool / Agent Gateway (5/6 done)
 Original estimate: ~35–55h — the single largest new subsystem
 
 - [x] Tool registry + schemas — done 2026-08-24, see `core/tools.py`.
@@ -365,7 +365,26 @@ Original estimate: ~35–55h — the single largest new subsystem
       BLOCK or REVIEW, and a handler's own exception is reported
       distinctly from a security decision (the call WAS allowed to
       attempt running). 16 new tests, 628 passed overall (up from 602).
-- [ ] Audit events
+- [x] Audit events — done 2026-08-24, see `core/logger.py::log_tool_event`
+      and its wiring into `core/tools.py::execute_tool`. A FOURTH
+      distinct `event_type` (`"tool_call"`), alongside `log_event`'s
+      `"input_assessment"`, `log_output_event`'s `"output_assessment"`,
+      and `log_gateway_event`'s `"gateway_call"` — same reasoning as why
+      those three stay separate: this answers a different question ("was
+      this tool call allowed to run, and did it succeed?"). Emitted for
+      EVERY decision, BLOCK and REVIEW included, not just successful
+      calls — an unauthorized tool-call attempt is itself an auditable
+      security event. Arguments are never logged verbatim, only their
+      SHA-256 hash (`json.dumps(arguments, sort_keys=True)`), same
+      privacy discipline `prompt_hash`/`response_hash` already apply —
+      a tool argument can carry the same sensitive content a prompt can.
+      `success`/`error` stay `None` for BLOCK/REVIEW rather than a
+      misleading `False`, since a handler never ran for either. 15 new
+      tests (`tests/test_tool_audit_events.py`), covering both the
+      function directly (hash correctness, stable regardless of key
+      order, no-hash-when-no-arguments) and the wiring (exactly one
+      event per `execute_tool` call, on every branch). 643 passed
+      overall (up from 628).
 - [ ] MCP compatibility (explicitly deferred to after the above is solid)
 
 ## Phase 7 — UI Integration
