@@ -202,6 +202,65 @@ def check_tool_access(capability: str, spec: ToolSpec) -> Tuple[bool, str]:
     return True, "ok"
 
 
+# Decision vocabulary reuses core/policy.py's own action names (minus
+# RESTRICT, which has no obvious meaning for a tool CALL -- a prompt can
+# be answered more cautiously; a database write either happens or it
+# doesn't) rather than inventing a parallel one. Ordering mirrors the
+# same BLOCK > REVIEW > ALLOW severity this project already uses for
+# combining two verdicts (see core/policy.py's VALID_ACTIONS docstring
+# and api/main.py's _SEVERITY dict).
+VALID_TOOL_DECISIONS = ("BLOCK", "REVIEW", "ALLOW")
+
+
+def decide_tool_call(capability: str, spec: ToolSpec, arguments: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    The full pre-execution decision for one tool call: access control,
+    then structural validation, then risk-based approval — in that
+    order, cheapest and most decisive check first, same ordering
+    principle `api/main.py`'s own request handlers already follow
+    (rate limit before token quota before the expensive detection work).
+
+    HIGH-risk tools always require REVIEW, even for a caller whose
+    capability already clears `check_tool_access` — access control
+    answers "may this caller use this tool at all", approval answers "is
+    THIS SPECIFIC call safe enough to run without a human looking at it
+    first", and conflating them would mean an INTERNAL caller's HIGH-risk
+    call (e.g. a production delete) executes with no human in the loop
+    just because they're allowed to invoke the tool in general. This
+    mirrors Phase 4's own REVIEW semantics: "neither auto-allowed nor
+    auto-blocked."
+
+    Returns a dict, not a bare decision string, so a caller can log or
+    display `reason` and `tool` alongside `decision` without a second
+    lookup — the same reasoning `core/fusion.py`'s `fused_threat_score`
+    returns a dict rather than a bare score.
+
+    NOT wired into an execution endpoint or the review queue yet — there
+    is no real tool call path to enforce this against, and forcing a
+    tool-call review into `core/review_queue.py`'s prompt-hash-shaped
+    `ReviewRecord` would be exactly the "one shape serving two different
+    questions" mistake `core/logger.py`'s three distinct audit-event
+    functions were built to avoid. That wiring is the next item's
+    problem once there is a real caller.
+    """
+    access_ok, access_detail = check_tool_access(capability, spec)
+    if not access_ok:
+        return {"decision": "BLOCK", "reason": access_detail, "tool": spec.name}
+
+    valid_ok, valid_detail = validate_arguments(spec, arguments)
+    if not valid_ok:
+        return {"decision": "BLOCK", "reason": valid_detail, "tool": spec.name}
+
+    if spec.risk_level == "HIGH":
+        return {
+            "decision": "REVIEW",
+            "reason": f"tool {spec.name!r} is HIGH risk; human approval required",
+            "tool": spec.name,
+        }
+
+    return {"decision": "ALLOW", "reason": "ok", "tool": spec.name}
+
+
 class ToolRegistry:
     """
     Maps tool name -> ToolSpec. Mirrors `core/detectors.py`'s registry
