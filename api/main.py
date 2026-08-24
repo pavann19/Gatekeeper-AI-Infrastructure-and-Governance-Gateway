@@ -1491,15 +1491,40 @@ def health_check():
         status["status"] = "degraded"
         
     # 4. Check Semantic Judge (Ollama)
-    try:
-        # Check base URL
-        base_url = "/".join(OLLAMA_API_URL.split("/")[:-2])
-        r = requests.get(f"{base_url}/tags", timeout=2)
-        if r.status_code == 200:
-            status["checks"]["semantic_judge"] = True
-        else:
-            status["status"] = "degraded"
-    except Exception:
+    #
+    # Phase 8 hardening: a real load test (docs/ROADMAP_V2.md's Phase 8
+    # entry) showed this endpoint's latency badly degrading under
+    # concurrent load specifically because this made a fresh, uncached,
+    # blocking network call on EVERY /health request regardless of
+    # whether the outage was already known -- 20 concurrent health
+    # checks against a down Ollama each individually paid the full 2s
+    # timeout. core.circuit_breaker.ollama_judge_breaker already tracks
+    # exactly this backend's health from the REAL judge-arbitration call
+    # path; consulting it first means a known outage is reported
+    # instantly, with zero network round-trip, instead of re-discovering
+    # it the slow way on every single health check.
+    #
+    # Reads `_opened_at` directly rather than calling `is_open()` --
+    # `is_open()` has a documented side effect (it transitions a
+    # cooled-down breaker into its one-shot half-open probe state), and a
+    # health check must never consume or reset that probe slot meant for
+    # a real judge call. `core.metrics.refresh_circuit_breaker_gauges`
+    # already established this exact pattern for the same reason.
+    from core.circuit_breaker import ollama_judge_breaker
+    with ollama_judge_breaker._lock:
+        breaker_known_down = ollama_judge_breaker._opened_at is not None
+
+    if breaker_known_down:
         status["status"] = "degraded"
-        
+    else:
+        try:
+            base_url = "/".join(OLLAMA_API_URL.split("/")[:-2])
+            r = requests.get(f"{base_url}/tags", timeout=2)
+            if r.status_code == 200:
+                status["checks"]["semantic_judge"] = True
+            else:
+                status["status"] = "degraded"
+        except Exception:
+            status["status"] = "degraded"
+
     return status
