@@ -45,8 +45,10 @@ jobs:
         # introduced — margin so incidental variance doesn't flake CI, not a
         # ceiling. Ratchet the number up as coverage genuinely improves;
         # lowering it should require the same scrutiny as any other test
-        # deletion. core/audit.py and core/intent.py sit at 0% because
-        # nothing imports them (see docs/ENGINEERING_ASSESSMENT.md §4) —
-        # that is a dead-code question, not a reason to write tests for
-        # unreachable code just to move this number.
+        # deletion. core/audit.py and core/intent.py, previously 0% because
+        # nothing imported them (docs/ENGINEERING_ASSESSMENT.md §4), were
+        # deleted outright once confirmed dead rather than left as an
+        # explained coverage gap — the same applies to core/llm.py and
+        # core/multimodal.py, whose only caller (scripts/cli_demo.py, also
+        # deleted) was itself unreferenced.
         pytest tests/ -v --tb=short --cov=core --cov=api --cov-report=term-missing --cov-fail-under=65

@@ -1786,6 +1786,20 @@ none). That is very likely dead code, not a testing gap, and is flagged here
 rather than acted on, since deleting a module is a bigger call than a
 hygiene pass should make unilaterally.
 
+> **RESOLVED 2026-08-24.** Re-verified during a Phase-1-through-6 audit
+> prompted by a direct question — is anything in this project mocked or
+> faked and presented as real — and deleted, along with two more files
+> the same audit found in the same state: `core/llm.py` and `core/
+> multimodal.py`, both referenced only by `scripts/cli_demo.py` (itself
+> unreferenced everywhere else), also deleted. `core/multimodal.py` in
+> particular was not a stub in the harmless sense — its "OCR"/"ASR"
+> functions matched hardcoded filename substrings
+> (`"bomb_diagram" in image_path`) and returned canned attack/benign text,
+> not real image or audio processing. All five files predate this
+> project's `ROADMAP_V2.md` phases entirely (traced to the original
+> "SentinAL v1.0.0" commit) and were confirmed to have zero references
+> anywhere, including tests, before deletion.
+
 Verified: the full `ruff` + `pytest --cov --cov-fail-under=65` sequence was
 run locally exactly as CI runs it before committing, and passed
 (292 tests, 68.61% coverage).
@@ -1860,7 +1874,7 @@ answered by reading the code, not by recalling what a prior document said.
 | **Decision** | `policy_decision(capability, risk_level)` — deterministic lookup, LLM judge output is one input to `risk_level`, never a direct override of the policy table. This is already the "Deterministic Arbiter" property the V2 diagram calls for; it isn't a V2 addition, it's a V1 property worth stating explicitly so V2 doesn't accidentally regress it. | [core/policy.py](core/policy.py) |
 | **Output Security** | Exists since before this audit. *As of §1u (2026-08-13): also wired into `/api/v1/assess` — a caller can submit `response_text` alongside `prompt` and get a combined decision in one call, no longer required to orchestrate two separate requests.* Still exposed standalone at `/api/v1/assess_output` for a caller checking a response without re-assessing its prompt. | [core/output_guardrails.py](core/output_guardrails.py) |
 | **Audit** | `log_event` records: timestamp, `request_id` (added today, §1q), capability, risk, decision, prompt_hash (not raw prompt), semantic_score, source, educational_context, domain_score, symbolic_triggered, judge_invoked, dynamic_threat_score. **Missing: tenant, policy_version, detector-level scores, arbitration detail.** All were named as V2 audit requirements — none require new instrumentation, all are already computed in `details` and simply not threaded into `log_event`. | [core/logger.py](core/logger.py) |
-| **AI Model invocation** | Gatekeeper does not call a protected downstream LLM in the production path — it is a gateway a caller integrates in front of their own model. `core/llm.py` exists only for `scripts/cli_demo.py`. This matches the V2 "MVP" framing (`AI Application → Gatekeeper → AI Model`) already, not a gap to close. | [core/llm.py](core/llm.py) |
+| **AI Model invocation** | Gatekeeper does not call a protected downstream LLM in the production path — it is a gateway a caller integrates in front of their own model. `core/llm.py` existed only for `scripts/cli_demo.py`; both deleted 2026-08-24 as confirmed dead code (see §4's coverage-audit entry). The REAL invocation path, once Phase 5 shipped, is [core/llm_providers.py](core/llm_providers.py) via `POST /api/v1/gateway/chat` — this matches the V2 "MVP" framing (`AI Application → Gatekeeper → AI Model`) already, not a gap to close. | [core/llm_providers.py](core/llm_providers.py) |
 
 Three corrections to the V2 planning documents this audit produced:
 
@@ -1917,7 +1931,7 @@ time.
 |---|---|---|
 | Test count | 292 | CI run [31458323087](https://github.com/pavann19/Gatekeeper-AI-Infrastructure-and-Governance-Gateway/actions/runs/31458323087) |
 | Coverage (`core/` + `api/`) | 68.61% | same, `--cov-report=term-missing` |
-| Dead code found during coverage measurement | `core/audit.py`, `core/intent.py` (0% coverage, zero importers, no dynamic imports) | §4 audit, 2026-08-11 |
+| Dead code found during coverage measurement | `core/audit.py`, `core/intent.py` (0% coverage, zero importers, no dynamic imports) — DELETED 2026-08-24, along with `core/llm.py`/`core/multimodal.py`/`scripts/cli_demo.py` found in the same state by a later audit | §4 audit, 2026-08-11 |
 
 **What is explicitly NOT part of this baseline**, because it was never a
 deployed configuration and must not be compared against as if it were:
