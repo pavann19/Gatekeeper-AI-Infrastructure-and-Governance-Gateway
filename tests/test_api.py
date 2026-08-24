@@ -1,4 +1,3 @@
-import pytest
 from fastapi.testclient import TestClient
 from api.main import app
 from unittest.mock import patch
@@ -65,3 +64,64 @@ def test_health_check():
     assert all(isinstance(v, bool) for v in data["checks"].values())
     # The overall status must be consistent with the individual checks.
     assert data["status"] == ("healthy" if all(data["checks"].values()) else "degraded")
+
+
+# --- Phase 8 hardening: /health consults the circuit breaker instead of -----
+# --- always making a fresh network call (found via a real load test showing
+# --- /health latency badly degrading under concurrency when Ollama is down)
+
+def test_health_skips_the_network_call_when_breaker_already_open():
+    """A known-down backend should be reported instantly, with zero network
+    round-trip -- not re-discovered the slow way on every single call."""
+    from core.circuit_breaker import ollama_judge_breaker
+    ollama_judge_breaker.reset()
+    for _ in range(ollama_judge_breaker.failure_threshold):
+        ollama_judge_breaker.record_failure()
+    assert ollama_judge_breaker._opened_at is not None  # sanity: breaker is open
+
+    try:
+        with patch("requests.get") as mock_get:
+            response = client.get("/health")
+    finally:
+        ollama_judge_breaker.reset()
+
+    assert response.status_code == 200
+    assert response.json()["checks"]["semantic_judge"] is False
+    assert response.json()["status"] == "degraded"
+    mock_get.assert_not_called()
+
+
+def test_health_check_does_not_flip_the_breaker_half_open():
+    """Reading breaker state for a health check must never consume or reset
+    the one-shot half-open probe slot meant for a real judge call -- that
+    would let /health silently report 'healthy' without ever verifying
+    anything, and would mask a real ongoing outage from the actual judge
+    path (which needs a fresh run of failures to re-trip after a probe)."""
+    from core.circuit_breaker import ollama_judge_breaker
+    ollama_judge_breaker.reset()
+    for _ in range(ollama_judge_breaker.failure_threshold):
+        ollama_judge_breaker.record_failure()
+    opened_at_before = ollama_judge_breaker._opened_at
+    failures_before = ollama_judge_breaker._consecutive_failures
+
+    try:
+        with patch("requests.get"):
+            client.get("/health")
+        assert ollama_judge_breaker._opened_at == opened_at_before
+        assert ollama_judge_breaker._consecutive_failures == failures_before
+    finally:
+        ollama_judge_breaker.reset()
+
+
+def test_health_still_probes_when_breaker_is_closed():
+    """No cached negative signal yet -- /health should still make its
+    existing real check rather than assuming healthy."""
+    from core.circuit_breaker import ollama_judge_breaker
+    ollama_judge_breaker.reset()
+
+    with patch("requests.get") as mock_get:
+        mock_get.return_value.status_code = 200
+        response = client.get("/health")
+
+    mock_get.assert_called_once()
+    assert response.json()["checks"]["semantic_judge"] is True

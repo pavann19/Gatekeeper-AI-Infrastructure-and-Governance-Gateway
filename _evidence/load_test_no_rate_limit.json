@@ -1,0 +1,18 @@
+{
+  "endpoint": "/api/v1/activity",
+  "method": "GET",
+  "concurrency": 20,
+  "total_requests": 200,
+  "total_elapsed_s": 49.215,
+  "throughput_rps": 4.06,
+  "status_counts": {
+    "200": 200
+  },
+  "latency_ms": {
+    "min": 2857.28,
+    "p50": 4861.23,
+    "p95": 5784.98,
+    "p99": 6266.29,
+    "max": 6544.11
+  }
+}

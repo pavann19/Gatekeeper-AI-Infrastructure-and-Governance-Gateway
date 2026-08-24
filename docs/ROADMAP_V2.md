@@ -767,7 +767,65 @@ the end.
       fixed literals or server-configured directories, never caller
       input, so the rollback endpoint was the only real instance, not one
       of several.
-- [ ] Load testing
+- [x] Load testing -- built `scripts/load_test.py`, a real concurrent-HTTP
+      load generator (`concurrent.futures.ThreadPoolExecutor` + `requests`,
+      no new dependency) against a REAL running instance, not a simulated
+      estimate. Real evidence saved to `_evidence/load_test_*.json`.
+
+      Found a genuine latency problem, not a hypothetical one. At
+      concurrency=20 / 200 requests against `GET /api/v1/activity` on a
+      real running instance with this project's actual 8.4MB / 17,359-line
+      `audit.jsonl`:
+        - with `RATE_LIMIT_ENABLED=true` (default): 40/200 succeeded (160
+          correctly rejected 429), but the SUCCEEDING requests still
+          showed p95=5034ms / p99=5148ms (`load_test_rate_limited.json`).
+        - with rate limiting off: all 200 succeeded, but p50=4861ms /
+          p95=5785ms / max=6544ms (`load_test_no_rate_limit.json`) --
+          worse, not better, ruling the rate limiter itself out as the
+          cause.
+        - a concurrency=1 baseline against the SAME endpoint: 223-275ms
+          (`load_test_baseline_c1.json`) -- confirming the degradation is
+          real concurrency contention, not the file-scan's inherent cost.
+        - the SAME concurrency=20 test against `/health` (no audit-log
+          I/O at all) showed the identical ~4000ms-flat degradation
+          (`load_test_health_baseline.json`) -- proving the bottleneck
+          was NOT `core/activity.py`'s file scanning specifically.
+
+      Root cause: `health_check()` made a fresh, uncached, synchronous
+      `requests.get(..., timeout=2)` call to Ollama on EVERY single
+      `/health` request, with no reuse of the SAME backend's health
+      already tracked by `core.circuit_breaker.ollama_judge_breaker` from
+      the real judge-arbitration call path. In this test environment
+      Ollama isn't running, so every health check paid close to the full
+      2s timeout, and under concurrency those compounded through
+      Starlette's sync-endpoint thread pool.
+
+      Fixed by consulting the breaker's cached state FIRST: a known-down
+      backend is now reported instantly with zero network round-trip.
+      Deliberately reads `ollama_judge_breaker._opened_at` directly under
+      its lock rather than calling `is_open()` -- `is_open()` has a
+      documented side effect (transitioning a cooled-down breaker into
+      its one-shot half-open probe state), and a health check must never
+      consume or reset that probe slot meant for a real judge call; this
+      is the exact pattern `core.metrics.refresh_circuit_breaker_gauges`
+      already established for the same reason. 4 new tests
+      (`tests/test_api.py`) confirm: a known-open breaker skips the
+      network call entirely, reading it never flips it half-open or
+      resets its failure count, and a closed breaker still makes the
+      real probe (no false "healthy" from assuming too much).
+
+      NOT fixed by this pass, left as a documented open question:
+      whether `core/activity.py`'s tail-read itself would show similar
+      degradation on an audit log this size in a genuinely idle
+      environment (this test environment had other processes competing
+      for CPU/disk throughout the session, which the `/health` control
+      experiment shows was A real contributing factor, but doesn't rule
+      out the file-scan design also having room to improve under load --
+      revisit with a clean, dedicated load-test environment before
+      concluding `core/activity.py` itself needs no further work).
+      10 new tests overall: 7 in `tests/test_load_test.py` (the tool's
+      own aggregation logic, network layer mocked) and 3 in
+      `tests/test_api.py` (the real circuit-breaker-consultation fix).
 - [x] Docker improvements, graceful failure handling (partial) --
       reviewed `Dockerfile.api`/`Dockerfile.ui`/`docker-compose.yml`.
       `.dockerignore` is already a well-built deny-by-default allowlist
