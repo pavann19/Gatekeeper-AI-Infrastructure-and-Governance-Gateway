@@ -885,18 +885,61 @@ the end.
       resets its failure count, and a closed breaker still makes the
       real probe (no false "healthy" from assuming too much).
 
-      NOT fixed by this pass, left as a documented open question:
-      whether `core/activity.py`'s tail-read itself would show similar
-      degradation on an audit log this size in a genuinely idle
-      environment (this test environment had other processes competing
-      for CPU/disk throughout the session, which the `/health` control
-      experiment shows was A real contributing factor, but doesn't rule
-      out the file-scan design also having room to improve under load --
-      revisit with a clean, dedicated load-test environment before
-      concluding `core/activity.py` itself needs no further work).
-      10 new tests overall: 7 in `tests/test_load_test.py` (the tool's
-      own aggregation logic, network layer mocked) and 3 in
-      `tests/test_api.py` (the real circuit-breaker-consultation fix).
+      This pass left one question open: whether `core/activity.py`'s
+      tail-read itself would show similar degradation on an audit log
+      this size in a genuinely idle environment, since the original test
+      run had other processes competing for CPU/disk throughout.
+      **Revisited overnight in a quiet environment (Docker stopped,
+      nothing else running) and the answer is yes — a real,
+      environment-independent bug, now fixed.**
+
+      Isolated with a targeted comparison rather than assumed: the SAME
+      `GET /api/v1/activity` load test (concurrency=20, 200 requests)
+      against a tenant with real matching audit entries completed at
+      p99=130ms; the identical request for a tenant with ZERO matching
+      entries (a brand-new tenant checking its own, so-far-empty
+      activity feed — not a contrived case, the first thing any new
+      caller does) hit p99=5954ms, a ~45x difference from the exact same
+      code path on the exact same file. A third comparison against
+      `/api/v1/whoami` (zero file I/O) at the same concurrency completed
+      in 41ms, ruling out a general server/threadpool ceiling and
+      confirming the cost was specific to `core.activity.py`.
+
+      Root cause: `get_recent_activity`'s retry loop grew its read
+      window by 4x per miss (`limit`, `limit*4`, `limit*16`, ...),
+      restarting the tail-scan from scratch each time. For a filter that
+      matches NOTHING — which can never satisfy "enough matches found"
+      — this always escalated through most of the growth ladder, and
+      the last 1-2 steps each re-scanned close to the entire file. Under
+      20 concurrent requests all doing this simultaneously, the
+      redundant re-scanning and repeated JSON-parsing of thousands of
+      lines compounded into the measured latency.
+
+      Fixed by capping the retry ladder at two attempts instead of
+      five-to-six: the first (cheap, `limit`-sized) attempt is
+      unchanged, but a miss now jumps straight to scanning the full
+      `MAX_BYTES_SCANNED` budget in one more pass — matching the
+      approach `find_by_request_id` already used for its own
+      never-early-exits search — rather than continuing to climb through
+      several more from-scratch re-reads first. Re-benchmarked after the
+      fix, same zero-match scenario: p50 dropped from 324ms to 44ms
+      (86% faster), p99 from 5954ms to 3137ms (47% faster), total
+      throughput nearly tripled (16.2rps to 46.7rps). Not a complete
+      elimination — a full-budget scan for a genuinely zero-match query
+      is still real work under concurrency, and closing that further
+      would need a resume-based scan (continuing a retry from where the
+      previous one stopped, rather than restarting) or an index, both
+      larger changes than this pass attempted — but a real, substantial,
+      measured improvement, not a theoretical one. 4 new tests
+      (`tests/test_activity.py`), including a call-count assertion (at
+      most 2 `_tail_raw_lines` calls for the zero-match case, exactly 1
+      for the fast path) and a direct timing regression guard. Real
+      before/after evidence in `_evidence/load_test_activity_*.json`.
+
+      10 new tests from the original load-testing pass (unchanged): 7 in
+      `tests/test_load_test.py` (the tool's own aggregation logic,
+      network layer mocked) and 3 in `tests/test_api.py` (the real
+      circuit-breaker-consultation fix).
 - [x] Docker improvements, graceful failure handling -- finished, with a
       real Docker daemon this time (started overnight specifically to
       close this out for real rather than leave it as a documented
