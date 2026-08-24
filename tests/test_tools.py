@@ -10,6 +10,7 @@ import pytest
 from core.tools import (
     ToolRegistry,
     ToolSpec,
+    check_tool_access,
     get_tool_registry,
     validate_arguments,
 )
@@ -186,6 +187,52 @@ def test_no_required_fields_means_empty_arguments_are_valid():
     })
     ok, detail = validate_arguments(spec, {})
     assert ok is True
+
+
+# --- check_tool_access: allow/deny by capability -----------------------------
+
+def test_matching_capability_allowed():
+    spec = make_spec(capability_required="ELEVATED")
+    ok, detail = check_tool_access("ELEVATED", spec)
+    assert ok is True
+
+
+def test_higher_capability_allowed():
+    """INTERNAL callers may use tools that only require ELEVATED -- rank
+    is a minimum bar, not an exact-match requirement."""
+    spec = make_spec(capability_required="ELEVATED")
+    ok, detail = check_tool_access("INTERNAL", spec)
+    assert ok is True
+
+
+def test_lower_capability_denied():
+    spec = make_spec(capability_required="INTERNAL")
+    ok, detail = check_tool_access("GENERAL", spec)
+    assert ok is False
+    assert "INTERNAL" in detail
+    assert "GENERAL" in detail
+
+
+def test_general_tool_allows_every_tier():
+    spec = make_spec(capability_required="GENERAL")
+    for cap in ("GENERAL", "ELEVATED", "INTERNAL"):
+        assert check_tool_access(cap, spec)[0] is True
+
+
+def test_internal_tool_denies_general_and_elevated():
+    spec = make_spec(capability_required="INTERNAL")
+    assert check_tool_access("GENERAL", spec)[0] is False
+    assert check_tool_access("ELEVATED", spec)[0] is False
+    assert check_tool_access("INTERNAL", spec)[0] is True
+
+
+def test_unrecognised_capability_denied_not_defaulted_to_lowest():
+    """A caller capability that isn't one of the known tiers must be
+    denied outright -- fail closed, never silently treated as GENERAL."""
+    spec = make_spec(capability_required="GENERAL")
+    ok, detail = check_tool_access("SUPERADMIN", spec)
+    assert ok is False
+    assert "unrecognised" in detail.lower()
 
 
 # --- ToolRegistry -------------------------------------------------------------

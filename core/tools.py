@@ -1,19 +1,22 @@
 """
-Tool registry (Phase 6, Tool/Agent Gateway — roadmap item "Tool registry
-+ schemas", the first of six listed items).
+Tool registry + access control (Phase 6, Tool/Agent Gateway — roadmap
+items "Tool registry + schemas" and "Allow/deny, argument validation").
 
 SCOPE, DELIBERATELY NARROW
 --------------------------
-This is ONLY the registry, the schema declaration, and basic structural
-argument validation (required fields present, declared types match).
-Allow/deny by capability, risk-based approval requirements, sandboxed
-execution, and audit events are separate, explicitly listed roadmap
-items. Building them here — before a single tool exists to exercise this
-piece — would repeat the exact mistake this project's evidence
-discipline has consistently avoided elsewhere: several new subsystems
-stacked before the first is solid, none of them driven by a measured
-need. Ship this, let it be used, let the next item's real requirements
-surface from that.
+This covers the registry, schema declaration, structural argument
+validation (required fields present, declared types match), and
+capability-based allow/deny (`check_tool_access`). It does NOT cover
+risk-based approval requirements, sandboxed execution, or audit events —
+those are separate, explicitly listed roadmap items, and semantic
+argument validation ("this table name must exist") is inherently
+per-tool, deferred until a real tool needs it. Building the remaining
+items here, before a single real tool is registered to exercise any of
+this, would repeat the exact mistake this project's evidence discipline
+has consistently avoided elsewhere: several new subsystems stacked
+before the first is used, none of them driven by a measured need. Ship
+this, let it be used, let the next item's real requirements surface
+from that.
 
 SCHEMA FORMAT: JSON-SCHEMA-SHAPED, ON PURPOSE
 ------------------------------------------------
@@ -55,6 +58,19 @@ VALID_RISK_LEVELS = ("LOW", "MEDIUM", "HIGH")
 # as "which capability gets which policy outcome" elsewhere in this
 # project, not a second, tool-specific permission system.
 VALID_CAPABILITIES = ("GENERAL", "ELEVATED", "INTERNAL")
+
+# core/policy.py configures each capability's risk->decision mapping
+# independently per tenant (nothing enforces that INTERNAL's mapping is
+# ever a superset of ELEVATED's), but every policy actually shipped in
+# this project follows the same ordering in practice: INTERNAL is at
+# least as permissive as ELEVATED at every risk level, which is at least
+# as permissive as GENERAL. Tool access uses that same observed ordering
+# as an explicit minimum-privilege rank, documented as an assumption
+# rather than a structural guarantee — a tenant policy CAN be configured
+# to violate it, the same way core/policy.py's own JSON config could
+# already configure GENERAL more permissively than INTERNAL if someone
+# deliberately wrote it that way.
+CAPABILITY_RANK = {"GENERAL": 0, "ELEVATED": 1, "INTERNAL": 2}
 
 _JSON_SCHEMA_TYPES = {
     "string": str,
@@ -155,6 +171,34 @@ def validate_arguments(spec: ToolSpec, arguments: Dict[str, Any]) -> Tuple[bool,
         if enum is not None and value not in enum:
             return False, f"argument {key!r} must be one of {enum!r}, got {value!r}"
 
+    return True, "ok"
+
+
+def check_tool_access(capability: str, spec: ToolSpec) -> Tuple[bool, str]:
+    """
+    Allow/deny: does a caller at `capability` meet the tool's declared
+    `capability_required`? Same (ok, detail) shape as `validate_arguments`
+    and `Detector.available()` — a denial is an expected outcome to
+    report cleanly, not an exception.
+
+    An unrecognised `capability` (should not happen if it came from
+    `core/auth.py::resolve_principal`, which only ever returns a
+    validated tier, but this function must not assume its caller did
+    that) is treated as UNRANKED and denied — fail closed, the same
+    direction every other unknown-input path in this project fails,
+    rather than defaulting to the lowest rank and silently reasoning
+    about a capability that was never actually validated.
+    """
+    caller_rank = CAPABILITY_RANK.get(capability)
+    if caller_rank is None:
+        return False, f"unrecognised capability {capability!r}; access denied"
+
+    required_rank = CAPABILITY_RANK[spec.capability_required]
+    if caller_rank < required_rank:
+        return False, (
+            f"tool {spec.name!r} requires {spec.capability_required!r} capability, "
+            f"caller has {capability!r}"
+        )
     return True, "ok"
 
 
