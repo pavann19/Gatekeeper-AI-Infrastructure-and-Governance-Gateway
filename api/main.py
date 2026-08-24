@@ -17,6 +17,7 @@ from api.schemas import (
     ReviewStatusResponse, ReviewResolveRequest, GatewayChatRequest, GatewayChatResponse,
     ToolCallRequest, ToolCallResponse, WhoAmIResponse,
 )
+from core.activity import get_recent_activity
 from core.auth import auth_required, resolve_principal
 from core.privacy import redact_pii
 from core.rate_limit import assess_rate_limiter, bucket_parameters
@@ -967,6 +968,45 @@ def whoami(request: Request):
     return WhoAmIResponse(
         capability=principal.capability, tenant=principal.tenant, key_id=principal.key_id,
     )
+
+
+# --- Activity feed (Phase 7) ---
+
+@app.get("/api/v1/activity")
+def activity_feed(request: Request, limit: int = 50, event_type: str = None):
+    """
+    Recent audit-log events for the client UI's activity feed. Reads the
+    same audit.jsonl every governance decision is already written to
+    (core/logger.py) -- this endpoint is a read view over it, not a new
+    source of truth.
+
+    Every authenticated caller may see their OWN tenant's activity
+    (`principal.tenant`, never overridable by the caller) -- an operator's
+    "what happened to my org's requests" is not the sensitive question the
+    review-queue endpoints are gated on. INTERNAL is the one capability
+    that may additionally cross tenants, matching list_reviews' own
+    reasoning: seeing OTHER tenants' activity is exactly what a
+    non-INTERNAL caller has no business doing. INTERNAL requests everyone's
+    activity by passing tenant=__all__; anything else is still scoped to
+    that one tenant, same as a non-INTERNAL caller.
+    """
+    principal = resolve_principal(authorization=request.headers.get("Authorization"))
+    if auth_required() and not principal.authenticated:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required. Present a valid API key as "
+                   "'Authorization: Bearer <key>'.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    requested_tenant = request.query_params.get("tenant")
+    if principal.capability == CAPABILITY_INTERNAL and requested_tenant:
+        tenant_filter = None if requested_tenant == "__all__" else requested_tenant
+    else:
+        tenant_filter = principal.tenant
+
+    event_types = [t.strip() for t in event_type.split(",")] if event_type else None
+    return get_recent_activity(limit=limit, tenant=tenant_filter, event_types=event_types)
 
 
 # --- Human Review (Phase 4) ---

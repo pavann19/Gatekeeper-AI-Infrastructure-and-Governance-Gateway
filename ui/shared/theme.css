@@ -89,6 +89,25 @@ header.gk-header {
 .gk-brand h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.01em; margin: 0; }
 .gk-brand .subtitle { font-size: 13px; color: var(--text-secondary); }
 
+.gk-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.gk-nav-link {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  text-decoration: none;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.gk-nav-link:hover { background: rgba(128,128,128,0.08); color: var(--text); }
+.gk-nav-link.active { background: var(--surface-solid); color: var(--text); box-shadow: var(--shadow); }
+
 input[type="password"], input[type="text"] {
   font-family: inherit;
   font-size: 13px;
