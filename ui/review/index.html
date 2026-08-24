@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gatekeeper — Review</title>
+<link rel="stylesheet" href="/ui/shared/theme.css">
+<style>
+  body { padding: 0 0 80px; }
+
+  main {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 40px 24px 0;
+  }
+
+  .identity-chip {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+
+  .identity-chip b { color: var(--text); font-weight: 600; }
+
+  .toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 20px;
+  }
+
+  .toolbar h2 {
+    font-size: 28px;
+    font-weight: 650;
+    letter-spacing: -0.02em;
+    margin: 0;
+  }
+
+  .count-pill {
+    font-size: 13px;
+    color: var(--text-secondary);
+    background: var(--surface-solid);
+    border: 1px solid var(--border);
+    padding: 4px 12px;
+    border-radius: 999px;
+  }
+
+  .empty-state {
+    text-align: center;
+    padding: 96px 24px;
+    color: var(--text-tertiary);
+  }
+
+  .empty-state .glyph { font-size: 48px; margin-bottom: 16px; opacity: 0.5; }
+  .empty-state h3 { font-size: 17px; font-weight: 600; color: var(--text-secondary); margin: 0 0 6px; }
+
+  .card-list { display: flex; flex-direction: column; gap: 12px; }
+
+  .card {
+    background: var(--surface-solid);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px 22px;
+    box-shadow: var(--shadow);
+    transition: box-shadow 0.2s ease, transform 0.2s ease, opacity 0.3s ease;
+  }
+
+  .card:hover { box-shadow: var(--shadow-hover); }
+  .card.resolving { opacity: 0.4; pointer-events: none; transform: scale(0.99); }
+
+  .card-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 10px;
+  }
+
+  .card-reason { font-size: 15px; font-weight: 500; line-height: 1.4; margin: 0; flex: 1; }
+
+  .risk-badge {
+    flex-shrink: 0;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    padding: 4px 10px;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+
+  .risk-HIGH { background: var(--high-bg); color: var(--high-text); }
+  .risk-MEDIUM { background: var(--medium-bg); color: var(--medium-text); }
+  .risk-LOW { background: var(--low-bg); color: var(--low-text); }
+
+  .card-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 18px;
+    font-size: 12px;
+    color: var(--text-tertiary);
+    margin-bottom: 16px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .card-meta span b { color: var(--text-secondary); font-weight: 500; }
+
+  .card-actions { display: flex; gap: 8px; }
+  .card-actions button { flex: 1; }
+
+  footer {
+    text-align: center;
+    color: var(--text-tertiary);
+    font-size: 12px;
+    margin-top: 48px;
+  }
+</style>
+</head>
+<body>
+
+<header class="gk-header">
+  <div class="gk-brand">
+    <h1>Gatekeeper</h1>
+    <span class="subtitle">Human Review</span>
+  </div>
+  <div class="identity-chip" id="identityChip"></div>
+  <div style="display:flex; gap:8px;">
+    <button class="btn-ghost" id="refreshBtn" title="Refresh (⌘R)">Refresh</button>
+    <button class="btn-ghost" id="signOutBtn">Sign Out</button>
+  </div>
+</header>
+
+<main>
+  <div class="gk-status-banner" id="banner"></div>
+
+  <div class="toolbar">
+    <h2>Pending</h2>
+    <span class="count-pill" id="countPill">—</span>
+  </div>
+
+  <div id="emptyState" class="empty-state" style="display:none;">
+    <div class="glyph">✓</div>
+    <h3>All clear</h3>
+    <div>No pending reviews right now.</div>
+  </div>
+
+  <div class="card-list" id="cardList"></div>
+
+  <footer>Gatekeeper Review Dashboard · talks to the same API every enforcement decision goes through</footer>
+</main>
+
+<script src="/ui/shared/auth.js"></script>
+<script>
+const API_BASE = window.location.origin;
+const banner = document.getElementById('banner');
+const cardList = document.getElementById('cardList');
+const emptyState = document.getElementById('emptyState');
+const countPill = document.getElementById('countPill');
+const refreshBtn = document.getElementById('refreshBtn');
+const signOutBtn = document.getElementById('signOutBtn');
+const identityChip = document.getElementById('identityChip');
+
+function showBanner(message, isError) {
+  banner.textContent = message;
+  banner.className = 'gk-status-banner visible' + (isError ? ' error' : '');
+}
+function hideBanner() {
+  banner.className = 'gk-status-banner';
+}
+
+function escapeHtml(s) {
+  const div = document.createElement('div');
+  div.textContent = s == null ? '' : String(s);
+  return div.innerHTML;
+}
+
+function formatTime(iso) {
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  } catch (e) {
+    return iso;
+  }
+}
+
+function renderReviews(reviews) {
+  countPill.textContent = reviews.length + (reviews.length === 1 ? ' review' : ' reviews');
+
+  if (reviews.length === 0) {
+    emptyState.style.display = 'block';
+    cardList.innerHTML = '';
+    return;
+  }
+  emptyState.style.display = 'none';
+
+  cardList.innerHTML = reviews.map(r => `
+    <div class="card" id="card-${r.review_id}">
+      <div class="card-top">
+        <p class="card-reason">${escapeHtml(r.reason)}</p>
+        <span class="risk-badge risk-${escapeHtml(r.risk)}">${escapeHtml(r.risk)}</span>
+      </div>
+      <div class="card-meta">
+        <span><b>tenant</b> ${escapeHtml(r.tenant)}</span>
+        <span><b>capability</b> ${escapeHtml(r.capability)}</span>
+        <span><b>id</b> ${escapeHtml(r.review_id.slice(0, 12))}…</span>
+        <span>${escapeHtml(formatTime(r.created_at))}</span>
+      </div>
+      <div class="card-actions">
+        <button class="btn-approve" onclick="resolveReview('${r.review_id}', 'APPROVED', this)">Approve</button>
+        <button class="btn-reject" onclick="resolveReview('${r.review_id}', 'REJECTED', this)">Reject</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function loadReviews() {
+  refreshBtn.disabled = true;
+  refreshBtn.textContent = 'Refreshing…';
+  try {
+    const res = await fetch(API_BASE + '/api/v1/review', { headers: gkAuthHeaders() });
+    if (res.status === 401) {
+      gkSignOut();
+      return;
+    }
+    if (res.status === 403) {
+      showBanner('This key does not have INTERNAL capability — no dashboard to show.', true);
+      renderReviews([]);
+      return;
+    }
+    if (!res.ok) {
+      showBanner('Request failed: HTTP ' + res.status, true);
+      renderReviews([]);
+      return;
+    }
+    const data = await res.json();
+    hideBanner();
+    renderReviews(data.pending || []);
+  } catch (e) {
+    showBanner('Could not reach the API at ' + API_BASE + ' — ' + e.message, true);
+    renderReviews([]);
+  } finally {
+    refreshBtn.disabled = false;
+    refreshBtn.textContent = 'Refresh';
+  }
+}
+
+async function resolveReview(reviewId, outcome, btn) {
+  const card = document.getElementById('card-' + reviewId);
+  card.classList.add('resolving');
+  const originalLabel = btn.innerHTML;
+  btn.innerHTML = '<span class="gk-spinner"></span>' + (outcome === 'APPROVED' ? 'Approving' : 'Rejecting');
+  card.querySelectorAll('button').forEach(b => b.disabled = true);
+
+  try {
+    const res = await fetch(API_BASE + '/api/v1/review/' + reviewId + '/resolve', {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, gkAuthHeaders()),
+      body: JSON.stringify({ outcome }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      showBanner('Resolve failed: ' + (body.detail || res.status), true);
+      card.classList.remove('resolving');
+      btn.innerHTML = originalLabel;
+      card.querySelectorAll('button').forEach(b => b.disabled = false);
+      return;
+    }
+    card.style.transition = 'opacity 0.25s ease, transform 0.25s ease';
+    card.style.opacity = '0';
+    card.style.transform = 'translateX(12px)';
+    setTimeout(loadReviews, 260);
+  } catch (e) {
+    showBanner('Could not reach the API — ' + e.message, true);
+    card.classList.remove('resolving');
+    btn.innerHTML = originalLabel;
+    card.querySelectorAll('button').forEach(b => b.disabled = false);
+  }
+}
+
+refreshBtn.addEventListener('click', loadReviews);
+signOutBtn.addEventListener('click', gkSignOut);
+document.addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'r') {
+    e.preventDefault();
+    loadReviews();
+  }
+});
+
+(async () => {
+  const identity = await gkRequireAuth();
+  if (!identity) return; // gkRequireAuth already redirected to login
+
+  if (identity.capability !== 'INTERNAL') {
+    showBanner('This key has ' + identity.capability + ' capability — INTERNAL is required to view the review queue.', true);
+    identityChip.innerHTML = '<b>' + escapeHtml(identity.key_id) + '</b> · ' + escapeHtml(identity.capability);
+    countPill.textContent = '—';
+    return;
+  }
+
+  identityChip.innerHTML = '<b>' + escapeHtml(identity.key_id) + '</b> · ' + escapeHtml(identity.tenant);
+  loadReviews();
+  setInterval(loadReviews, 15000);
+})();
+</script>
+
+</body>
+</html>

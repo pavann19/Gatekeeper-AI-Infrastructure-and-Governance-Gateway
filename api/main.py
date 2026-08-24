@@ -15,7 +15,7 @@ from core import metrics
 from api.schemas import (
     AssessRequest, AssessResponse, AssessOutputRequest, AssessOutputResponse,
     ReviewStatusResponse, ReviewResolveRequest, GatewayChatRequest, GatewayChatResponse,
-    ToolCallRequest, ToolCallResponse,
+    ToolCallRequest, ToolCallResponse, WhoAmIResponse,
 )
 from core.auth import auth_required, resolve_principal
 from core.privacy import redact_pii
@@ -39,14 +39,18 @@ app = FastAPI(
     version="2.0.0"
 )
 
-# Phase 7: the human-review operator dashboard is a static page (no build
-# step, no new frontend dependency) that talks to this same API over
-# fetch() with an operator-supplied API key -- mounted here rather than run
-# as a separate process so it always points at the API it's actually
-# reviewing, with no separate deployment/CORS story to keep in sync.
-_REVIEW_DASHBOARD_DIR = os.path.join(os.path.dirname(__file__), "..", "ui", "review_dashboard")
-if os.path.isdir(_REVIEW_DASHBOARD_DIR):
-    app.mount("/ui/review", StaticFiles(directory=_REVIEW_DASHBOARD_DIR, html=True), name="review_ui")
+# Phase 7: the client UI (login, review dashboard, and whatever else is
+# added later) is a set of static pages -- no build step, no new frontend
+# dependency -- that talk to this same API over fetch() with an
+# operator-supplied API key. Mounted here rather than run as a separate
+# process so it always points at the API it's actually driving, with no
+# separate deployment/CORS story to keep in sync. `ui/web_app.py`, the
+# pre-existing Streamlit prototype, is not part of this mount (it is a
+# separate `streamlit run` process, not a static asset) and is served here
+# only incidentally as an inert, non-executed file if requested by name.
+_UI_DIR = os.path.join(os.path.dirname(__file__), "..", "ui")
+if os.path.isdir(_UI_DIR):
+    app.mount("/ui", StaticFiles(directory=_UI_DIR, html=True), name="client_ui")
 
 # CORS. The previous configuration paired allow_origins=["*"] with
 # allow_credentials=True, which browsers reject outright per the CORS spec and
@@ -936,6 +940,33 @@ def flush_semantic_cache(request: Request):
         )
     flush_cache()
     return {"status": "success"}
+
+
+# --- Identity check (Phase 7) ---
+
+@app.get("/api/v1/whoami", response_model=WhoAmIResponse)
+def whoami(request: Request):
+    """
+    Resolves the caller's own credential against the real KeyStore and
+    returns what it grants. Exists for the client UI's login page: a key
+    typed into a browser is worth nothing until it is checked against the
+    same resolve_principal() every enforcement decision uses -- this
+    endpoint IS that check, not a separate, potentially-divergent one.
+
+    Always requires a valid credential regardless of AUTH_MODE -- a login
+    endpoint that accepts "no credential" as a pass would defeat the point
+    of having one.
+    """
+    principal = resolve_principal(authorization=request.headers.get("Authorization"))
+    if not principal.authenticated:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or missing API key.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return WhoAmIResponse(
+        capability=principal.capability, tenant=principal.tenant, key_id=principal.key_id,
+    )
 
 
 # --- Human Review (Phase 4) ---

@@ -1,0 +1,159 @@
+/*
+  Shared design tokens and base component styles for Gatekeeper's client
+  UI pages (login, review dashboard, and anything added later). Kept as
+  one small hand-written stylesheet rather than a framework/build step --
+  every page it's used by is a single static HTML file with no bundler.
+*/
+
+:root {
+  --bg: #f5f5f7;
+  --surface: rgba(255, 255, 255, 0.72);
+  --surface-solid: #ffffff;
+  --border: rgba(0, 0, 0, 0.08);
+  --text: #1d1d1f;
+  --text-secondary: #6e6e73;
+  --text-tertiary: #86868b;
+  --accent: #0071e3;
+  --accent-hover: #0077ed;
+  --danger: #ff3b30;
+  --danger-hover: #ff453a;
+  --success: #34c759;
+  --warn-bg: #fff4e5;
+  --warn-text: #9a6700;
+  --high-bg: #ffece8;
+  --high-text: #c0392b;
+  --medium-bg: #fff8e1;
+  --medium-text: #9a7d0a;
+  --low-bg: #eaf7ec;
+  --low-text: #227a3e;
+  --shadow: 0 1px 2px rgba(0,0,0,0.04), 0 8px 24px rgba(0,0,0,0.06);
+  --shadow-hover: 0 2px 4px rgba(0,0,0,0.06), 0 12px 32px rgba(0,0,0,0.09);
+  --radius: 18px;
+  --radius-sm: 10px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #000000;
+    --surface: rgba(28, 28, 30, 0.72);
+    --surface-solid: #1c1c1e;
+    --border: rgba(255, 255, 255, 0.08);
+    --text: #f5f5f7;
+    --text-secondary: #a1a1a6;
+    --text-tertiary: #8e8e93;
+    --accent: #0a84ff;
+    --accent-hover: #3395ff;
+    --danger: #ff453a;
+    --danger-hover: #ff6961;
+    --warn-bg: #3a2f14;
+    --warn-text: #f2c675;
+    --high-bg: #3a1a17;
+    --high-text: #ff8a80;
+    --medium-bg: #3a3114;
+    --medium-text: #f2d675;
+    --low-bg: #14301c;
+    --low-text: #7ee0a0;
+    --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 24px rgba(0,0,0,0.35);
+    --shadow-hover: 0 2px 4px rgba(0,0,0,0.35), 0 12px 32px rgba(0,0,0,0.45);
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
+               "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+header.gk-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 20px 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.gk-brand { display: flex; align-items: baseline; gap: 10px; }
+.gk-brand h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.01em; margin: 0; }
+.gk-brand .subtitle { font-size: 13px; color: var(--text-secondary); }
+
+input[type="password"], input[type="text"] {
+  font-family: inherit;
+  font-size: 13px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-solid);
+  color: var(--text);
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+input[type="password"]:focus, input[type="text"]:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px rgba(10, 132, 255, 0.15);
+}
+
+button {
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 8px 16px;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.05s ease, opacity 0.15s ease;
+}
+
+button:active { transform: scale(0.97); }
+button:disabled { opacity: 0.4; cursor: default; }
+
+.btn-primary { background: var(--accent); color: white; }
+.btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
+
+.btn-ghost { background: transparent; color: var(--text-secondary); border: 1px solid var(--border); }
+.btn-ghost:hover:not(:disabled) { background: rgba(128,128,128,0.08); }
+
+.btn-approve { background: var(--success); color: white; }
+.btn-approve:hover:not(:disabled) { filter: brightness(1.08); }
+
+.btn-reject { background: var(--danger); color: white; }
+.btn-reject:hover:not(:disabled) { background: var(--danger-hover); }
+
+.gk-status-banner {
+  display: none;
+  padding: 12px 16px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  margin-bottom: 20px;
+  background: var(--warn-bg);
+  color: var(--warn-text);
+}
+.gk-status-banner.visible { display: block; }
+.gk-status-banner.error { background: var(--high-bg); color: var(--high-text); }
+
+@keyframes gk-spin { to { transform: rotate(360deg); } }
+
+.gk-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255,255,255,0.4);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: gk-spin 0.6s linear infinite;
+  vertical-align: middle;
+  margin-right: 6px;
+}
