@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gatekeeper — Trace</title>
+<link rel="stylesheet" href="/ui/shared/theme.css">
+<style>
+  body { padding: 0 0 80px; }
+
+  main {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 40px 24px 0;
+  }
+
+  .identity-chip {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+  .identity-chip b { color: var(--text); font-weight: 600; }
+
+  .lookup-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 24px;
+  }
+
+  .lookup-row input {
+    flex: 1;
+    padding: 10px 14px;
+    font-size: 14px;
+    font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  }
+
+  h2 {
+    font-size: 28px;
+    font-weight: 650;
+    letter-spacing: -0.02em;
+    margin: 0 0 20px;
+  }
+
+  .empty-state {
+    text-align: center;
+    padding: 96px 24px;
+    color: var(--text-tertiary);
+  }
+  .empty-state .glyph { font-size: 48px; margin-bottom: 16px; opacity: 0.5; }
+  .empty-state h3 { font-size: 17px; font-weight: 600; color: var(--text-secondary); margin: 0 0 6px; }
+
+  .trace-list { display: flex; flex-direction: column; gap: 0; position: relative; }
+
+  .trace-item {
+    position: relative;
+    padding: 0 0 24px 28px;
+    border-left: 2px solid var(--border);
+  }
+  .trace-item:last-child { border-left: 2px solid transparent; padding-bottom: 0; }
+
+  .trace-dot {
+    position: absolute;
+    left: -7px;
+    top: 2px;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--accent);
+    border: 2px solid var(--bg);
+  }
+
+  .trace-card {
+    background: var(--surface-solid);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 16px 18px;
+    box-shadow: var(--shadow);
+  }
+
+  .trace-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+  }
+
+  .event-type-badge {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    padding: 4px 9px;
+    border-radius: 999px;
+    background: rgba(128,128,128,0.12);
+    color: var(--text-secondary);
+  }
+
+  .decision-badge {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    padding: 3px 9px;
+    border-radius: 999px;
+  }
+  .decision-ALLOW { background: var(--low-bg); color: var(--low-text); }
+  .decision-BLOCK { background: var(--high-bg); color: var(--high-text); }
+  .decision-REVIEW { background: var(--medium-bg); color: var(--medium-text); }
+  .decision-RESTRICT { background: var(--medium-bg); color: var(--medium-text); }
+
+  .trace-time {
+    font-size: 12px;
+    color: var(--text-tertiary);
+    font-variant-numeric: tabular-nums;
+    margin-left: auto;
+  }
+
+  .signal-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 8px 16px;
+    font-size: 12.5px;
+  }
+
+  .signal-grid dt {
+    color: var(--text-tertiary);
+    font-weight: 500;
+  }
+  .signal-grid dd {
+    margin: 2px 0 0;
+    color: var(--text);
+    font-family: ui-monospace, "SF Mono", Consolas, monospace;
+    word-break: break-word;
+  }
+
+  .scan-note {
+    font-size: 12px;
+    background: var(--warn-bg);
+    color: var(--warn-text);
+    padding: 8px 14px;
+    border-radius: var(--radius-sm);
+    margin-bottom: 16px;
+    display: none;
+  }
+  .scan-note.visible { display: block; }
+
+  footer {
+    text-align: center;
+    color: var(--text-tertiary);
+    font-size: 12px;
+    margin-top: 48px;
+  }
+</style>
+</head>
+<body>
+
+<header class="gk-header">
+  <div class="gk-brand">
+    <h1>Gatekeeper</h1>
+    <span class="subtitle">Trace</span>
+  </div>
+  <nav class="gk-nav" id="navLinks"></nav>
+  <div class="identity-chip" id="identityChip"></div>
+  <div style="display:flex; gap:8px;">
+    <button class="btn-ghost" id="signOutBtn">Sign Out</button>
+  </div>
+</header>
+
+<main>
+  <div class="gk-status-banner" id="banner"></div>
+
+  <h2>Request Trace &amp; Detector Signals</h2>
+
+  <div class="lookup-row">
+    <input type="text" id="requestIdInput" placeholder="request_id (e.g. from an activity feed row, or a caller's own logs)">
+    <button class="btn-primary" id="lookupBtn">Trace</button>
+  </div>
+
+  <div class="scan-note" id="scanNote">
+    The scan hit its byte-read cap before reaching the start of the log —
+    an older event for this request_id may exist but wasn't found.
+  </div>
+
+  <div id="emptyState" class="empty-state">
+    <div class="glyph">→</div>
+    <h3>Enter a request_id to trace</h3>
+    <div>Shows every audit event for that one call, in order, with its raw detector signals.</div>
+  </div>
+
+  <div class="trace-list" id="traceList"></div>
+
+  <footer>Gatekeeper Trace · every audit event sharing one request_id, oldest first</footer>
+</main>
+
+<script src="/ui/shared/auth.js"></script>
+<script>
+const API_BASE = window.location.origin;
+const banner = document.getElementById('banner');
+const scanNote = document.getElementById('scanNote');
+const traceList = document.getElementById('traceList');
+const emptyState = document.getElementById('emptyState');
+const lookupBtn = document.getElementById('lookupBtn');
+const requestIdInput = document.getElementById('requestIdInput');
+const signOutBtn = document.getElementById('signOutBtn');
+const identityChip = document.getElementById('identityChip');
+const navLinks = document.getElementById('navLinks');
+
+function showBanner(message, isError) {
+  banner.textContent = message;
+  banner.className = 'gk-status-banner visible' + (isError ? ' error' : '');
+}
+function hideBanner() { banner.className = 'gk-status-banner'; }
+
+function escapeHtml(s) {
+  const div = document.createElement('div');
+  div.textContent = s == null ? '' : String(s);
+  return div.innerHTML;
+}
+
+function formatTime(iso) {
+  try {
+    return new Date(iso).toLocaleString(undefined, {
+      month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit',
+    });
+  } catch (e) { return iso || ''; }
+}
+
+const CORE_FIELDS = new Set(['timestamp', 'event_type', 'decision', 'level', 'name', 'message']);
+
+function renderSignals(event) {
+  const entries = Object.entries(event).filter(([k, v]) => !CORE_FIELDS.has(k) && v !== null && v !== undefined);
+  if (entries.length === 0) return '';
+  return '<dl class="signal-grid">' + entries.map(([k, v]) => `
+    <div>
+      <dt>${escapeHtml(k)}</dt>
+      <dd>${escapeHtml(typeof v === 'object' ? JSON.stringify(v) : v)}</dd>
+    </div>
+  `).join('') + '</dl>';
+}
+
+function renderTrace(events) {
+  if (events.length === 0) {
+    traceList.innerHTML = '';
+    emptyState.innerHTML = '<div class="glyph">—</div><h3>No events found</h3>' +
+      '<div>Nothing in your visible audit log carries this request_id.</div>';
+    emptyState.style.display = 'block';
+    return;
+  }
+  emptyState.style.display = 'none';
+
+  traceList.innerHTML = events.map(e => {
+    const decisionBadge = e.decision
+      ? `<span class="decision-badge decision-${escapeHtml(e.decision)}">${escapeHtml(e.decision)}</span>`
+      : '';
+    return `
+      <div class="trace-item">
+        <div class="trace-dot"></div>
+        <div class="trace-card">
+          <div class="trace-head">
+            <span class="event-type-badge">${escapeHtml(e.event_type)}</span>
+            ${decisionBadge}
+            <span class="trace-time">${escapeHtml(formatTime(e.timestamp))}</span>
+          </div>
+          ${renderSignals(e)}
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+async function runTrace() {
+  const requestId = requestIdInput.value.trim();
+  if (!requestId) {
+    showBanner('Enter a request_id first.', true);
+    return;
+  }
+  lookupBtn.disabled = true;
+  lookupBtn.innerHTML = '<span class="gk-spinner"></span>Tracing…';
+  try {
+    const res = await fetch(API_BASE + '/api/v1/activity/trace/' + encodeURIComponent(requestId),
+      { headers: gkAuthHeaders() });
+    if (res.status === 401) { gkSignOut(); return; }
+    if (!res.ok) {
+      showBanner('Request failed: HTTP ' + res.status, true);
+      return;
+    }
+    const data = await res.json();
+    hideBanner();
+    scanNote.className = 'scan-note' + (data.scan_truncated ? ' visible' : '');
+    renderTrace(data.events || []);
+  } catch (e) {
+    showBanner('Could not reach the API — ' + e.message, true);
+  } finally {
+    lookupBtn.disabled = false;
+    lookupBtn.textContent = 'Trace';
+  }
+}
+
+lookupBtn.addEventListener('click', runTrace);
+requestIdInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') runTrace(); });
+signOutBtn.addEventListener('click', gkSignOut);
+
+(async () => {
+  const identity = await gkRequireAuth();
+  if (!identity) return;
+  navLinks.innerHTML = gkNavLinks(identity, 'trace');
+  identityChip.innerHTML = '<b>' + escapeHtml(identity.key_id) + '</b> · ' + escapeHtml(identity.tenant) + ' · ' + escapeHtml(identity.capability);
+
+  const params = new URLSearchParams(window.location.search);
+  const prefill = params.get('request_id');
+  if (prefill) {
+    requestIdInput.value = prefill;
+    runTrace();
+  }
+})();
+</script>
+
+</body>
+</html>

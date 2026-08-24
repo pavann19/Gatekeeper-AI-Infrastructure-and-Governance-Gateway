@@ -87,9 +87,19 @@ function gkSignOut() {
   never shown to a caller who would just get a 403 for clicking it.
 */
 function gkNavLinks(identity, activePage) {
-  const links = [{ href: "/ui/activity/index.html", label: "Activity", page: "activity" }];
+  const links = [
+    { href: "/ui/activity/index.html", label: "Activity", page: "activity" },
+    { href: "/ui/trace/index.html", label: "Trace", page: "trace" },
+    { href: "/ui/settings/index.html", label: "Settings", page: "settings" },
+  ];
   if (identity.capability === "INTERNAL") {
-    links.push({ href: "/ui/review/index.html", label: "Review Queue", page: "review" });
+    links.push(
+      { href: "/ui/review/index.html", label: "Review Queue", page: "review" },
+      { href: "/ui/gateways/index.html", label: "Gateways", page: "gateways" },
+      { href: "/ui/logs/index.html", label: "Logs", page: "logs" },
+      { href: "/ui/benchmarks/index.html", label: "Benchmarks", page: "benchmarks" },
+      { href: "/ui/policy/index.html", label: "Policy", page: "policy" },
+    );
   }
   return links.map(l =>
     `<a href="${l.href}" class="gk-nav-link${l.page === activePage ? ' active' : ''}">${l.label}</a>`

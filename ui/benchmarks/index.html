@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gatekeeper — Benchmarks</title>
+<link rel="stylesheet" href="/ui/shared/theme.css">
+<style>
+  body { padding: 0 0 80px; }
+
+  main {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 40px 24px 0;
+  }
+
+  .identity-chip {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+  .identity-chip b { color: var(--text); font-weight: 600; }
+
+  h2 { font-size: 28px; font-weight: 650; letter-spacing: -0.02em; margin: 0 0 20px; }
+
+  .run-card {
+    background: var(--surface-solid);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px 24px;
+    box-shadow: var(--shadow);
+    margin-bottom: 16px;
+  }
+
+  .run-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 4px;
+    flex-wrap: wrap;
+  }
+  .run-title { font-size: 16px; font-weight: 650; }
+  .run-file { font-size: 11px; color: var(--text-tertiary); font-family: ui-monospace, "SF Mono", Consolas, monospace; }
+  .run-sub { font-size: 12.5px; color: var(--text-secondary); margin-bottom: 16px; }
+
+  .cache-compare {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  @media (max-width: 640px) { .cache-compare { grid-template-columns: 1fr; } }
+
+  .cache-block {
+    background: rgba(128,128,128,0.06);
+    border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .cache-block h4 { margin: 0 0 10px; font-size: 12.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.02em; color: var(--text-secondary); }
+
+  .metric-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px 14px;
+    font-size: 12.5px;
+    margin-bottom: 10px;
+  }
+  .metric-grid .k { color: var(--text-tertiary); }
+  .metric-grid .v { font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  .confusion-row { display: flex; gap: 6px; font-size: 11px; }
+  .confusion-cell {
+    flex: 1;
+    text-align: center;
+    padding: 6px 4px;
+    border-radius: 6px;
+    background: var(--surface-solid);
+  }
+  .confusion-cell .n { display: block; font-weight: 700; font-size: 13px; }
+
+  .error-card {
+    background: var(--high-bg);
+    color: var(--high-text);
+    border-radius: var(--radius-sm);
+    padding: 12px 16px;
+    font-size: 13px;
+    margin-bottom: 10px;
+  }
+
+  .empty-state { text-align: center; padding: 96px 24px; color: var(--text-tertiary); }
+  .empty-state .glyph { font-size: 48px; margin-bottom: 16px; opacity: 0.5; }
+  .empty-state h3 { font-size: 17px; font-weight: 600; color: var(--text-secondary); margin: 0 0 6px; }
+
+  footer { text-align: center; color: var(--text-tertiary); font-size: 12px; margin-top: 48px; }
+</style>
+</head>
+<body>
+
+<header class="gk-header">
+  <div class="gk-brand">
+    <h1>Gatekeeper</h1>
+    <span class="subtitle">Benchmarks</span>
+  </div>
+  <nav class="gk-nav" id="navLinks"></nav>
+  <div class="identity-chip" id="identityChip"></div>
+  <div style="display:flex; gap:8px;">
+    <button class="btn-ghost" id="refreshBtn">Refresh</button>
+    <button class="btn-ghost" id="signOutBtn">Sign Out</button>
+  </div>
+</header>
+
+<main>
+  <div class="gk-status-banner" id="banner"></div>
+
+  <h2>Benchmark Runs</h2>
+
+  <div id="errorList"></div>
+  <div id="emptyState" class="empty-state" style="display:none;">
+    <div class="glyph">—</div>
+    <h3>No benchmark results found</h3>
+    <div>Nothing under this deployment's evidence directory matches <code>benchmark_results_*.json</code>.</div>
+  </div>
+  <div id="runList"></div>
+
+  <footer>Gatekeeper Benchmarks · the exact reports this project's own benchmark scripts produced</footer>
+</main>
+
+<script src="/ui/shared/auth.js"></script>
+<script>
+const API_BASE = window.location.origin;
+const banner = document.getElementById('banner');
+const refreshBtn = document.getElementById('refreshBtn');
+const signOutBtn = document.getElementById('signOutBtn');
+const identityChip = document.getElementById('identityChip');
+const navLinks = document.getElementById('navLinks');
+const runList = document.getElementById('runList');
+const errorList = document.getElementById('errorList');
+const emptyState = document.getElementById('emptyState');
+
+function showBanner(message, isError) {
+  banner.textContent = message;
+  banner.className = 'gk-status-banner visible' + (isError ? ' error' : '');
+}
+function hideBanner() { banner.className = 'gk-status-banner'; }
+
+function escapeHtml(s) {
+  const div = document.createElement('div');
+  div.textContent = s == null ? '' : String(s);
+  return div.innerHTML;
+}
+
+function fmtPct(n) { return n == null ? '—' : (n * 100).toFixed(1) + '%'; }
+function fmtMs(n) { return n == null ? '—' : n.toFixed(1) + 'ms'; }
+
+function renderCacheBlock(label, block) {
+  if (!block) return `<div class="cache-block"><h4>${escapeHtml(label)}</h4><div style="color:var(--text-tertiary); font-size:12px;">not present</div></div>`;
+  const m = block.metrics_operational || {};
+  const cm = m.confusion_matrix || {};
+  return `
+    <div class="cache-block">
+      <h4>${escapeHtml(label)}</h4>
+      <div class="metric-grid">
+        <span class="k">Accuracy</span><span class="v">${fmtPct(m.accuracy)}</span>
+        <span class="k">Precision</span><span class="v">${fmtPct(m.precision)}</span>
+        <span class="k">Recall</span><span class="v">${fmtPct(m.recall_tpr)}</span>
+        <span class="k">F1</span><span class="v">${fmtPct(m.f1)}</span>
+        <span class="k">FPR</span><span class="v">${fmtPct(m.fpr)}</span>
+        <span class="k">Avg latency</span><span class="v">${fmtMs(block.avg_latency_ms)}</span>
+        <span class="k">p95 latency</span><span class="v">${fmtMs(block.p95_latency_ms)}</span>
+      </div>
+      <div class="confusion-row">
+        <div class="confusion-cell"><span class="n">${cm.TP ?? '—'}</span>TP</div>
+        <div class="confusion-cell"><span class="n">${cm.FP ?? '—'}</span>FP</div>
+        <div class="confusion-cell"><span class="n">${cm.TN ?? '—'}</span>TN</div>
+        <div class="confusion-cell"><span class="n">${cm.FN ?? '—'}</span>FN</div>
+      </div>
+    </div>
+  `;
+}
+
+function renderRun(run) {
+  const dataset = run.dataset || {};
+  const config = run.config || {};
+  const configBits = Object.entries(config).map(([k, v]) => `${k}=${v}`).join(' · ');
+  return `
+    <div class="run-card">
+      <div class="run-head">
+        <span class="run-title">${escapeHtml(dataset.name || 'unnamed dataset')} <span style="color:var(--text-tertiary); font-weight:500;">(n=${dataset.n ?? '?'})</span></span>
+        <span class="run-file">${escapeHtml(run._filename)} · ${escapeHtml(new Date(run._mtime).toLocaleDateString())}</span>
+      </div>
+      <div class="run-sub">${escapeHtml(configBits)}</div>
+      <div class="cache-compare">
+        ${renderCacheBlock(run.cold ? run.cold.run_name || 'Cold' : 'Cold', run.cold)}
+        ${renderCacheBlock(run.warm ? run.warm.run_name || 'Warm' : 'Warm', run.warm)}
+      </div>
+    </div>
+  `;
+}
+
+async function loadBenchmarks() {
+  refreshBtn.disabled = true;
+  refreshBtn.textContent = 'Refreshing…';
+  try {
+    const res = await fetch(API_BASE + '/api/v1/benchmarks', { headers: gkAuthHeaders() });
+    if (res.status === 401) { gkSignOut(); return; }
+    if (res.status === 403) {
+      showBanner('INTERNAL capability required to view benchmark results.', true);
+      return;
+    }
+    if (!res.ok) {
+      showBanner('Request failed: HTTP ' + res.status, true);
+      return;
+    }
+    const data = await res.json();
+    hideBanner();
+
+    errorList.innerHTML = (data.errors || []).map(e =>
+      `<div class="error-card">Failed to parse <b>${escapeHtml(e.filename)}</b>: ${escapeHtml(e.error)}</div>`
+    ).join('');
+
+    if (data.runs.length === 0) {
+      emptyState.style.display = 'block';
+      runList.innerHTML = '';
+      return;
+    }
+    emptyState.style.display = 'none';
+    runList.innerHTML = data.runs.map(renderRun).join('');
+  } catch (e) {
+    showBanner('Could not reach the API — ' + e.message, true);
+  } finally {
+    refreshBtn.disabled = false;
+    refreshBtn.textContent = 'Refresh';
+  }
+}
+
+refreshBtn.addEventListener('click', loadBenchmarks);
+signOutBtn.addEventListener('click', gkSignOut);
+
+(async () => {
+  const identity = await gkRequireAuth();
+  if (!identity) return;
+  navLinks.innerHTML = gkNavLinks(identity, 'benchmarks');
+  identityChip.innerHTML = '<b>' + escapeHtml(identity.key_id) + '</b> · ' + escapeHtml(identity.tenant) + ' · ' + escapeHtml(identity.capability);
+
+  if (identity.capability !== 'INTERNAL') {
+    showBanner('This key has ' + identity.capability + ' capability — INTERNAL is required to view benchmarks.', true);
+    return;
+  }
+  loadBenchmarks();
+})();
+</script>
+
+</body>
+</html>

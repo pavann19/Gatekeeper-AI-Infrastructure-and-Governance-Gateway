@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gatekeeper — Gateways</title>
+<link rel="stylesheet" href="/ui/shared/theme.css">
+<style>
+  body { padding: 0 0 80px; }
+
+  main {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 40px 24px 0;
+  }
+
+  .identity-chip {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+  .identity-chip b { color: var(--text); font-weight: 600; }
+
+  .tabs { display: flex; gap: 4px; margin-bottom: 24px; }
+  .tab-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    padding: 8px 18px;
+    font-size: 14px;
+    font-weight: 600;
+    border-radius: var(--radius-sm);
+  }
+  .tab-btn.active { background: var(--surface-solid); color: var(--text); box-shadow: var(--shadow); }
+
+  section.tab-panel { display: none; }
+  section.tab-panel.active { display: block; }
+
+  h2 { font-size: 22px; font-weight: 650; letter-spacing: -0.02em; margin: 0 0 4px; }
+  .section-sub { font-size: 13px; color: var(--text-secondary); margin: 0 0 16px; }
+
+  .provider-list { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 32px; }
+  .provider-pill {
+    background: var(--surface-solid);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 8px 16px;
+    font-size: 13px;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .provider-pill.default { border-color: var(--accent); }
+  .default-tag {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    color: var(--accent);
+  }
+
+  .tool-card {
+    background: var(--surface-solid);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 16px 18px;
+    margin-bottom: 10px;
+    box-shadow: var(--shadow);
+  }
+  .tool-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; flex-wrap: wrap; }
+  .tool-name { font-family: ui-monospace, "SF Mono", Consolas, monospace; font-weight: 600; font-size: 14px; }
+  .risk-badge {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase;
+    padding: 3px 8px; border-radius: 999px;
+  }
+  .risk-HIGH { background: var(--high-bg); color: var(--high-text); }
+  .risk-MEDIUM { background: var(--medium-bg); color: var(--medium-text); }
+  .risk-LOW { background: var(--low-bg); color: var(--low-text); }
+  .cap-badge { font-size: 11px; color: var(--text-tertiary); }
+  .tool-desc { font-size: 13px; color: var(--text-secondary); margin: 0 0 8px; }
+  .tool-schema {
+    font-family: ui-monospace, "SF Mono", Consolas, monospace;
+    font-size: 11.5px;
+    background: rgba(128,128,128,0.08);
+    border-radius: 8px;
+    padding: 10px 12px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--text-secondary);
+  }
+
+  .call-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
+  .call-row:last-child { border-bottom: none; }
+  .call-name { font-family: ui-monospace, "SF Mono", Consolas, monospace; font-weight: 500; }
+  .call-detail { color: var(--text-tertiary); font-size: 12px; flex: 1; }
+  .decision-badge { font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 999px; }
+  .decision-ALLOW { background: var(--low-bg); color: var(--low-text); }
+  .decision-BLOCK { background: var(--high-bg); color: var(--high-text); }
+  .decision-REVIEW { background: var(--medium-bg); color: var(--medium-text); }
+  .call-time { font-size: 11px; color: var(--text-tertiary); white-space: nowrap; }
+
+  .call-list {
+    background: var(--surface-solid);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+
+  .empty-inline { padding: 24px; text-align: center; color: var(--text-tertiary); font-size: 13px; }
+
+  footer { text-align: center; color: var(--text-tertiary); font-size: 12px; margin-top: 48px; }
+</style>
+</head>
+<body>
+
+<header class="gk-header">
+  <div class="gk-brand">
+    <h1>Gatekeeper</h1>
+    <span class="subtitle">Gateways</span>
+  </div>
+  <nav class="gk-nav" id="navLinks"></nav>
+  <div class="identity-chip" id="identityChip"></div>
+  <div style="display:flex; gap:8px;">
+    <button class="btn-ghost" id="refreshBtn">Refresh</button>
+    <button class="btn-ghost" id="signOutBtn">Sign Out</button>
+  </div>
+</header>
+
+<main>
+  <div class="gk-status-banner" id="banner"></div>
+
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="model">Model Gateway</button>
+    <button class="tab-btn" data-tab="tool">Tool Gateway</button>
+  </div>
+
+  <section class="tab-panel active" id="panel-model">
+    <h2>Configured Providers</h2>
+    <p class="section-sub">Provider types this deployment can route <code>/api/v1/gateway/chat</code> calls to.</p>
+    <div class="provider-list" id="providerList"></div>
+
+    <h2>Recent Gateway Calls</h2>
+    <p class="section-sub">Real proxied calls from the audit log, most recent first.</p>
+    <div class="call-list" id="gatewayCallList"></div>
+  </section>
+
+  <section class="tab-panel" id="panel-tool">
+    <h2>Registered Tools</h2>
+    <p class="section-sub">The real tool catalogue — contract, risk level, and required capability.</p>
+    <div id="toolCatalogue"></div>
+
+    <h2>Recent Tool Calls</h2>
+    <p class="section-sub">Real tool-call decisions from the audit log, most recent first.</p>
+    <div class="call-list" id="toolCallList"></div>
+  </section>
+
+  <footer>Gatekeeper Gateways · configuration and recent activity, both real</footer>
+</main>
+
+<script src="/ui/shared/auth.js"></script>
+<script>
+const API_BASE = window.location.origin;
+const banner = document.getElementById('banner');
+const refreshBtn = document.getElementById('refreshBtn');
+const signOutBtn = document.getElementById('signOutBtn');
+const identityChip = document.getElementById('identityChip');
+const navLinks = document.getElementById('navLinks');
+
+function showBanner(message, isError) {
+  banner.textContent = message;
+  banner.className = 'gk-status-banner visible' + (isError ? ' error' : '');
+}
+function hideBanner() { banner.className = 'gk-status-banner'; }
+
+function escapeHtml(s) {
+  const div = document.createElement('div');
+  div.textContent = s == null ? '' : String(s);
+  return div.innerHTML;
+}
+
+function formatTime(iso) {
+  try {
+    return new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  } catch (e) { return iso || ''; }
+}
+
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('panel-' + btn.dataset.tab).classList.add('active');
+  });
+});
+
+async function loadProviders() {
+  const res = await fetch(API_BASE + '/api/v1/gateway/providers', { headers: gkAuthHeaders() });
+  if (res.status === 401) { gkSignOut(); return; }
+  if (!res.ok) { showBanner('Failed to load providers: HTTP ' + res.status, true); return; }
+  const data = await res.json();
+  document.getElementById('providerList').innerHTML = data.providers.map(p => `
+    <div class="provider-pill${p === data.default_provider ? ' default' : ''}">
+      ${escapeHtml(p)}
+      ${p === data.default_provider ? '<span class="default-tag">default</span>' : ''}
+    </div>
+  `).join('');
+}
+
+async function loadTools() {
+  const res = await fetch(API_BASE + '/api/v1/tools', { headers: gkAuthHeaders() });
+  if (res.status === 401) { gkSignOut(); return; }
+  if (!res.ok) { showBanner('Failed to load tools: HTTP ' + res.status, true); return; }
+  const data = await res.json();
+  const el = document.getElementById('toolCatalogue');
+  if (data.tools.length === 0) {
+    el.innerHTML = '<div class="empty-inline">No tools registered.</div>';
+    return;
+  }
+  el.innerHTML = data.tools.map(t => `
+    <div class="tool-card">
+      <div class="tool-head">
+        <span class="tool-name">${escapeHtml(t.name)}</span>
+        <span class="risk-badge risk-${escapeHtml(t.risk_level)}">${escapeHtml(t.risk_level)}</span>
+        <span class="cap-badge">requires ${escapeHtml(t.capability_required)}</span>
+      </div>
+      <p class="tool-desc">${escapeHtml(t.description)}</p>
+      <div class="tool-schema">${escapeHtml(JSON.stringify(t.parameters, null, 2))}</div>
+    </div>
+  `).join('');
+}
+
+function renderCallList(elId, events, kind) {
+  const el = document.getElementById(elId);
+  if (events.length === 0) {
+    el.innerHTML = '<div class="empty-inline">No recent activity.</div>';
+    return;
+  }
+  el.innerHTML = events.map(e => {
+    const name = kind === 'tool' ? e.tool : [e.provider, e.model].filter(Boolean).join(' / ');
+    const detail = kind === 'tool' ? (e.reason || '') : (e.error || (e.latency_ms != null ? e.latency_ms + 'ms' : ''));
+    return `
+      <div class="call-row">
+        <span class="call-name">${escapeHtml(name || 'unknown')}</span>
+        <span class="call-detail">${escapeHtml(detail)}</span>
+        <span class="decision-badge decision-${escapeHtml(e.decision)}">${escapeHtml(e.decision)}</span>
+        <span class="call-time">${escapeHtml(formatTime(e.timestamp))}</span>
+      </div>
+    `;
+  }).join('');
+}
+
+async function loadRecentCalls() {
+  const [gatewayRes, toolRes] = await Promise.all([
+    fetch(API_BASE + '/api/v1/logs?event_type=gateway_call&limit=25', { headers: gkAuthHeaders() }),
+    fetch(API_BASE + '/api/v1/logs?event_type=tool_call&limit=25', { headers: gkAuthHeaders() }),
+  ]);
+  if (gatewayRes.status === 401 || toolRes.status === 401) { gkSignOut(); return; }
+  if (gatewayRes.ok) renderCallList('gatewayCallList', (await gatewayRes.json()).events, 'gateway');
+  if (toolRes.ok) renderCallList('toolCallList', (await toolRes.json()).events, 'tool');
+}
+
+async function loadAll() {
+  refreshBtn.disabled = true;
+  refreshBtn.textContent = 'Refreshing…';
+  try {
+    hideBanner();
+    await Promise.all([loadProviders(), loadTools(), loadRecentCalls()]);
+  } catch (e) {
+    showBanner('Could not reach the API — ' + e.message, true);
+  } finally {
+    refreshBtn.disabled = false;
+    refreshBtn.textContent = 'Refresh';
+  }
+}
+
+refreshBtn.addEventListener('click', loadAll);
+signOutBtn.addEventListener('click', gkSignOut);
+
+(async () => {
+  const identity = await gkRequireAuth();
+  if (!identity) return;
+  navLinks.innerHTML = gkNavLinks(identity, 'gateways');
+  identityChip.innerHTML = '<b>' + escapeHtml(identity.key_id) + '</b> · ' + escapeHtml(identity.tenant) + ' · ' + escapeHtml(identity.capability);
+
+  if (identity.capability !== 'INTERNAL') {
+    showBanner('This key has ' + identity.capability + ' capability — INTERNAL is required to view gateway configuration.', true);
+    return;
+  }
+  loadAll();
+})();
+</script>
+
+</body>
+</html>

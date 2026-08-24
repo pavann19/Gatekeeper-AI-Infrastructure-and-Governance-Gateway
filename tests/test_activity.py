@@ -7,7 +7,7 @@ reconstruction logic, not just the single-chunk happy path.
 import json
 
 import core.activity as activity_mod
-from core.activity import get_recent_activity
+from core.activity import find_by_request_id, get_recent_activity
 
 
 def _write_jsonl(path, records):
@@ -156,3 +156,64 @@ def test_real_default_path_used_when_none_given(monkeypatch, tmp_path):
     monkeypatch.setattr("core.activity.settings.AUDIT_LOG_PATH", str(p))
     result = get_recent_activity()
     assert result["events"][0]["request_id"] == "only"
+
+
+# --- find_by_request_id -------------------------------------------------------
+
+def test_trace_returns_only_matching_request_id_in_chronological_order(tmp_path):
+    p = tmp_path / "audit.jsonl"
+    _write_jsonl(p, [
+        _event(request_id="target", event_type="input_assessment"),
+        _event(request_id="other", event_type="input_assessment"),
+        _event(request_id="target", event_type="gateway_call"),
+        _event(request_id="other", event_type="tool_call"),
+        _event(request_id="target", event_type="output_assessment"),
+    ])
+    result = find_by_request_id("target", path=str(p))
+    types = [e["event_type"] for e in result["events"]]
+    assert types == ["input_assessment", "gateway_call", "output_assessment"]
+
+
+def test_trace_no_matches_is_an_empty_list_not_an_error(tmp_path):
+    p = tmp_path / "audit.jsonl"
+    _write_jsonl(p, [_event(request_id="unrelated")])
+    result = find_by_request_id("does-not-exist", path=str(p))
+    assert result == {"events": [], "scan_truncated": False}
+
+
+def test_trace_tenant_filter(tmp_path):
+    p = tmp_path / "audit.jsonl"
+    _write_jsonl(p, [
+        _event(request_id="shared-id", tenant="acme"),
+        _event(request_id="shared-id", tenant="beta"),
+    ])
+    result = find_by_request_id("shared-id", tenant="acme", path=str(p))
+    assert len(result["events"]) == 1
+    assert result["events"][0]["tenant"] == "acme"
+
+
+def test_trace_missing_file_is_empty(tmp_path):
+    result = find_by_request_id("anything", path=str(tmp_path / "nope.jsonl"))
+    assert result == {"events": [], "scan_truncated": False}
+
+
+def test_trace_scan_truncated_when_byte_cap_hit(tmp_path, monkeypatch):
+    monkeypatch.setattr(activity_mod, "MAX_BYTES_SCANNED", 200)
+    p = tmp_path / "audit.jsonl"
+    records = [_event(request_id="target")]
+    records += [_event(request_id=str(i), tenant="beta") for i in range(200)]
+    _write_jsonl(p, records)
+    result = find_by_request_id("target", path=str(p))
+    assert result["events"] == []
+    assert result["scan_truncated"] is True
+
+
+def test_trace_spans_multiple_chunks(tmp_path, monkeypatch):
+    monkeypatch.setattr(activity_mod, "CHUNK_SIZE", 16)
+    p = tmp_path / "audit.jsonl"
+    records = [_event(request_id="target", event_type="input_assessment")]
+    records += [_event(request_id=str(i)) for i in range(30)]
+    records.append(_event(request_id="target", event_type="tool_call"))
+    _write_jsonl(p, records)
+    result = find_by_request_id("target", path=str(p))
+    assert [e["event_type"] for e in result["events"]] == ["input_assessment", "tool_call"]
