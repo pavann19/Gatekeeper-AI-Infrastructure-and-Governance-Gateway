@@ -1345,11 +1345,13 @@ def deploy_policy_endpoint(req: PolicyContentRequest, request: Request):
     try:
         errors = validate_policy_file(tmp_path)
         if errors:
+            metrics.policy_changes_total.labels(action="deploy", outcome="rejected").inc()
             raise HTTPException(status_code=422, detail={"message": "Refusing to deploy: invalid policy.", "errors": errors})
         previous_version = deploy_policy(tmp_path)
     finally:
         os.unlink(tmp_path)
 
+    metrics.policy_changes_total.labels(action="deploy", outcome="success").inc()
     logger.warning(f"Policy deployed via API by key_id={principal.key_id}. Previous snapshot: {previous_version}")
     return {"deployed": True, "previous_version": previous_version}
 
@@ -1363,8 +1365,10 @@ def rollback_policy_endpoint(req: PolicyRollbackRequest, request: Request):
     try:
         rollback_to(req.version)
     except FileNotFoundError as e:
+        metrics.policy_changes_total.labels(action="rollback", outcome="rejected").inc()
         raise HTTPException(status_code=404, detail=str(e))
 
+    metrics.policy_changes_total.labels(action="rollback", outcome="success").inc()
     logger.warning(f"Policy rolled back via API by key_id={principal.key_id} to version={req.version}")
     return {"rolled_back_to": req.version}
 

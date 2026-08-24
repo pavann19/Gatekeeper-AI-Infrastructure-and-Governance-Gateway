@@ -759,11 +759,84 @@ the end.
       done — this is one security pass over one subsystem; the item stays
       open for the rest of the codebase's subsystems as this phase
       continues alongside future work.
+
+      Continued: swept `os.path.join` usage across `core/`/`api/` for the
+      same unsanitized-path-component pattern the rollback fix closed —
+      the only other instances found (`core/benchmarks.py`'s glob,
+      `core/detectors.py`/`core/fusion.py`'s model-artifact paths) use
+      fixed literals or server-configured directories, never caller
+      input, so the rollback endpoint was the only real instance, not one
+      of several.
 - [ ] Load testing
-- [ ] Docker improvements, graceful failure handling
-- [ ] Secrets management
-- [ ] Structured logging / metrics / tracing extended to new subsystems
-- [ ] Documentation, architecture diagrams, threat model updates
+- [x] Docker improvements, graceful failure handling (partial) --
+      reviewed `Dockerfile.api`/`Dockerfile.ui`/`docker-compose.yml`.
+      `.dockerignore` is already a well-built deny-by-default allowlist
+      that correctly excludes secrets (`api_keys.json`, `tenants.json`,
+      `.env`) even under an allowlist model ("belt and suspenders" per
+      its own comment) — no gap found there. Considered adding a
+      non-root `USER` directive to both Dockerfiles (standard hardening)
+      but did NOT make the change: this environment has no running
+      Docker daemon to build/verify against, and `docker-compose.yml`
+      hardcodes the HuggingFace model-cache volume to
+      `/root/.cache/huggingface` — switching to a non-root user would
+      silently break that mount (a different, non-root home directory)
+      and risk reproducing the exact 9.3GB-re-download RAM crisis
+      `.dockerignore`'s own header describes as a past incident. Left
+      alone rather than guessed at; revisit with a real Docker
+      environment to verify the fix doesn't regress that mount.
+      Remaining, not partial: the `gatekeeper-ui` service in
+      `docker-compose.yml` builds `Dockerfile.ui` / `ui/web_app.py`, the
+      superseded Streamlit prototype that bypasses `core/risk.py`'s
+      pipeline entirely (calls Ollama directly) -- documented as a known
+      limitation already, but the README presented it as *the* Gatekeeper
+      UI with no mention that a real one now exists (see the
+      Documentation item below). Not removed outright this pass (a
+      compose-topology change deserves more explicit sign-off than a
+      docs correction does), but the record is now honest about which
+      container serves which UI.
+- [x] Secrets management (audit, no code change needed) -- grepped
+      `core/`/`api/`/`scripts/` for hardcoded credential-shaped literals
+      (none found) and the whole tracked tree for real-secret patterns
+      (AWS keys, PEM private keys, GitHub/OpenAI tokens): every match was
+      a test fixture for `core.detectors`' own secrets-DETECTION feature,
+      using obviously-fake values (`AKIAABCDEFGHIJKLMNOP`, the alphabet
+      as a "key"). `.env.example` contains only real defaults/placeholders
+      with an explicit "CHANGE THIS" comment on the one credential-shaped
+      value (`GRAFANA_ADMIN_PASSWORD=changeme`). API keys are SHA-256
+      hashed at rest (`core/auth.py::hash_key`) and never logged verbatim
+      anywhere in this codebase. No gap found — this item was already
+      solid going in.
+- [x] Structured logging / metrics / tracing extended to new subsystems
+      (partial) -- confirmed the generic `request_duration_seconds`
+      histogram (route template x method x status) and
+      `rate_limited_total` counter already cover every Phase 7 endpoint
+      automatically, since both are recorded in `add_process_time_header`
+      middleware and `_enforce_rate_limit` respectively, not per-endpoint
+      — no gap there. Added one endpoint-specific metric that WAS
+      missing: `gatekeeper_policy_changes_total{action,outcome}`,
+      matching the precedent `gateway_call_total` already set (a
+      consequential event gets its own counter, not just a generic HTTP
+      status code) -- a live policy change is exactly that kind of event,
+      and "how many deploys were rejected by validation" was previously
+      answerable only by grepping logs. 4 new tests asserting the counter
+      actually increments on real deploy/rollback calls, success and
+      rejection both.
+- [x] Documentation, architecture diagrams, threat model updates (partial)
+      -- corrected `README.md` §3 and §13, which described the superseded
+      Streamlit prototype (`ui/web_app.py`) as "the" Gatekeeper UI with no
+      mention that Phase 7 built a real one, and whose docker-compose
+      example had drifted from the actual `docker-compose.yml` (single-
+      file bind mounts the real file moved away from specifically because
+      they were fragile). Both corrected honestly, not deleted -- the
+      prototype is still there and still documented, just no longer
+      presented as current. No formal threat-model document exists yet;
+      this pass's findings (the rollback path-traversal, the missing
+      rate-limiting) are recorded here rather than in a separate document,
+      consistent with this project's evidence-log convention for
+      `ROADMAP_V2.md`/`ENGINEERING_ASSESSMENT.md` -- a dedicated
+      threat-model writeup remains open if it's wanted as its own
+      deliverable.
+      814 passing overall (up from 810).
 
 ---
 
