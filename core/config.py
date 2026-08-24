@@ -305,6 +305,14 @@ class Settings(BaseSettings):
     # where an orchestrator's readiness probe is designed to wait for it.
     WARM_MODELS_ON_STARTUP: bool = True
 
+    # Registers core/demo_tools.py's four sandboxed demo tools at
+    # startup, so POST /api/v1/tools/call has something real to call
+    # without a deployment writing its own tools first. Defaults OFF: a
+    # production deployment should not get demo tools just because this
+    # module happens to be importable — the same "opt-in, not automatic"
+    # contract core/demo_tools.py::register_demo_tools already documents.
+    REGISTER_DEMO_TOOLS: bool = False
+
     # --- Observability (core/metrics.py) ---
     #
     # The Prometheus exposition endpoint. Metrics leak operational detail —

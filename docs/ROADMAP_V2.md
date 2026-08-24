@@ -336,14 +336,11 @@ Original estimate: ~35–55h — the single largest new subsystem
       because they're generally allowed to invoke the tool. Mirrors
       Phase 4's own REVIEW semantics exactly. Decision vocabulary
       (BLOCK/REVIEW/ALLOW) reuses `core/policy.py`'s action names minus
-      RESTRICT, which has no obvious meaning for a tool call. NOT yet
-      wired into `core/review_queue.py` or an execution endpoint —
-      neither exists yet for tool calls, and forcing this into
-      `ReviewRecord`'s prompt-hash-shaped schema before a real caller
-      exists would repeat the "one shape serving two questions" mistake
-      `core/logger.py`'s three distinct audit functions were built to
-      avoid; that wiring belongs to whichever later item actually adds
-      an execution path. 6 new tests, 602 passed overall (up from 596).
+      RESTRICT, which has no obvious meaning for a tool call. At the time
+      this item shipped, not yet wired into `core/review_queue.py` or an
+      execution endpoint — see the phase-closing note below for where
+      that wiring actually landed once `POST /api/v1/tools/call` existed
+      to need it. 6 new tests, 602 passed overall (up from 596).
 - [x] Sandboxed demo tools — done 2026-08-24, see `core/demo_tools.py`
       and `core/tools.py::execute_tool`. First real tools run through
       the full pipeline end to end (access control → structural
@@ -410,13 +407,30 @@ Original estimate: ~35–55h — the single largest new subsystem
 schemas, allow/deny, risk-based approval, sandboxed demo tools, audit
 events, and MCP-shape compatibility — built in that order specifically
 so each item was driven by what using the previous one actually needed,
-never speculatively ahead of a real caller. What remains genuinely
-unbuilt and out of this phase's scope: a real MCP transport server, a
-production HTTP endpoint for tool calls (nothing in `api/main.py` calls
-`execute_tool` yet), wiring REVIEW decisions into `core/review_queue.py`
-(deliberately deferred in the risk-based-approval item's own writeup),
-and any real (non-demo) tool. Those are the natural next steps once an
-actual deployment needs one of them.
+never speculatively ahead of a real caller.
+
+**Closed out same day (2026-08-24), once questioned directly**: the two
+gaps this phase's own writeup had left open — no live endpoint, and
+REVIEW not wired to the real review queue — are now closed. New `POST
+/api/v1/tools/call` in `api/main.py` gives `execute_tool` a real caller
+with real `tenant`/`request_id` context, same auth/tenant/rate-limit
+boundary as every other endpoint. A REVIEW decision now enqueues a real,
+retrievable `ReviewRecord` via `core/review_queue.py::enqueue_review` —
+verified end to end through the actual HTTP layer, not mocked: a real
+`POST` for `demo.database.delete` produces a real PENDING review record,
+resolvable via the existing Phase-4 `GET`/`POST /api/v1/review/*`
+endpoints, no new review machinery built. `core/demo_tools.py`'s four
+tools can now be registered at startup via `REGISTER_DEMO_TOOLS` (default
+OFF — opt-in, same as the module always documented), so the endpoint has
+something real to call without a deployment writing its own tools first.
+12 new tests, 669 passed overall (up from 657).
+
+What remains genuinely unbuilt and out of this phase's scope: a real MCP
+transport server (protocol-shape compatibility only, per the MCP item's
+own writeup), and any real (non-demo) tool — a production deployment
+still has to register its own. Those are the natural next steps once an
+actual deployment needs one of them, not gaps in what this phase set out
+to build.
 
 ## Phase 7 — UI Integration
 Original estimate: ~40–65h combined — deferred until engine + gateways are solid
