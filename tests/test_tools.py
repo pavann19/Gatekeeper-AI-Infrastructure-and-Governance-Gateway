@@ -165,6 +165,50 @@ def test_bool_is_accepted_as_boolean():
     assert ok is True
 
 
+# --- Phase 8 hardening: maxLength, previously unenforced --------------------
+
+def test_string_within_max_length_is_accepted():
+    spec = make_spec(parameters={
+        "type": "object",
+        "properties": {"url": {"type": "string", "maxLength": 10}},
+        "required": [],
+    })
+    ok, detail = validate_arguments(spec, {"url": "short"})
+    assert ok is True
+
+
+def test_string_exceeding_max_length_is_rejected():
+    spec = make_spec(parameters={
+        "type": "object",
+        "properties": {"url": {"type": "string", "maxLength": 10}},
+        "required": [],
+    })
+    ok, detail = validate_arguments(spec, {"url": "this is way too long"})
+    assert ok is False
+    assert "maxLength" in detail
+    assert "url" in detail
+
+
+def test_string_exactly_at_max_length_is_accepted():
+    spec = make_spec(parameters={
+        "type": "object",
+        "properties": {"url": {"type": "string", "maxLength": 5}},
+        "required": [],
+    })
+    ok, detail = validate_arguments(spec, {"url": "12345"})
+    assert ok is True
+
+
+def test_no_max_length_declared_means_no_size_limit():
+    spec = make_spec(parameters={
+        "type": "object",
+        "properties": {"url": {"type": "string"}},
+        "required": [],
+    })
+    ok, detail = validate_arguments(spec, {"url": "x" * 10_000})
+    assert ok is True
+
+
 @pytest.mark.parametrize("json_type,good,bad", [
     ("string", "hello", 5),
     ("number", 3.14, "3.14"),

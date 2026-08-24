@@ -171,6 +171,17 @@ def validate_arguments(spec: ToolSpec, arguments: Dict[str, Any]) -> Tuple[bool,
         if enum is not None and value not in enum:
             return False, f"argument {key!r} must be one of {enum!r}, got {value!r}"
 
+        # Phase 8 hardening: JSON-Schema's own `maxLength` keyword, not
+        # previously enforced here at all -- structural validation checked
+        # required/type/enum but had no notion of size, so a tool spec
+        # declaring maxLength (e.g. http.get's `url`) got no protection
+        # from it. `api/schemas.py::ToolCallRequest` separately bounds the
+        # WHOLE arguments payload; this is the finer-grained, per-field
+        # version a tool's own spec can opt into.
+        max_length = props[key].get("maxLength")
+        if max_length is not None and isinstance(value, str) and len(value) > max_length:
+            return False, f"argument {key!r} exceeds maxLength {max_length} (got {len(value)} chars)"
+
     return True, "ok"
 
 

@@ -1,4 +1,6 @@
-from pydantic import BaseModel, Field
+import json
+
+from pydantic import BaseModel, Field, field_validator
 from typing import Dict, Any, List, Literal, Optional
 
 class AssessRequest(BaseModel):
@@ -274,7 +276,11 @@ class GatewayChatResponse(BaseModel):
 # --- Tool / Agent Gateway (Phase 6) ---
 
 class ToolCallRequest(BaseModel):
-    name: str = Field(..., min_length=1, description="The registered tool name to call, e.g. 'demo.database.query'.")
+    # max_length=200: registered tool names are short dotted identifiers
+    # (e.g. "demo.database.query"); nothing in this codebase registers or
+    # will plausibly register a longer one.
+    name: str = Field(..., min_length=1, max_length=200,
+                      description="The registered tool name to call, e.g. 'demo.database.query'.")
     arguments: Dict[str, Any] = Field(
         default_factory=dict,
         description="Arguments for the tool, validated against its declared JSON-Schema "
@@ -282,6 +288,30 @@ class ToolCallRequest(BaseModel):
     )
 
     model_config = {"extra": "forbid"}
+
+    @field_validator("arguments")
+    @classmethod
+    def _bound_arguments_size(cls, value):
+        """
+        Phase 8 hardening: every other free-text field in this codebase
+        already has a max_length (see AssessRequest.prompt, etc.) --
+        `arguments` was the one caller-supplied, structurally-unbounded
+        field in this schema file, since `core.tools.validate_arguments`
+        only checks type/required/enum, never size (a `url` string
+        argument for http.get, for instance, has no length cap at any
+        layer). Bounded here at the schema boundary, before any of that
+        downstream validation, hashing, or the tool's own handler ever
+        sees it. 100_000 chars comfortably covers any real tool argument
+        set (a URL, a table name, a row id) while still bounding the
+        worst case (a deliberately oversized body wasting CPU/memory on
+        JSON-dumping and hashing it before the tool even runs).
+        """
+        serialized_size = len(json.dumps(value, default=str))
+        if serialized_size > 100_000:
+            raise ValueError(
+                f"arguments too large ({serialized_size} bytes serialized; max 100000)"
+            )
+        return value
 
 
 class ToolCallResponse(BaseModel):

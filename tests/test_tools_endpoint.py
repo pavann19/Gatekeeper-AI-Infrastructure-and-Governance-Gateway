@@ -233,3 +233,25 @@ def test_extra_fields_in_request_are_rejected():
     response = client.post("/api/v1/tools/call",
                            json={"name": "demo.echo", "arguments": {"text": "hi"}, "role": "INTERNAL"})
     assert response.status_code == 422
+
+
+# --- Phase 8 hardening: arguments/name size bounds, previously unenforced -----
+
+def test_oversized_arguments_payload_is_rejected():
+    """`arguments` was the one caller-supplied, structurally-unbounded
+    field in this schema -- every other free-text field already has a
+    max_length. A ~150KB string argument must be rejected before it ever
+    reaches core.tools.validate_arguments or gets hashed."""
+    huge = "x" * 150_000
+    response = client.post("/api/v1/tools/call", json={"name": "demo.echo", "arguments": {"text": huge}})
+    assert response.status_code == 422
+
+
+def test_reasonably_sized_arguments_still_work():
+    response = client.post("/api/v1/tools/call", json={"name": "demo.echo", "arguments": {"text": "hi"}})
+    assert response.status_code == 200
+
+
+def test_oversized_tool_name_is_rejected():
+    response = client.post("/api/v1/tools/call", json={"name": "x" * 201, "arguments": {}})
+    assert response.status_code == 422

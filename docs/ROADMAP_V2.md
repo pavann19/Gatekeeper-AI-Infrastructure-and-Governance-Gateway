@@ -767,6 +767,40 @@ the end.
       fixed literals or server-configured directories, never caller
       input, so the rollback endpoint was the only real instance, not one
       of several.
+
+      Continued again: audited `core/tools.py`'s structural argument
+      validation for the same "every free-text field elsewhere has a
+      size bound" gap this phase already found once (the Policy Editor's
+      `content`/`version` fields). Found it repeated: `validate_arguments`
+      checked required/type/enum but had no notion of length at all, and
+      `api/schemas.py::ToolCallRequest.arguments` (a caller-supplied
+      `Dict[str, Any]`) was the one structurally-unbounded field in the
+      whole schema file — a caller could send an arbitrarily large
+      argument value (e.g. `http.get`'s `url`) and it would reach
+      hashing, logging, and the tool's own handler before anything
+      rejected it. Fixed at two layers: a Pydantic `field_validator` caps
+      the whole `arguments` payload at 100KB serialized (the schema-level
+      backstop, mirroring the Policy Editor's own bound), and
+      `validate_arguments` now enforces JSON-Schema's own `maxLength`
+      keyword per-field when a tool spec declares one — `http.get`'s
+      `url` now declares `maxLength: 2048`, so an oversized URL is
+      rejected as a structural BLOCK before `urlsplit`/DNS resolution
+      ever sees it, not just before the 100KB aggregate cap would catch
+      it. 10 new tests across `tests/test_tools.py`,
+      `tests/test_tools_endpoint.py`, and `tests/test_real_tools.py`.
+
+      Reviewed `core/mcp_server.py`'s stdio transport for the same class
+      of unbounded-input concern: `for line in input_stream` buffers an
+      entire line into memory before yielding it, so an arbitrarily long
+      single line with no newline is a real memory-exhaustion vector in
+      principle. NOT fixed this pass — the module's own documented trust
+      model is that an MCP stdio client is a trusted local process (the
+      process itself is the security boundary, not each message), which
+      is a materially different threat model than the HTTP-facing
+      endpoints this phase has otherwise focused on. Left as a known,
+      considered gap rather than fixed reflexively, since fixing it would
+      mean picking a line-length cap for a transport this project's own
+      docstring says trusts its caller by design.
 - [x] Load testing -- built `scripts/load_test.py`, a real concurrent-HTTP
       load generator (`concurrent.futures.ThreadPoolExecutor` + `requests`,
       no new dependency) against a REAL running instance, not a simulated
