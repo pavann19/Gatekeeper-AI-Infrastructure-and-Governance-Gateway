@@ -1,6 +1,7 @@
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
 import hashlib
 import json
+import os
 import time
 import asyncio
 import functools
@@ -8,6 +9,7 @@ import re
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from core import metrics
 from api.schemas import (
@@ -36,6 +38,15 @@ app = FastAPI(
     description="Neuro-Symbolic AI Security Gateway",
     version="2.0.0"
 )
+
+# Phase 7: the human-review operator dashboard is a static page (no build
+# step, no new frontend dependency) that talks to this same API over
+# fetch() with an operator-supplied API key -- mounted here rather than run
+# as a separate process so it always points at the API it's actually
+# reviewing, with no separate deployment/CORS story to keep in sync.
+_REVIEW_DASHBOARD_DIR = os.path.join(os.path.dirname(__file__), "..", "ui", "review_dashboard")
+if os.path.isdir(_REVIEW_DASHBOARD_DIR):
+    app.mount("/ui/review", StaticFiles(directory=_REVIEW_DASHBOARD_DIR, html=True), name="review_ui")
 
 # CORS. The previous configuration paired allow_origins=["*"] with
 # allow_credentials=True, which browsers reject outright per the CORS spec and
