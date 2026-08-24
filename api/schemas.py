@@ -242,12 +242,19 @@ class GatewayChatRequest(BaseModel):
                     "verbatim leakage of it, same as AssessRequest.system_prompt.",
     )
     provider: Optional[str] = Field(
-        None, description="ollama, openai_compatible, or anthropic_compatible. "
-                          "Defaults to LLM_GATEWAY_DEFAULT_PROVIDER if omitted.",
+        None, max_length=100,
+        description="ollama, openai_compatible, or anthropic_compatible. "
+                    "Defaults to LLM_GATEWAY_DEFAULT_PROVIDER if omitted.",
     )
+    # max_length=200: Phase 8 hardening -- a model name is a short
+    # identifier (e.g. "llama-guard3", "gpt-4o-mini"); this was the one
+    # caller-supplied free-text field in this schema with no bound at
+    # all, before being forwarded straight into the outbound request to
+    # a real external provider.
     model: Optional[str] = Field(
-        None, description="Model name for the chosen provider. Defaults to that "
-                          "provider's own configured default if omitted.",
+        None, max_length=200,
+        description="Model name for the chosen provider. Defaults to that "
+                    "provider's own configured default if omitted.",
     )
 
     model_config = {"extra": "forbid"}

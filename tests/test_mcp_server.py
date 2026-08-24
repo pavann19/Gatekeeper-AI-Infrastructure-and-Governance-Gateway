@@ -230,3 +230,46 @@ def test_stdio_loop_survives_a_handler_bug_and_keeps_serving(registry, monkeypat
     ], registry=registry)
     assert responses[0]["error"]["code"] == INTERNAL_ERROR
     assert "result" in responses[1]  # the loop kept going after the crash
+
+
+# --- Phase 8 hardening: bounded line length ------------------------------------
+#
+# `for line in stream` (the original implementation) buffers an entire
+# line into memory before yielding it -- a single line with no newline
+# would be an unbounded read. run_stdio_server now uses
+# readline(MAX_LINE_BYTES + 1) instead, which bounds a single read
+# regardless of whether a newline ever appears.
+
+def test_oversized_line_is_rejected_without_buffering_it_whole(registry, monkeypatch):
+    import core.mcp_server as mcp_server_mod
+    monkeypatch.setattr(mcp_server_mod, "MAX_LINE_BYTES", 100)
+    oversized = "x" * 500  # no newline within the first 100 bytes
+    responses = _run([oversized], registry=registry)
+    assert len(responses) == 1
+    assert responses[0]["error"]["code"] == PARSE_ERROR
+    assert responses[0]["id"] is None
+    assert "exceeds" in responses[0]["error"]["message"]
+
+
+def test_stdio_loop_resyncs_after_an_oversized_line_and_keeps_serving(registry, monkeypatch):
+    """After dropping an oversized line, the NEXT real message must be
+    parsed as its own message, not as a fragment glued onto the dropped
+    one."""
+    import core.mcp_server as mcp_server_mod
+    monkeypatch.setattr(mcp_server_mod, "MAX_LINE_BYTES", 100)
+    oversized = "x" * 500
+    good = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+    responses = _run([oversized, good], registry=registry)
+    assert len(responses) == 2
+    assert responses[0]["error"]["code"] == PARSE_ERROR
+    assert "result" in responses[1]
+    assert responses[1]["id"] == 1
+
+
+def test_line_exactly_at_the_limit_is_still_accepted(registry, monkeypatch):
+    import core.mcp_server as mcp_server_mod
+    msg = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+    monkeypatch.setattr(mcp_server_mod, "MAX_LINE_BYTES", len(msg) + 10)
+    responses = _run([msg], registry=registry)
+    assert len(responses) == 1
+    assert "result" in responses[0]
