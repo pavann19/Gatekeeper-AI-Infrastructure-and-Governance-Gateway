@@ -750,6 +750,33 @@ def _build_registry():
             description="Unitary toxic-bert, multi-label toxicity",
         ),
 
+        # German-specific toxicity/offensive-language classifiers (issue #3:
+        # `toxic_bert` above is English-trained and measured severely
+        # miscalibrated on German — 48.6% FPR standalone against a 5% budget,
+        # docs/ENGINEERING_ASSESSMENT.md §1aa). `trained_on=()` here is
+        # UNKNOWN-not-verified-clean, same honest caveat NemoGuardJailbreak-
+        # Detector's own docstring uses — neither model card names
+        # philschmid/germeval18 explicitly, but neither publishes a full
+        # training-data manifest either, so this is not the same guarantee
+        # as protectai_injection/deepset_injection's own `trained_on`
+        # declarations, which come from reading the paper/card directly.
+        "german_toxicity_eistakovskii": TransformerDetector(
+            name="german_toxicity_eistakovskii",
+            model_id="EIStakovskii/german_toxicity_classifier_plus_v2",
+            positive_labels=["toxic"],
+            targets=(CLASS_HARMFUL,),
+            description="German BERT toxicity classifier (dbmdz/bert-base-german-cased "
+                        "fine-tune; trained_on unknown, not verified clean)",
+        ),
+        "german_toxicity_ankekat": TransformerDetector(
+            name="german_toxicity_ankekat",
+            model_id="ankekat1000/toxic-bert-german",
+            positive_labels=["toxic"],
+            targets=(CLASS_HARMFUL,),
+            description="German BERT toxicity classifier (deepset/bert-base-german-cased "
+                        "fine-tune; trained_on unknown, not verified clean)",
+        ),
+
         # --- Established vendor framework, open licence (benchmark target) ---
         # The only major commercial guardrail product that can be benchmarked
         # honestly on our own suite; Lakera and Azure are closed APIs. See the

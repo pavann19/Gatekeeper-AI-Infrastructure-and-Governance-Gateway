@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "trained_at": "2026-08-24T05:49:40.344614+00:00",
+  "trained_at": "2026-08-24T11:59:39.783943+00:00",
   "feature_order": [
     "anchors",
     "protectai_injection",
@@ -114,6 +114,173 @@
     "note": "in-sample AUC is NOT an accuracy estimate (fit and scored on the same data) - it exists only as a load-bearing sanity check that persistence round-trips correctly. The unbiased estimate is scripts.sweep_fusion_variants' out-of-fold AUC for this exact feature pool, reported in docs/ENGINEERING_ASSESSMENT.md."
   },
   "upgrade_tiers": [
+    {
+      "feature_order": [
+        "anchors",
+        "protectai_injection",
+        "madhurjindal_jailbreak",
+        "toxic_bert",
+        "deepset_injection",
+        "prompt_guard_2",
+        "german_toxicity_eistakovskii",
+        "german_toxicity_ankekat"
+      ],
+      "scaler_mean": [
+        0.2391396129925307,
+        0.18509158113722393,
+        0.2284336028703973,
+        0.06993415556027227,
+        0.6680243007674039,
+        0.1526293482046984,
+        0.7841357388325355,
+        0.16232115076076398
+      ],
+      "scaler_scale": [
+        0.1761535705947467,
+        0.38192968669966837,
+        0.3333949821716729,
+        0.15891916556193691,
+        0.45779182250887596,
+        0.35128459755717345,
+        0.31624592554130326,
+        0.33729411292077993
+      ],
+      "coefficients": [
+        0.10051603611765081,
+        0.9276735042396905,
+        0.0318875129318698,
+        0.32133069844457485,
+        0.9727345956969227,
+        1.920514370831998,
+        -0.04556953323047377,
+        0.4957895275722513
+      ],
+      "intercept": -0.6063300465017304,
+      "threshold_high": 0.52788104755901,
+      "threshold_medium": 0.1984748728892798,
+      "fpr_budget_high": 0.05,
+      "fpr_budget_medium": 0.2,
+      "per_class": {
+        "harmful_content": {
+          "scaler_mean": [
+            0.18904316105646893,
+            0.027049325622597698,
+            0.16830746268300112,
+            0.07139739008783826,
+            0.5852089384546048,
+            0.009481533009930045,
+            0.780012578148133,
+            0.18225485485108364
+          ],
+          "scaler_scale": [
+            0.08833858417122223,
+            0.15130337711903646,
+            0.2750846475950758,
+            0.1609540938044913,
+            0.4785061906085994,
+            0.08352466445318792,
+            0.3257018021299712,
+            0.3582250416620876
+          ],
+          "coefficients": [
+            0.17236252666364196,
+            -0.1591268894176704,
+            -0.07516129106703076,
+            0.44557632826132104,
+            0.6108419711220315,
+            0.23807373337413523,
+            0.6586419676762549,
+            0.8652767228986267
+          ],
+          "intercept": -2.85954059798064,
+          "threshold_high": 0.5382631325814021,
+          "threshold_medium": 0.27119596033530985,
+          "n_positive": 1268
+        },
+        "jailbreak": {
+          "scaler_mean": [
+            0.21957847083275525,
+            0.08540534859785813,
+            0.20606060511653246,
+            0.050770565951840554,
+            0.5683083980536858,
+            0.0736596916280362,
+            0.7711616716424649,
+            0.10791118610061105
+          ],
+          "scaler_scale": [
+            0.15242866052505055,
+            0.2724748870057722,
+            0.3342555154008798,
+            0.12912028412622453,
+            0.4812617544932555,
+            0.2556355340818727,
+            0.32949257277747407,
+            0.2780560221816382
+          ],
+          "coefficients": [
+            0.8181294942816628,
+            0.5114396839506655,
+            0.6667501955634999,
+            0.06535501205592158,
+            0.8414021241609865,
+            1.0460864026245476,
+            0.5872457159086415,
+            -1.016056708455133
+          ],
+          "intercept": -5.792311098179593,
+          "threshold_high": 0.05323080821655902,
+          "threshold_medium": 0.017657586754791676,
+          "n_positive": 692
+        },
+        "prompt_injection": {
+          "scaler_mean": [
+            0.2236828994077215,
+            0.16632993169112298,
+            0.1741929166264203,
+            0.053343708797909305,
+            0.6174247001515822,
+            0.1195813481350902,
+            0.752698302516961,
+            0.11891925085376201
+          ],
+          "scaler_scale": [
+            0.15114875304821432,
+            0.36576195678981227,
+            0.288771857236353,
+            0.12933126503208472,
+            0.47204025259776045,
+            0.31563509543045665,
+            0.32921763888433736,
+            0.2856960200961926
+          ],
+          "coefficients": [
+            -0.300980746890553,
+            1.163563835745026,
+            0.05133942575238738,
+            0.069352682991257,
+            1.2662119198334305,
+            2.1045619428231634,
+            -0.4026150991063912,
+            -0.006082168774448794
+          ],
+          "intercept": -1.6831849592036492,
+          "threshold_high": 0.4081382991797097,
+          "threshold_medium": 0.143972406420649,
+          "n_positive": 2504
+        }
+      },
+      "per_class_fpr_budget_high": 0.0224,
+      "per_class_fpr_budget_medium": 0.0895,
+      "training": {
+        "n_rows": 13011,
+        "n_attack": 4464,
+        "n_benign": 8547,
+        "in_sample_auc": 0.920890176938564,
+        "note": "in-sample AUC is NOT an accuracy estimate (fit and scored on the same data) - it exists only as a load-bearing sanity check that persistence round-trips correctly. The unbiased estimate is scripts.sweep_fusion_variants' out-of-fold AUC for this exact feature pool, reported in docs/ENGINEERING_ASSESSMENT.md."
+      },
+      "tier_id": "eight_feature"
+    },
     {
       "feature_order": [
         "anchors",

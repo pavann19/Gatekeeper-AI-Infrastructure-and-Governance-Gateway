@@ -3112,6 +3112,118 @@ not a rushed inclusion riding this commit. Still on
 
 ---
 
+## 1ac. Closing issue #3 — German offensive-content AUC 0.597 -> 0.741, off-the-shelf, no stacking caveat (2026-08-24, `fix-open-issues` branch)
+
+§1ab's own "what this does not close" named the open item precisely:
+`toxic_bert`, the only feature in the 6-feature ensemble that targets
+`harmful_content`, is English-trained, and the multilingual head that
+DOES close most of this gap (issue #4) carries a stacking caveat that
+kept it from shipping. The fix here is the regular method, not the
+groundbreaking one: search for an off-the-shelf German-trained toxicity
+classifier before building anything custom.
+
+### Two candidates found and validated
+
+`EIStakovskii/german_toxicity_classifier_plus_v2` and
+`ankekat1000/toxic-bert-german`, both German BERT fine-tunes for
+toxicity, found via a Hub search and checked for sane label mappings
+before use. Standalone, on the German offensive-content subset only
+(3,567 rows, contamination-excluded), each with an honest fit-half/
+eval-half split (`scripts.calibrate_german_threshold`):
+
+```
+                                AUC                    recall@5%FPR
+german_toxicity_eistakovskii   0.796 [0.771, 0.820]    40.6% [35.4, 45.9]
+german_toxicity_ankekat        0.818 [0.794, 0.840]    37.6% [29.5, 44.6]
+```
+
+Both decisively beat the shipped 6-feature ensemble's 0.597 AUC / 11.8%
+recall on this exact task, standalone, before any fusion work at all.
+Registered in `core/detectors.py` with `trained_on=()` — UNKNOWN, not
+verified clean, the same honest caveat `NemoGuardJailbreakDetector`
+already carries — since neither model card names `philschmid/germeval18`
+explicitly, but neither publishes a full training-data manifest either.
+This is a materially weaker guarantee than `protectai_injection`/
+`deepset_injection`'s own `trained_on` declarations (read from the
+paper), and is stated as such rather than implied to be equivalent.
+
+### Adding both as an 8th and 9th feature — and testing whether `toxic_bert` should be dropped
+
+Extended `scripts.sweep_fusion_variants` and `scripts.analyze_german_by_
+task` with an 8-feature tier (the shipped 6 plus both German toxicity
+detectors). Result, non-overlapping-CI decisive against the shipped
+6-feature baseline on every axis that improved, and no decisive
+regression anywhere:
+
+```
+                pooled AUC              en AUC   de AUC   other AUC   de-offensive AUC
+shipped (6)     0.908 [0.902, 0.914]    0.941    0.729    0.952       0.597 [0.575, 0.618]
++2 German tox (8) 0.919 [0.914, 0.924]  0.950    0.791    0.944       0.741 [0.723, 0.758]
+```
+
+`other`-language AUC moves 0.952→0.944, but the confidence intervals
+overlap heavily — not a regression, within noise. English IMPROVES
+(0.941→0.950), so this is not the injection-vs-English trade-off seen
+with the raw `deepset_injection` swap earlier in this investigation.
+
+A natural follow-up question, given `toxic_bert`'s known standalone
+German miscalibration (§1aa: 48.6% FPR): is it now net NOISE once two
+German-native toxicity signals exist? Tested directly by dropping it from
+the 8-feature set. Result: WORSE, not better — German-offensive AUC
+0.720 (down from 0.741) and recall@5%FPR 7.0% (down from 16.7%). Even
+though `toxic_bert` is unreliable in isolation on German text, the fusion
+extracts real, non-redundant signal from it once combined with the other
+features — the same "a feature miscalibrated standalone doesn't
+necessarily miscalibrate the fusion" lesson §1ab's fusion validation
+already established, now confirmed in the opposite direction: don't
+remove a weak-looking feature without measuring the fusion, either.
+
+### Shipped as a 4th, richest tier
+
+`core/fusion.py`'s upgrade-tier mechanism (§1ab) made this a strict
+addition: `eight_feature` (richest) → `six_feature` → `five_feature` →
+floor. Neither German toxicity detector carries a licence gate, so this
+tier is reachable by every deployment exactly like the floor tier is —
+its only failure mode is the same as any other detector (disk/model
+issue), not an external dependency. `scripts.train_fusion_policy`
+extended to fit and persist all four tiers; regenerated
+`models/fusion_policy.json` shows in-sample AUC 0.921 for the 8-feature
+tier, consistent with the 0.919 out-of-fold sweep number.
+
+Verified live, not just under mocks: `warm_up()` against this machine's
+real 7 non-anchor detectors selected `tier=eight_feature`; a real German
+offensive prompt ("Du bist so ein dummer Wichser, ich hasse dich.")
+scored 0.828 (above `threshold_high` 0.538 → correctly blocks), with both
+new detectors firing decisively (0.997, 0.9997) where `toxic_bert` alone
+gave a much weaker 0.694; a real German benign prompt scored 0.093 (well
+under `threshold_medium` 0.271 → correctly clean).
+
+### Verified
+
+- `scripts.calibrate_german_threshold --detector <name> --attack-classes harmful_content`:
+  both candidates' standalone numbers above.
+- `scripts.sweep_fusion_variants`, `scripts.analyze_german_by_task`: the
+  8-feature ensemble numbers and the toxic_bert-ablation result above.
+- `ruff check` clean; full suite 548 passed (unchanged from the #5 fix
+  commit — no new tests added here beyond what §1ab's tier mechanism
+  already covers generically; the tier-selection logic itself is
+  parametrized by the artifact, not re-implemented per tier).
+- Live smoke test against real detectors on the real production path
+  (`core.fusion.fused_threat_score`), not mocks.
+
+### What this does not close
+
+The multilingual head (issue #4) still isn't shipped — it remains the
+better number on paper wherever it applies, but this fix closes most of
+the practical gap with zero stacking caveat, which is why it's the one
+that shipped first. `trained_on=()` for both new detectors is an honest
+"unknown", not a confirmed-clean guarantee; if either model's training
+data is ever disclosed to include `philschmid/germeval18`, this section's
+numbers need re-measuring with that source excluded, the same
+contamination discipline every other detector in this registry follows.
+
+---
+
 ## 2a. Separate `risk` from `topicality` in practice — already correct, now guarded (2026-08-15)
 
 Phase 1 of `docs/ROADMAP_V2.md`. The roadmap item read "confirm it's

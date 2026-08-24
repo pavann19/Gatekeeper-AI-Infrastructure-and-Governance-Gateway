@@ -41,6 +41,7 @@ deltas non-overlapping-CI decisive:
     floor (4-feature)                    pooled AUC 0.846, German-injection 0.813
     +deepset_injection (5, no licence)   pooled AUC 0.866, German-injection 0.971
     +prompt_guard_2 too (6, licence)     pooled AUC 0.908, German-injection 0.987
+    +2 German toxicity detectors (8)     pooled AUC 0.919, German-offensive 0.741
 
 `deepset_injection` carries no licence gate, so the 5-feature tier is
 reachable by every deployment exactly like the floor tier is — it exists
@@ -48,6 +49,18 @@ as a distinct tier (rather than just raising the floor to 5 features)
 specifically so a `deepset_injection` outage alone still degrades one
 step, not to the floor, and so the floor tier itself stays the
 minimal, maximally-portable baseline this project has always shipped.
+
+The 8-feature tier (issue #3) adds `german_toxicity_eistakovskii` and
+`german_toxicity_ankekat`, two German-trained toxicity classifiers with no
+licence gate — closing the German OFFENSIVE-CONTENT gap the 6-feature
+tier barely touched (AUC 0.597→0.741) while improving every other axis
+too (pooled, German injection, English — none traded away; see
+`scripts.analyze_german_by_task` and `scripts.sweep_fusion_variants` for
+the full breakdown). Their `trained_on` is declared empty (UNKNOWN, not
+verified clean) rather than confirmed disjoint from
+`philschmid/germeval18` — neither model card names its training data
+explicitly, the same honest caveat `NemoGuardJailbreakDetector` already
+carries for the same reason.
 
 PERSISTENCE FORMAT
 -------------------
@@ -89,6 +102,16 @@ ARTIFACT_FILE = os.path.join("models", "fusion_policy.json")
 FLOOR_FEATURES = ["anchors", "protectai_injection", "madhurjindal_jailbreak", "toxic_bert"]
 TIER_5_FEATURES = FLOOR_FEATURES + ["deepset_injection"]
 TIER_6_FEATURES = TIER_5_FEATURES + ["prompt_guard_2"]
+# German offensive-content detectors (issue #3). Off-the-shelf, no licence
+# gate, no stacking caveat -- unlike the multilingual_head experiment
+# (issue #4), these are static public models like every other detector in
+# this ensemble. Measured (scripts.analyze_german_by_task, scripts.
+# sweep_fusion_variants): decisive, no-regression improvement over tier 6
+# on every axis -- pooled AUC 0.908->0.919, German 0.729->0.791, English
+# 0.941->0.950 (flat-to-better, not traded away), "other" languages within
+# overlapping CIs (not a regression). German OFFENSIVE CONTENT specifically
+# (the task tier 6 barely touched): AUC 0.597->0.741.
+TIER_8_FEATURES = TIER_6_FEATURES + ["german_toxicity_eistakovskii", "german_toxicity_ankekat"]
 
 # Kept for backward compatibility with anything importing this name.
 LIVE_FEATURES = FLOOR_FEATURES
@@ -234,7 +257,7 @@ def fit_tier(features, rows, caches, tier_id=None):
 
 def main():
     rows_raw = load_suite()
-    all_features = sorted({f for f in TIER_6_FEATURES if f != "anchors"})
+    all_features = sorted({f for f in TIER_8_FEATURES if f != "anchors"})
     caches = {name: load_scores(name) for name in all_features}
 
     # "anchors" isn't a cached detector score (core/fusion.py receives it
@@ -250,6 +273,7 @@ def main():
     floor = fit_tier(FLOOR_FEATURES, rows, caches)
     tier_5 = fit_tier(TIER_5_FEATURES, rows, caches, tier_id="five_feature")
     tier_6 = fit_tier(TIER_6_FEATURES, rows, caches, tier_id="six_feature")
+    tier_8 = fit_tier(TIER_8_FEATURES, rows, caches, tier_id="eight_feature")
 
     artifact = {
         # v3 adds `upgrade_tiers`. Every top-level field is exactly the
@@ -259,7 +283,7 @@ def main():
         "version": 3,
         "trained_at": datetime.now(timezone.utc).isoformat(),
         **floor,
-        "upgrade_tiers": [tier_6, tier_5],  # richest first
+        "upgrade_tiers": [tier_8, tier_6, tier_5],  # richest first
     }
 
     os.makedirs(os.path.dirname(ARTIFACT_FILE), exist_ok=True)
@@ -268,7 +292,7 @@ def main():
 
     print(f"\nArtifact -> {ARTIFACT_FILE}")
     print(f"Floor: {FLOOR_FEATURES}")
-    print("Upgrade tiers (richest first): six_feature, five_feature")
+    print("Upgrade tiers (richest first): eight_feature, six_feature, five_feature")
 
 
 if __name__ == "__main__":
