@@ -64,16 +64,24 @@ Original estimate: ~20–30h
       degrading one step (not to anchors-only) when an optional detector
       (e.g. a `prompt_guard_2` licence not yet accepted) is unavailable.
       Verified live on real detectors, not just mocks. Two follow-ups
-      filed rather than left as loose prose: German OFFENSIVE CONTENT
-      (0.584→0.742 AUC) remains a distinct, open, weaker item — tracked
-      as [issue #3](https://github.com/pavann19/Gatekeeper-AI-Infrastructure-and-Governance-Gateway/issues/3)
-      — and the purpose-built multilingual feature that beats this result
-      but isn't shipped yet (stacking caveat, needs its own tier and a
-      proper `core/detectors.py` wrapper) is
+      filed rather than left as loose prose, one since CLOSED:
+      [issue #3](https://github.com/pavann19/Gatekeeper-AI-Infrastructure-and-Governance-Gateway/issues/3)
+      (German OFFENSIVE CONTENT, 0.584→0.742 AUC) — CLOSED 2026-08-24, see
+      `docs/ENGINEERING_ASSESSMENT.md` §1ac: two off-the-shelf German
+      toxicity detectors (`german_toxicity_eistakovskii`,
+      `german_toxicity_ankekat`) added as a 9th/10th feature and a new
+      richest `eight_feature` tier, German-offensive AUC 0.597→0.741 with
+      no decisive regression on any other axis (English actually
+      improves, 0.941→0.950). The purpose-built multilingual feature that
+      still beats this result on paper but isn't shipped (stacking
+      caveat, needs its own tier and a proper `core/detectors.py`
+      wrapper) remains open as
       [issue #4](https://github.com/pavann19/Gatekeeper-AI-Infrastructure-and-Governance-Gateway/issues/4).
       A pre-existing, unrelated gap noticed along the way — `/api/v1/
-      cache/flush` has no auth check — is
-      [issue #5](https://github.com/pavann19/Gatekeeper-AI-Infrastructure-and-Governance-Gateway/issues/5).
+      cache/flush` had no auth check — is
+      [issue #5](https://github.com/pavann19/Gatekeeper-AI-Infrastructure-and-Governance-Gateway/issues/5),
+      CLOSED 2026-08-24 (now requires `INTERNAL` capability, same bar as
+      the review endpoints).
 - [x] Clean threat taxonomy — done 2026-08-14, see
       `docs/ENGINEERING_ASSESSMENT.md` §1y. Two fixes: (1) added a
       `jailbreak` anchor class to `policies.json` — anchor layer previously

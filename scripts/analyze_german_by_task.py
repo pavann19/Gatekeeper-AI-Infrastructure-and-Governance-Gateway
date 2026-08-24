@@ -34,7 +34,11 @@ from evaluation.metrics import bootstrap_ci, fmt_ci, recall_at_fpr, roc_auc
 from scripts.sweep_fusion_variants import (
     ALL_7,
     DEPLOYED_4,
+    GERMAN_TOX_FEATURES,
+    NO_TOXIC_BERT_PLUS_GERMAN_TOX_7,
     PLUS_BOTH_6,
+    PLUS_GERMAN_TOX_8,
+    SHIPPED_6,
     load_scores,
     oof,
 )
@@ -55,10 +59,13 @@ INJECTION_SOURCES = {
 }
 
 
+ALL_FEATURES = ALL_7 + GERMAN_TOX_FEATURES
+
+
 def main():
     rows_all = [json.loads(line) for line in open(SUITE_FILE, "r", encoding="utf-8")]
-    caches = {n: load_scores(n) for n in ALL_7}
-    rows = [r for r in rows_all if all(r["id"] in caches[n] for n in ALL_7)]
+    caches = {n: load_scores(n) for n in ALL_FEATURES}
+    rows = [r for r in rows_all if all(r["id"] in caches[n] for n in ALL_FEATURES)]
     y = np.array([r["label"] for r in rows])
 
     de = [i for i, r in enumerate(rows) if r["language"] == "de"]
@@ -74,7 +81,10 @@ def main():
 
     for tag, feats in (("deployed_4", DEPLOYED_4),
                        ("plus_both_6", PLUS_BOTH_6),
-                       ("all_7", ALL_7)):
+                       ("all_7", ALL_7),
+                       ("shipped_6", SHIPPED_6),
+                       ("plus_german_tox_8", PLUS_GERMAN_TOX_8),
+                       ("no_toxic_bert_plus_german_tox_7", NO_TOXIC_BERT_PLUS_GERMAN_TOX_7)):
         scores = oof(feats, rows, caches, y)
         print(f"\n[{tag}]")
         entry = {}
