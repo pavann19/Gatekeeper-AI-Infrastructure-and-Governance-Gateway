@@ -57,6 +57,14 @@ N_BOOT = 500
 
 DEPLOYED_4 = ["anchors", "protectai_injection", "madhurjindal_jailbreak", "toxic_bert"]
 PLUS_DEEPSET_5 = DEPLOYED_4 + ["deepset_injection"]
+PLUS_PG2_5 = DEPLOYED_4 + ["prompt_guard_2"]
+PLUS_BOTH_6 = DEPLOYED_4 + ["deepset_injection", "prompt_guard_2"]
+
+# Every feature needed by any variant, so one coverage filter serves all of
+# them and every variant is scored on exactly the same rows (otherwise a
+# variant using a thinner-cached feature would be measured on a different,
+# quietly easier population).
+ALL_FEATURES = DEPLOYED_4 + ["deepset_injection", "prompt_guard_2"]
 
 
 def load_scores(name):
@@ -87,8 +95,8 @@ def summarize(scores, labels, tag):
 
 def main():
     rows_all = [json.loads(line) for line in open(SUITE_FILE, "r", encoding="utf-8")]
-    caches = {n: load_scores(n) for n in PLUS_DEEPSET_5}
-    rows = [r for r in rows_all if all(r["id"] in caches[n] for n in PLUS_DEEPSET_5)]
+    caches = {n: load_scores(n) for n in ALL_FEATURES}
+    rows = [r for r in rows_all if all(r["id"] in caches[n] for n in ALL_FEATURES)]
     print(f"Usable rows: {len(rows)} of {len(rows_all)}")
     y = np.array([r["label"] for r in rows])
     langs = [r["language"] for r in rows]
@@ -96,7 +104,10 @@ def main():
               "variants": {}}
 
     # --- Pooled variants: one model over all languages -------------------
-    for tag, feats in (("deployed_4", DEPLOYED_4), ("plus_deepset_5", PLUS_DEEPSET_5)):
+    for tag, feats in (("deployed_4", DEPLOYED_4),
+                       ("plus_deepset_5", PLUS_DEEPSET_5),
+                       ("plus_pg2_5", PLUS_PG2_5),
+                       ("plus_both_6", PLUS_BOTH_6)):
         print(f"\n[{tag}] features={feats}")
         scores = oof(feats, rows, caches, y)
         entry = {"features": feats, "trained_on": "all languages", "by_language": {}}
@@ -113,7 +124,9 @@ def main():
     de_idx = [i for i, la in enumerate(langs) if la == "de"]
     de_rows = [rows[i] for i in de_idx]
     y_de = np.array([int(y[i]) for i in de_idx])
-    for tag, feats in (("de_conditional", DEPLOYED_4), ("de_conditional_5", PLUS_DEEPSET_5)):
+    for tag, feats in (("de_conditional", DEPLOYED_4),
+                       ("de_conditional_5", PLUS_DEEPSET_5),
+                       ("de_conditional_6", PLUS_BOTH_6)):
         print(f"\n[{tag}] features={feats}  (fit on German rows only)")
         scores_de = oof(feats, de_rows, caches, y_de)
         entry = {"features": feats, "trained_on": "German rows only", "by_language": {}}
