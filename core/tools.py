@@ -317,10 +317,15 @@ class ToolRegistry:
 
 
 def execute_tool(capability: str, name: str, arguments: Dict[str, Any],
-                 registry: "ToolRegistry" = None) -> Dict[str, Any]:
+                 registry: "ToolRegistry" = None,
+                 tenant: str = "unset", request_id: str = "unset") -> Dict[str, Any]:
     """
     The full call path: look up the tool, decide (access + validation +
-    risk), and only invoke the handler if the decision is ALLOW.
+    risk), and only invoke the handler if the decision is ALLOW. Every
+    outcome — BLOCK and REVIEW included, not only ALLOW — is audited via
+    `core.logger.log_tool_event` before returning; an unauthorized or
+    malformed call is itself a security event worth recording, arguably
+    more interesting than a routine successful one.
 
     A handler NEVER runs for BLOCK or REVIEW — this is the actual
     enforcement point Phase 6 exists to build, not just a decision
@@ -341,26 +346,51 @@ def execute_tool(capability: str, name: str, arguments: Dict[str, Any],
     catch, a downstream dependency down), not because Gatekeeper decided
     against it. Conflating the two would make a flaky tool look like a
     security block in the audit trail.
+
+    `tenant`/`request_id` default to "unset" the same way every other
+    audit-emitting function in this codebase does — there is no real
+    HTTP endpoint calling this yet to supply them, and "unset" lets a
+    future query distinguish "no request context existed" from "this
+    caller resolved to a default", same reasoning `core/logger.py::
+    log_event`'s own docstring gives for that field.
     """
+    from core.logger import log_tool_event
+
     reg = registry if registry is not None else _registry
     try:
         spec = reg.get(name)
     except KeyError as e:
-        return {"decision": "BLOCK", "reason": str(e), "tool": name}
+        detail = str(e)
+        log_tool_event(capability, name, "BLOCK", risk_level=None, reason=detail,
+                       arguments=arguments, tenant=tenant, request_id=request_id)
+        return {"decision": "BLOCK", "reason": detail, "tool": name}
 
     result = decide_tool_call(capability, spec, arguments)
     if result["decision"] != "ALLOW":
+        log_tool_event(capability, name, result["decision"], risk_level=spec.risk_level,
+                       reason=result["reason"], arguments=arguments,
+                       tenant=tenant, request_id=request_id)
         return result
 
     handler = reg.get_handler(name)
     if handler is None:
-        return {"decision": "BLOCK", "reason": f"tool {name!r} has no registered handler",
-                "tool": name}
+        detail = f"tool {name!r} has no registered handler"
+        log_tool_event(capability, name, "BLOCK", risk_level=spec.risk_level, reason=detail,
+                       arguments=arguments, tenant=tenant, request_id=request_id)
+        return {"decision": "BLOCK", "reason": detail, "tool": name}
 
     try:
         output = handler(**arguments)
     except Exception as e:
-        return {**result, "error": f"{type(e).__name__}: {e}"}
+        error = f"{type(e).__name__}: {e}"
+        log_tool_event(capability, name, "ALLOW", risk_level=spec.risk_level,
+                       reason=result["reason"], arguments=arguments, success=False,
+                       error=error, tenant=tenant, request_id=request_id)
+        return {**result, "error": error}
+
+    log_tool_event(capability, name, "ALLOW", risk_level=spec.risk_level,
+                   reason=result["reason"], arguments=arguments, success=True,
+                   tenant=tenant, request_id=request_id)
 
     return {**result, "output": output}
 
