@@ -313,6 +313,19 @@ class Settings(BaseSettings):
     # contract core/demo_tools.py::register_demo_tools already documents.
     REGISTER_DEMO_TOOLS: bool = False
 
+    # Exact-match hostname allowlist for core/real_tools.py's "http.get"
+    # tool -- the first REAL (non-sandboxed) tool this project ships,
+    # making an actual outbound network call. Empty by default: fail
+    # closed, the same "0/empty disables, don't fake a permissive
+    # default" convention GATEWAY_TOKEN_QUOTA_DAILY_DEFAULT already uses.
+    # A deployment wanting this tool usable must explicitly list every
+    # hostname it may reach — comma-separated, e.g.
+    # "docs.python.org,api.github.com". Subdomains are NOT implicitly
+    # covered by a parent domain (no "*.example.com" wildcard support):
+    # an explicit list is easier to audit than a wildcard-matching rule
+    # that could be misread as narrower than it actually is.
+    TOOL_HTTP_GET_ALLOWED_DOMAINS: str = ""
+
     # --- Observability (core/metrics.py) ---
     #
     # The Prometheus exposition endpoint. Metrics leak operational detail —
