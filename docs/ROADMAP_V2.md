@@ -448,12 +448,41 @@ end-to-end smoke test (real stdin/stdout, not `io.StringIO`) confirming
 `initialize` → `tools/list` → `tools/call` works over an actual child
 process. 687 passed overall (up from 669).
 
-What remains genuinely unbuilt and out of this phase's scope: any real
-(non-demo) tool — a production deployment still has to register its
-own — and MCP's HTTP/SSE transport (a different, per-call-authenticatable
-transport with its own auth story, not attempted here). Both are natural
-next steps once an actual deployment needs one of them, not gaps in
-what this phase set out to build.
+**The first real (non-demo) tool also shipped same day (2026-08-24)**,
+once asked for directly. New `core/real_tools.py::http.get` — an
+outbound HTTP GET restricted to an operator-configured domain allowlist
+(`TOOL_HTTP_GET_ALLOWED_DOMAINS`, empty by default: fail closed, the
+tool is fully disabled until an operator explicitly lists at least one
+hostname). Unlike the demo tools, this makes a real network call, so it
+carries real security engineering most "add an HTTP tool" examples skip:
+the hostname's OWN resolved IP is checked at call time and rejected if
+private/loopback/link-local/reserved (DNS-rebinding defence — an
+allowlisted domain's DNS could otherwise be repointed at `127.0.0.1` or
+the cloud-metadata address `169.254.169.254` between the allowlist check
+and the actual request), redirects are never followed
+(`allow_redirects=False` — a 3xx response is otherwise a clean allowlist
+bypass), and the response is both time-boxed and size-capped. A
+disallowed URL is reported as an ALLOW decision with `error` set, not a
+gateway-level BLOCK — `core/tools.py`'s own documented contract for
+semantic/business-rule validation a handler performs, distinct from
+access control the gateway itself decided (§ "Sandboxed demo tools"
+above already drew this exact line). MEDIUM risk, ELEVATED capability.
+
+23 new tests (mocked network/DNS, covering the allowlist, every SSRF
+defence individually — private/loopback/cloud-metadata resolution,
+DNS-failure-fails-closed, redirect handling, size cap — and the full
+`execute_tool` pipeline), plus three genuine live checks against a real
+server and real DNS: a real GET to `example.com` returning real content,
+a real rejection of an unlisted domain, and a real rejection of
+`localhost` via actual loopback resolution, not a mock standing in for
+one. 710 passed overall (up from 687).
+
+**Phase 6 is now completely closed — 6/6 roadmap items, both follow-up
+items from the phase-completion review, no known gaps left unaddressed.**
+The only thing left unbuilt is MCP's HTTP/SSE transport (a different,
+per-call-authenticatable transport with its own auth story, not
+attempted here) — genuinely out of scope until a deployment specifically
+needs it, not a gap in what was asked for.
 
 ## Phase 7 — UI Integration
 Original estimate: ~40–65h combined — deferred until engine + gateways are solid
