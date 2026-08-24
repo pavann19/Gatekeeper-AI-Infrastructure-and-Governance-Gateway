@@ -488,10 +488,10 @@ needs it, not a gap in what was asked for.
 Original estimate: ~40–65h combined — deferred until engine + gateways are solid
 
 - [x] Client UI (operator slice): human-review approval dashboard —
-      `ui/review_dashboard/index.html`, mounted at `/ui/review/` by
-      `api/main.py`. Started fresh rather than building on the pre-existing
-      `ui/web_app.py` Streamlit prototype (found to reference a dead
-      `/api/v1/update` endpoint removed back in Phase 1 §1z — legacy,
+      `ui/review/index.html`, mounted (along with the rest of `ui/`) at
+      `/ui/` by `api/main.py`. Started fresh rather than building on the
+      pre-existing `ui/web_app.py` Streamlit prototype (found to reference a
+      dead `/api/v1/update` endpoint removed back in Phase 1 §1z — legacy,
       disposable). Built as a single static page (system-font stack,
       card-based layout, restrained neutral palette with light/dark support
       via `prefers-color-scheme`, no build tooling) rather than Streamlit or
@@ -505,9 +505,37 @@ Original estimate: ~40–65h combined — deferred until engine + gateways are s
       approve/reject exercised against the real endpoints — confirmed the
       resulting `ReviewRecord`s carried the correct `status`,
       `final_decision`, and `reviewer` fields, not just a 200 response.
-      Full remaining scope (auth, activity, privacy, protection settings)
-      still open below.
-- [ ] Client UI (remainder): auth, dashboard, activity, privacy, protection
+      (Originally at `ui/review_dashboard/`, renamed to `ui/review/` when
+      the auth piece below needed a whole-`ui/`-tree static mount instead
+      of a single-directory one, so the URL stayed `/ui/review/`.)
+- [x] Client UI (auth): a dedicated sign-in page, `ui/login/index.html`,
+      plus a new `GET /api/v1/whoami` endpoint (`api/main.py`,
+      `api/schemas.py::WhoAmIResponse`) that resolves a pasted API key
+      through the real `core.auth.resolve_principal` — the same function
+      every enforcement decision uses — rather than a separate,
+      potentially-divergent check. A key that fails resolves to a real 401,
+      not a client-side format guess. On success the page redirects
+      INTERNAL-capability keys straight into the review dashboard; other
+      capabilities see their confirmed identity and an honest "no dashboard
+      section built for this yet" message rather than a fake redirect.
+      Shared `ui/shared/theme.css` (design tokens) and `ui/shared/auth.js`
+      (`gkRequireAuth`, `gkSignOut`, session helpers) factor out what the
+      login page and the review dashboard both need; the dashboard now
+      gates itself through `gkRequireAuth()` on load instead of showing an
+      inline key field, and gained a Sign Out control. Session lives only
+      in `sessionStorage` (cleared on tab close, never persisted to disk).
+      Verified live end-to-end in a real browser against a real running
+      instance: a bogus key produces a real 401 and stays on the login
+      page; a real GENERAL-capability key signs in and correctly reports no
+      dashboard for it; a real INTERNAL-capability key signs in and
+      auto-redirects into the review dashboard showing its own
+      `key_id`/`tenant`; Sign Out clears the session and redirects to
+      login; and a direct, unauthenticated navigation to the dashboard URL
+      bounces straight back to login. Backend covered by
+      `tests/test_whoami_endpoint.py` (6 tests: valid key, missing
+      credential, unrecognised key, malformed header, no credential leakage
+      in the response, and the exact minimal response shape).
+- [ ] Client UI (remainder): dashboard/activity, privacy, protection
       settings
 - [ ] Developer UI: request inspector, detector signals, policy editor, model
       gateway view, tool gateway view, traces, benchmarks, logs

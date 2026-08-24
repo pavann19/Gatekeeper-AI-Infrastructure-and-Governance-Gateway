@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gatekeeper — Sign In</title>
+<link rel="stylesheet" href="/ui/shared/theme.css">
+<style>
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 24px;
+  }
+
+  .gk-login-card {
+    width: 100%;
+    max-width: 380px;
+    background: var(--surface-solid);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 40px 36px 36px;
+  }
+
+  .gk-mark {
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+    background: var(--accent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-size: 20px;
+    font-weight: 700;
+    margin-bottom: 20px;
+  }
+
+  .gk-login-card h1 {
+    font-size: 22px;
+    font-weight: 650;
+    letter-spacing: -0.02em;
+    margin: 0 0 4px;
+  }
+
+  .gk-login-card .gk-subtitle {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin: 0 0 28px;
+  }
+
+  .gk-field { margin-bottom: 8px; }
+
+  .gk-field label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: 6px;
+  }
+
+  .gk-field input {
+    width: 100%;
+    padding: 11px 14px;
+    font-size: 14px;
+  }
+
+  .gk-hint {
+    font-size: 12px;
+    color: var(--text-tertiary);
+    margin: 8px 0 24px;
+    line-height: 1.5;
+  }
+
+  .gk-login-card button[type="submit"] {
+    width: 100%;
+    padding: 11px 16px;
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .gk-status-banner { margin: 0 0 16px; }
+
+  .gk-identity-preview {
+    display: none;
+    margin-top: 20px;
+    padding: 14px 16px;
+    border-radius: var(--radius-sm);
+    background: var(--low-bg);
+    color: var(--low-text);
+    font-size: 13px;
+  }
+  .gk-identity-preview.visible { display: block; }
+  .gk-identity-preview b { font-weight: 600; }
+</style>
+</head>
+<body>
+
+<div class="gk-login-card">
+  <div class="gk-mark">GK</div>
+  <h1>Sign in to Gatekeeper</h1>
+  <p class="gk-subtitle">Paste an API key issued by an operator.</p>
+
+  <div class="gk-status-banner" id="banner"></div>
+
+  <form id="loginForm">
+    <div class="gk-field">
+      <label for="apiKey">API key</label>
+      <input type="password" id="apiKey" placeholder="gk_..." autocomplete="off" autofocus>
+    </div>
+    <p class="gk-hint">
+      Kept only in this tab's session storage — never written to disk,
+      never sent anywhere but this Gatekeeper instance, cleared when the
+      tab closes.
+    </p>
+    <button type="submit" class="btn-primary" id="signInBtn">Sign In</button>
+  </form>
+
+  <div class="gk-identity-preview" id="identityPreview"></div>
+</div>
+
+<script src="/ui/shared/auth.js"></script>
+<script>
+const form = document.getElementById('loginForm');
+const banner = document.getElementById('banner');
+const apiKeyInput = document.getElementById('apiKey');
+const signInBtn = document.getElementById('signInBtn');
+const identityPreview = document.getElementById('identityPreview');
+
+function showBanner(message, isError) {
+  banner.textContent = message;
+  banner.className = 'gk-status-banner visible' + (isError ? ' error' : '');
+}
+
+function nextDestination(identity) {
+  const params = new URLSearchParams(window.location.search);
+  const requested = params.get('next');
+  if (requested) return requested;
+  // No explicit destination: the review dashboard is the only protected
+  // page this client UI has today, and it is INTERNAL-only. Anyone else
+  // lands back here with their identity confirmed but nowhere further
+  // to go yet -- honest about what's actually built, not a fake redirect.
+  return identity.capability === 'INTERNAL' ? '/ui/review/index.html' : null;
+}
+
+// Already holding a verified session? Skip straight past login.
+(async () => {
+  if (gkGetKey()) {
+    const identity = await gkRequireAuth();
+    if (identity) {
+      const dest = nextDestination(identity);
+      if (dest) window.location.replace(dest);
+    }
+  }
+})();
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const key = apiKeyInput.value.trim();
+  if (!key) {
+    showBanner('Enter an API key.', true);
+    return;
+  }
+
+  signInBtn.disabled = true;
+  signInBtn.innerHTML = '<span class="gk-spinner"></span>Verifying…';
+  identityPreview.className = 'gk-identity-preview';
+
+  try {
+    const res = await fetch(window.location.origin + '/api/v1/whoami', {
+      headers: { 'Authorization': 'Bearer ' + key },
+    });
+    if (res.status === 401) {
+      showBanner('That key was not recognised. Check it and try again.', true);
+      return;
+    }
+    if (!res.ok) {
+      showBanner('Sign-in failed: HTTP ' + res.status, true);
+      return;
+    }
+    const identity = await res.json();
+    gkSetSession(key, identity);
+
+    identityPreview.innerHTML =
+      'Signed in as <b>' + identity.key_id + '</b> — ' +
+      identity.capability + ' capability, tenant <b>' + identity.tenant + '</b>.';
+    identityPreview.className = 'gk-identity-preview visible';
+    banner.className = 'gk-status-banner';
+
+    const dest = nextDestination(identity);
+    if (dest) {
+      setTimeout(() => window.location.replace(dest), 600);
+    } else {
+      showBanner(
+        identity.capability + ' capability has no dashboard section yet — ' +
+        'only the INTERNAL review queue is built so far.', false
+      );
+    }
+  } catch (e) {
+    showBanner('Could not reach the API — ' + e.message, true);
+  } finally {
+    signInBtn.disabled = false;
+    signInBtn.textContent = 'Sign In';
+  }
+});
+</script>
+
+</body>
+</html>

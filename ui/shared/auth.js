@@ -1,0 +1,81 @@
+/*
+  Shared client-side auth helpers for Gatekeeper's static UI pages.
+
+  There is no session/cookie layer here -- Gatekeeper's only credential is
+  an API key (see core/auth.py), so "being logged in" just means: a key is
+  held in sessionStorage (cleared when the tab closes, never persisted to
+  disk) and it has been checked against the real KeyStore via
+  GET /api/v1/whoami, not merely present.
+*/
+const GK_STORAGE_KEY = "gatekeeper_api_key";
+const GK_STORAGE_IDENTITY = "gatekeeper_identity";
+
+function gkApiBase() {
+  return window.location.origin;
+}
+
+function gkGetKey() {
+  return sessionStorage.getItem(GK_STORAGE_KEY) || "";
+}
+
+function gkSetSession(key, identity) {
+  sessionStorage.setItem(GK_STORAGE_KEY, key);
+  sessionStorage.setItem(GK_STORAGE_IDENTITY, JSON.stringify(identity));
+}
+
+function gkGetIdentity() {
+  try {
+    return JSON.parse(sessionStorage.getItem(GK_STORAGE_IDENTITY) || "null");
+  } catch (e) {
+    return null;
+  }
+}
+
+function gkClearSession() {
+  sessionStorage.removeItem(GK_STORAGE_KEY);
+  sessionStorage.removeItem(GK_STORAGE_IDENTITY);
+}
+
+function gkAuthHeaders() {
+  const key = gkGetKey();
+  return key ? { "Authorization": "Bearer " + key } : {};
+}
+
+function gkLoginUrl(next) {
+  const target = next || (window.location.pathname + window.location.search);
+  return "/ui/login/index.html?next=" + encodeURIComponent(target);
+}
+
+/*
+  Verifies the held key against GET /api/v1/whoami. Returns the identity
+  object on success. On any failure, clears the session and redirects to
+  the login page -- called at the top of every protected page so a
+  revoked/expired key never sits in the UI showing stale data.
+*/
+async function gkRequireAuth() {
+  const key = gkGetKey();
+  if (!key) {
+    window.location.replace(gkLoginUrl());
+    return null;
+  }
+  try {
+    const res = await fetch(gkApiBase() + "/api/v1/whoami", { headers: gkAuthHeaders() });
+    if (!res.ok) {
+      gkClearSession();
+      window.location.replace(gkLoginUrl());
+      return null;
+    }
+    const identity = await res.json();
+    gkSetSession(key, identity);
+    return identity;
+  } catch (e) {
+    // Network failure: keep the session rather than bouncing to login on a
+    // transient outage. The page's own API calls will surface the error.
+    return gkGetIdentity();
+  }
+}
+
+function gkSignOut() {
+  gkClearSession();
+  window.location.replace(gkLoginUrl());
+}

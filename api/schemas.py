@@ -152,6 +152,21 @@ class AssessOutputResponse(BaseModel):
     )
 
 
+# --- Identity check (Phase 7) ---
+
+class WhoAmIResponse(BaseModel):
+    """What a caller's own credential resolves to. Deliberately the same
+    shape as Principal.to_audit() -- capability/tenant/key_id only, never
+    the credential itself. Exists so a client UI can validate a pasted API
+    key against the real KeyStore (does it exist, is it still valid) rather
+    than trusting whatever the browser happened to store."""
+    capability: str
+    tenant: str
+    key_id: str
+
+    model_config = {"extra": "forbid"}
+
+
 # --- Human Review (Phase 4) ---
 
 class ReviewStatusResponse(BaseModel):
