@@ -217,3 +217,71 @@ def test_trace_spans_multiple_chunks(tmp_path, monkeypatch):
     _write_jsonl(p, records)
     result = find_by_request_id("target", path=str(p))
     assert [e["event_type"] for e in result["events"]] == ["input_assessment", "tool_call"]
+
+
+# --- Phase 8 hardening: a filter matching NOTHING must not repeatedly ---------
+# --- re-scan the file from scratch (real load test showed a ~45x latency
+# --- cliff for exactly this case -- see docs/ROADMAP_V2.md's Phase 8 entry)
+
+def test_no_matches_at_all_calls_tail_raw_lines_at_most_twice(tmp_path, monkeypatch):
+    """Previously this escalated needed_raw by 4x per miss (limit, *4, *16,
+    *64, ...), meaning a filter matching zero of many records triggered
+    several from-scratch re-reads, the last 1-2 of which each re-scanned
+    almost the entire file. Now it's exactly one cheap attempt, then one
+    full-budget attempt -- never more."""
+    p = tmp_path / "audit.jsonl"
+    _write_jsonl(p, [_event(tenant="acme", request_id=str(i)) for i in range(5000)])
+
+    call_count = {"n": 0}
+    real_tail = activity_mod._tail_raw_lines
+
+    def counting_tail(*args, **kwargs):
+        call_count["n"] += 1
+        return real_tail(*args, **kwargs)
+
+    monkeypatch.setattr(activity_mod, "_tail_raw_lines", counting_tail)
+    result = get_recent_activity(tenant="tenant-that-does-not-exist", path=str(p))
+
+    assert result["events"] == []
+    assert call_count["n"] <= 2
+
+
+def test_matches_found_in_first_pass_calls_tail_raw_lines_once(tmp_path, monkeypatch):
+    """The common, fast-path case (the caller's own tenant has recent
+    matching activity) must not pay the two-pass cost at all."""
+    p = tmp_path / "audit.jsonl"
+    _write_jsonl(p, [_event(tenant="acme", request_id=str(i)) for i in range(100)])
+
+    call_count = {"n": 0}
+    real_tail = activity_mod._tail_raw_lines
+
+    def counting_tail(*args, **kwargs):
+        call_count["n"] += 1
+        return real_tail(*args, **kwargs)
+
+    monkeypatch.setattr(activity_mod, "_tail_raw_lines", counting_tail)
+    result = get_recent_activity(tenant="acme", limit=10, path=str(p))
+
+    assert len(result["events"]) == 10
+    assert call_count["n"] == 1
+
+
+def test_zero_match_case_is_meaningfully_faster_than_the_old_growth_ladder(tmp_path):
+    """Direct regression guard, not just a call-count check: benchmarks
+    the actual fix against a real ~5000-line file and asserts it completes
+    well within what the old 4x-escalating-from-scratch design would have
+    taken (which, on this same file size, involved multiple near-full-file
+    rescans)."""
+    import time
+
+    p = tmp_path / "audit.jsonl"
+    _write_jsonl(p, [_event(tenant="acme", request_id=str(i)) for i in range(5000)])
+
+    start = time.perf_counter()
+    get_recent_activity(tenant="tenant-that-does-not-exist", path=str(p))
+    elapsed = time.perf_counter() - start
+
+    # Generous ceiling for CI variance -- the point is "fast", not a tight
+    # bound; a regression back to the old growth ladder would multiply this
+    # several times over on a file this size, not stay within a small margin.
+    assert elapsed < 1.0
