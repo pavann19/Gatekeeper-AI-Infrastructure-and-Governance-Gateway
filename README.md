@@ -62,7 +62,18 @@ Gatekeeper utilizes a clean, decoupled microservices model to separate client co
 
 1.  **Gatekeeper Client UI (`ui/login/`, `ui/activity/`, `ui/review/`, `ui/trace/`, `ui/gateways/`, `ui/logs/`, `ui/benchmarks/`, `ui/policy/`, `ui/settings/`)**: Static pages served directly by `api/main.py` (mounted at `/ui/`, no separate container or build step) that talk to the real Gatekeeper API — sign-in, an activity feed and per-request trace over the real audit log, the human-review approval queue, and (INTERNAL capability) the model/tool gateway catalogues, raw logs, benchmark results, and a policy editor that validates before it ever deploys. This is the UI actually exercised by this project's own test suite and CI.
 
-    `ui/web_app.py` is an EARLIER, now-superseded Streamlit prototype: it calls Ollama directly rather than the Gatekeeper API, so it never reaches `core/risk.py`'s pipeline (no fusion, cache, tenancy, or policy enforcement) and references at least one endpoint (`/api/v1/update`) removed early in this project's history. Kept in the repo for historical reference only — do not deploy it as "the" Gatekeeper UI. `docker-compose.yml`'s `gatekeeper-ui` service builds this prototype specifically, not the real client UI above (which ships for free inside the `gatekeeper-api` image/container, reachable at `http://<gatekeeper-api host>:8000/ui/login/index.html`).
+    An EARLIER Streamlit prototype (`ui/web_app.py`, built by a
+    `docker-compose.yml` service called `gatekeeper-ui`) called Ollama
+    directly rather than the Gatekeeper API, so it never reached
+    `core/risk.py`'s pipeline at all (no fusion, cache, tenancy, or
+    policy enforcement) and referenced at least one endpoint
+    (`/api/v1/update`) removed early in this project's history. Removed
+    outright (Phase 8 hardening) rather than kept around to be
+    accidentally deployed as "the" Gatekeeper UI — full history is in
+    git if it's ever needed for reference. The real client UI above
+    ships for free inside the `gatekeeper-api` image/container, reachable
+    at `http://<gatekeeper-api host>:8000/ui/login/index.html`, no
+    separate service required.
 2.  **Gatekeeper API Gateway (`api/main.py`)**: An asynchronous FastAPI service that exposes assessment and configuration endpoints, processes payloads, and manages the execution flow.
 3.  **Neuro-Symbolic Engine (`core/`)**: The core evaluation system containing distinct detection components, including normalizers, classifiers, threat vectorizers, and local semantic judges.
 4.  **Vector Store (`core/vector_store.py`)**: Powered by Facebook AI Similarity Search (FAISS) for sub-millisecond similarity calculations against known threat anchors and educational safe harbors.
@@ -395,10 +406,9 @@ The snippet below is illustrative and has drifted from the real
 `docker-compose.yml` (which now uses named volumes with directory-level
 mounts, not the single-file bind mounts shown here, and adds `redis`,
 `model-pull`, `prometheus`, and `grafana` services) — treat the real file
-as authoritative. In particular, `gatekeeper-ui` here builds
-`Dockerfile.ui` / `ui/web_app.py`, the superseded Streamlit prototype
-described in §3 above, not the real client UI — that one ships inside
-`gatekeeper-api` itself and needs no separate service.
+as authoritative. There is no `gatekeeper-ui` service in the real file
+(removed in Phase 8 hardening, see §3 above) — the client UI ships
+inside `gatekeeper-api` itself and needs no separate service.
 
 ```yaml
 version: '3.8'
@@ -418,20 +428,6 @@ services:
       - ./policies.json:/app/policies.json
       - ./policy_rules.json:/app/policy_rules.json
       - ./audit.jsonl:/app/audit.jsonl
-    networks:
-      - gatekeeper_net
-
-  gatekeeper-ui:
-    build:
-      context: .
-      dockerfile: Dockerfile.ui
-    ports:
-      - "8501:8501"
-    environment:
-      - API_URL=http://gatekeeper-api:8000/api/v1
-      - OLLAMA_API_URL=http://ollama:11434/api/generate
-    depends_on:
-      - gatekeeper-api
     networks:
       - gatekeeper_net
 
@@ -578,10 +574,9 @@ If you prefer to run the service locally without Docker:
     ```bash
     uvicorn api.main:app --host 127.0.0.1 --port 8000 --reload
     ```
-6.  **Start the Client UI**:
-    ```bash
-    streamlit run ui/web_app.py --server.port=8501
-    ```
+6.  **Client UI**:
+    No separate step — once the API is running (step 5), the real client UI is
+    already being served at `http://127.0.0.1:8000/ui/login/index.html`.
 
 ---
 
@@ -718,11 +713,11 @@ gatekeeper/
 │   └── train_fusion_policy.py    # Fits and persists models/fusion_policy.json
 ├── tests/                        # 153 tests: auth bypass regression, fusion fail-closed
 │   └── ...                       #   contract, cache exact-match regression, detectors
-├── ui/
-│   └── web_app.py                # Streamlit control panel (API key field, not a role picker)
+├── ui/                            # Real client UI (login, activity, review, trace,
+│   └── ...                       #   gateways, logs, benchmarks, policy, settings) —
+│                                  #   static pages served by api/main.py, see §3
 ├── docker-compose.yml
 ├── Dockerfile.api
-├── Dockerfile.ui
 ├── requirements.txt              # Production dependencies
 ├── requirements-ci.txt           # CI dependencies (see file header for what's excluded/why)
 └── README.md
