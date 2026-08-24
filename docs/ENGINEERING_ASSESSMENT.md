@@ -2978,6 +2978,140 @@ validated the current one.
 
 ---
 
+## 1ab. German prompt-injection recall 49.6% -> 94.0%; shipped with graceful per-feature degradation (2026-08-24, `phase1-german-gap-and-experiments` branch)
+
+Continuation of §1aa's investigation, redirected after that section's own
+"deliberately not done tonight" language was, correctly, called out as
+stalling on the one experiment already identified as the right next
+step — reweighting a fusion refit ONLY on German rows against the same
+four features gave AUC 0.670 vs the global model's 0.671, i.e. exactly
+zero gain. That result is decisive on its own terms: it means the four
+deployed features do not carry the information a German-specific
+weighting would need to exploit. Every fix from here has to ADD
+information, not redistribute it, and that reframing is what actually
+produced results, in order:
+
+1. **Add `deepset_injection` as a FIFTH feature** (not a swap for
+   `protectai_injection` — swapping was tried and decisively rejected:
+   pooled AUC regressed 0.846→0.815, German recall got WORSE not better).
+   Pooled AUC 0.846→0.866, German 0.671→0.721, all non-overlapping CIs.
+2. **Re-test `prompt_guard_2` as a sixth feature.** §1x rejected it in
+   2026-08-14 for not moving German AUC on the 234-row German sample that
+   existed then. That specific verdict replicates here (0.677 vs
+   deployed's 0.671 — still no German gain) but it was the wrong basis
+   for rejection: on the now-13,011-row suite it is the LARGEST pooled
+   and English gain available (+11pp English recall@5%FPR), and §1x's
+   own stated reason for excluding it — an all-or-nothing licence
+   dependency — is exactly what item 4 below removes. Rejecting a
+   feature for failing a criterion it was never the right tool for, and
+   never re-testing it once the actual blocker was fixed, is the mistake
+   being corrected here.
+3. **A purpose-built multilingual feature.** New `scripts.build_
+   multilingual_feature`: embeds the suite with `sentence-transformers/
+   paraphrase-multilingual-MiniLM-L12-v2` and fits a logistic-regression
+   head on the 4,221 German rows the expanded suite now provides — the
+   first feature whose German competence does not depend on an
+   English-trained model generalising. On a held-out 20% split, never
+   touched by fitting: German AUC 0.826, above the entire six-detector
+   off-the-shelf ensemble's 0.729.
+4. **The task-split finding that reframes the whole item.** Leave-one-
+   source-out (train on all-but-one source, test on the held-out one —
+   the test that separates "generalises" from "memorised dataset style")
+   showed the multilingual head scoring 0.94–0.98 AUC on three unseen
+   German PROMPT-INJECTION sources and 0.615 on `philschmid/germeval18`.
+   Checking why: `germeval18` — German social-media OFFENSIVE LANGUAGE,
+   added in §1aa purely for German row-count — is 2,931 of 4,221 German
+   rows, 69%. Every "German AUC" figure reported since §1aa was
+   two-thirds a task the roadmap item was never about. Split honestly
+   (`scripts.analyze_german_by_task`):
+
+   ```
+   German PROMPT INJECTION (what this item is actually about)
+     deployed 4-feature     AUC 0.813   recall@5%FPR 49.6%
+     +deepset_injection (5) AUC 0.971   recall@5%FPR 79.2%
+     +prompt_guard_2 (6)    AUC 0.987   recall@5%FPR 94.0%
+
+   German OFFENSIVE CONTENT (a different problem this suite now also measures)
+     deployed 4-feature     AUC 0.584   recall@5%FPR  9.2%
+     6-feature ensemble     AUC 0.742   recall@5%FPR 22.9%
+   ```
+
+   The 6-feature, off-the-shelf-only result (no suite-fitted model, no
+   stacking caveat) is what shipped: German injection recall 49.6%→94.0%.
+   German offensive content remains weak and is now tracked as its own
+   item instead of hidden inside a blended average that was never
+   measuring what it claimed to.
+
+### Shipping it required fixing the fallback design first, not working around it
+
+The reason §1x's 2026-08-14 rejection of `prompt_guard_2` was reasonable
+AT THE TIME: `core/fusion.py` failed the WHOLE ensemble to the pre-fusion
+anchors-only path if ANY required feature was unavailable. Adding a
+Meta-gated feature under that design would mean every deployment without
+an accepted licence degrades on 100% of requests, not just German ones —
+a real cost the 2026-08-14 numbers didn't justify paying. Shipping the
+6-feature result honestly required removing that cost, not ignoring it.
+
+`core/fusion.py` gained **upgrade tiers**: the artifact may declare
+`upgrade_tiers`, a list of richer, optional feature sets tried best-first
+before falling back to the original floor tier (unchanged in shape —
+every field that existed before this is exactly what a deployment
+without any upgrade tier still gets). Every detector referenced by any
+tier is scored ONCE per request; the richest tier whose required
+detectors all returned a real score is selected; a `prompt_guard_2`
+licence not accepted degrades to the 5-feature tier (`deepset_injection`
+carries no licence gate, so it is reachable by every deployment exactly
+like the floor tier), not to anchors-only. Only if even the floor tier's
+requirements can't be met does the original fail-closed-to-fallback
+behaviour — unchanged, still tested by all 52 pre-existing
+`tests/test_fusion_policy.py` cases — apply.
+
+Verified live, not just under mocks: `warm_up()` against this machine's
+real 6 detectors selected `tier=six_feature` and scored a real attack at
+0.997 and a real benign prompt at 0.017; simulating `prompt_guard_2` as
+unavailable (the actual gated-licence scenario) on the same real
+detectors degraded to `tier=five_feature` and still scored the same
+attack at 0.998 — never touching the anchors-only path a missing
+optional feature used to force.
+
+### Verified
+
+- `scripts.sweep_fusion_variants`, `scripts.build_multilingual_feature`,
+  `scripts.analyze_german_by_task`: all findings above, out-of-fold,
+  reproducible from cached detector scores (`_evidence/detector_scores/`)
+  and the suite's own embeddings cache.
+- `tests/test_fusion_policy.py` (+9 tests): richest tier used when every
+  feature is available; degrades to 5-feature when the gated detector is
+  unavailable; degrades to the floor tier when both upgrade features are
+  unavailable; floor-tier failure still fails closed exactly as before
+  tiers existed; every optional detector scored exactly once regardless
+  of how many tiers reference it; a malformed upgrade tier is dropped,
+  not fatal to the floor tier; an upgrade tier's per-class policy is
+  scored against THAT tier's feature order, not the floor tier's (the
+  exact bug a naive refactor would reintroduce in `_apply_policy`).
+- All 52 pre-existing `tests/test_fusion_policy.py` tests pass unchanged
+  — the tiered artifact schema is additive; an artifact with no
+  `upgrade_tiers` key behaves byte-for-byte as before.
+- `scripts.train_fusion_policy` extended to fit and persist all three
+  tiers from cached scores; regenerated `models/fusion_policy.json`
+  (version 3) shows in-sample AUC 0.847 / 0.867 / 0.909 for floor / 5- /
+  6-feature — consistent with the out-of-fold sweep numbers above.
+- `ruff check` clean; full suite 543 passed (up from 536).
+
+### What this does not close
+
+German OFFENSIVE CONTENT (not injection) remains weak (0.584→0.742 AUC)
+and is a genuinely open item, tracked separately in `docs/ROADMAP_V2.md`
+rather than folded back into a blended "German" figure. The multilingual
+head (item 3 above) is NOT part of what shipped — it beats the 6-feature
+ensemble on German injection (0.826 vs 0.729 pooled-tier AUC) but carries
+a stacking caveat (fitted on suite rows) that the off-the-shelf 6-feature
+result does not, so it needs its own validated tier before shipping,
+not a rushed inclusion riding this commit. Still on
+`phase1-german-gap-and-experiments`, not merged to `main`.
+
+---
+
 ## 2a. Separate `risk` from `topicality` in practice — already correct, now guarded (2026-08-15)
 
 Phase 1 of `docs/ROADMAP_V2.md`. The roadmap item read "confirm it's

@@ -21,36 +21,52 @@ toxic_bert. Llama Guard is far too slow for a live request (seconds, not
 milliseconds, on CPU) and remains a valid opt-in upgrade, not part of this
 default path.
 
-Prompt Guard 2 was deliberately tested and NOT added as a 5th feature —
-see `scripts.analyze_multilingual_fusion` and docs/ENGINEERING_ASSESSMENT.md
-§1x before re-proposing this. Out-of-fold, on the full 6,933-row suite: it
-lifted pooled AUC 0.944→0.952 and German AUC not at all (0.819→0.819,
-delta -0.0003) — both deltas fall inside overlapping confidence intervals,
-i.e. NOT statistically decisive. Because `fused_threat_score` fails the
-WHOLE ensemble to the anchors-only fallback when any one required feature
-is unavailable (see below), adding a Meta-gated 5th feature for an
-undecided gain would mean every deployment that hasn't completed a
-per-deployment HF licence step degrades on 100% of requests, not just
-German ones — a real cost for no proven benefit. `protectai_injection`
-already does most of the German-closing work inside this ensemble (German
-AUC 0.632 anchors-only -> 0.819 fused, out-of-fold) — a real, decisive gap
-narrowing that had never been measured for the deployed ensemble by
-language before that analysis. The residual English/German gap (0.950 vs
-0.819 AUC, 84.7% vs 47.4% recall@5%FPR) remains OPEN — closing it likely
-needs a language-aware policy, not another feature added to one pooled
-threshold (the same structural lesson §1c already drew for attack
-classes), and that is unbuilt, tracked in docs/ROADMAP_V2.md.
+Prompt Guard 2 was originally tested (2026-08-14, on the 6,933-row suite)
+and rejected as a 5th feature: it moved pooled AUC but not German AUC, and
+since a missing REQUIRED feature dropped the whole ensemble to anchors-only,
+a Meta-gated addition for an undecided gain looked like the wrong trade.
+That verdict has since been REVISED — see "UPGRADE TIERS" below — once two
+things changed: the suite grew to 13,011 rows with real German volume
+(previously 234 rows, now 4,221), and this module gained the ability to
+degrade gracefully PER FEATURE rather than all-or-nothing, which removes
+the exact cost the original rejection was weighing against.
+
+UPGRADE TIERS (added 2026-08-24, docs/ENGINEERING_ASSESSMENT.md §1ab)
+-----------------------------------------------------------------------
+The artifact may declare `upgrade_tiers`: a list of additional, RICHER
+feature sets, ordered best-first, each a complete self-contained policy
+(own scaler/coefficients/thresholds/per_class). The top-level fields
+(unchanged in shape from before this existed) are always the FLOOR — the
+tier every deployment can reach with no external licence, and the tier
+this module falls back to if every upgrade tier is unreachable.
+
+At request time, EVERY detector referenced by ANY tier is scored once
+(so trying tiers does not mean re-scoring), then the RICHEST tier whose
+required detectors all returned a real score is selected. A `deepset_
+injection` outage or a `prompt_guard_2` licence not yet accepted degrades
+to the next tier down — never straight to the pre-fusion anchors-only path,
+which the old all-or-nothing design forced even for one optional feature
+going dark. Measured (out-of-fold, full suite, `scripts.sweep_fusion_
+variants`): base 4-feature pooled AUC 0.846 / German 0.813 (this figure
+excludes the German OFFENSIVE-CONTENT rows the suite also carries — see
+`scripts.analyze_german_by_task` for why "German AUC" without that split
+is misleading); 5-feature (+deepset_injection, no licence needed) pooled
+0.866 / German injection 0.971; 6-feature (+prompt_guard_2 too) pooled
+0.908 / German injection 0.987. Every delta here is non-overlapping-CI
+decisive, unlike the 2026-08-14 measurement this section revises.
 
 FAIL-CLOSED, BUT NOT TO A CRASH
 --------------------------------
-If any of the three transformer detectors fails to load (disk issue, first-run
-download failure), this module does NOT block every request, and it does NOT
-silently score the missing feature as zero — an imputed zero would understate
-risk exactly when a detector is unavailable, which is the wrong direction to
-fail. Instead `fused_threat_score` reports unavailability explicitly and the
-caller (`core/risk.py`) falls back to the pre-fusion anchors-only decision path,
-which is the behaviour this project shipped and validated before fusion existed.
-A documented, tested fallback beats either a crash or a wrong number.
+If a transformer detector fails to load (disk issue, first-run download
+failure, an ungated licence not accepted), this module does NOT block every
+request, and it does NOT silently score the missing feature as zero — an
+imputed zero would understate risk exactly when a detector is unavailable,
+which is the wrong direction to fail. A required feature going dark degrades
+to the next tier down (see above); if even the floor tier's requirements
+cannot be met, `fused_threat_score` reports unavailability explicitly and the
+caller (`core/risk.py`) falls back to the pre-fusion anchors-only decision
+path, which is the behaviour this project shipped and validated before fusion
+existed. A documented, tested fallback beats either a crash or a wrong number.
 """
 import json
 import math
@@ -65,10 +81,13 @@ logger = get_logger(__name__)
 
 ARTIFACT_FILE = os.path.join("models", "fusion_policy.json")
 
-# Detectors this module runs directly; "anchors" is deliberately excluded here
-# because core/risk.py already computes the equivalent signal (max FAISS
-# threat-anchor similarity) in collect_semantic_signals — recomputing it via
-# the AnchorDetector class would re-embed the prompt for no new information.
+# The FLOOR tier's live-model detectors — documentation only since upgrade
+# tiers were added; the actual set scored at request time is computed from
+# the loaded artifact's tiers (`_union_required_features`), not this
+# constant. "anchors" is deliberately excluded here because core/risk.py
+# already computes the equivalent signal (max FAISS threat-anchor
+# similarity) in collect_semantic_signals — recomputing it via the
+# AnchorDetector class would re-embed the prompt for no new information.
 LIVE_MODEL_DETECTORS = ("protectai_injection", "madhurjindal_jailbreak", "toxic_bert")
 
 _policy = None
@@ -98,23 +117,50 @@ def _load_policy():
         )
         logger.warning(f"Fusion policy unavailable: {_policy_error}")
         return
+    required = {"feature_order", "scaler_mean", "scaler_scale",
+                "coefficients", "intercept", "threshold_high", "threshold_medium"}
+
+    def _validate_tier(tier):
+        """Raises on a malformed tier. Shared between the floor tier (which
+        must be valid or the whole policy is unavailable) and each upgrade
+        tier (which is independently droppable — see below)."""
+        missing = required - set(tier)
+        if missing:
+            raise ValueError(f"artifact missing fields: {sorted(missing)}")
+        n = len(tier["feature_order"])
+        if not (len(tier["scaler_mean"]) == len(tier["scaler_scale"])
+                == len(tier["coefficients"]) == n):
+            raise ValueError("feature_order/scaler/coefficients length mismatch")
+
     try:
         with open(ARTIFACT_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-        required = {"feature_order", "scaler_mean", "scaler_scale",
-                    "coefficients", "intercept", "threshold_high", "threshold_medium"}
-        missing = required - set(data)
-        if missing:
-            raise ValueError(f"artifact missing fields: {sorted(missing)}")
-        n = len(data["feature_order"])
-        if not (len(data["scaler_mean"]) == len(data["scaler_scale"])
-                == len(data["coefficients"]) == n):
-            raise ValueError("feature_order/scaler/coefficients length mismatch")
+        _validate_tier(data)
+
+        # Upgrade tiers are validated independently: one malformed tier must
+        # not take down the floor tier that IS valid — the same "one bad
+        # entry doesn't sink the others" discipline core/tenancy.py's
+        # TenantStore and core/auth.py's KeyStore already apply to their own
+        # per-entry configuration.
+        valid_upgrade_tiers = []
+        for i, tier in enumerate(data.get("upgrade_tiers", [])):
+            try:
+                _validate_tier(tier)
+                valid_upgrade_tiers.append(tier)
+            except Exception as e:
+                logger.error(f"Ignoring malformed upgrade_tiers[{i}] "
+                            f"({tier.get('tier_id', '?')}): {type(e).__name__}: {e}")
+        data["upgrade_tiers"] = valid_upgrade_tiers
+
         _policy = data
+        tier_summary = ", ".join(
+            f"{t.get('tier_id', '?')}({len(t['feature_order'])}f)" for t in valid_upgrade_tiers
+        )
         logger.info(
-            f"Fusion policy loaded: {data['feature_order']}, "
+            f"Fusion policy loaded: floor={data['feature_order']}, "
             f"threshold_high={data['threshold_high']:.4f}, "
             f"threshold_medium={data['threshold_medium']:.4f}"
+            + (f", upgrade tiers available: {tier_summary}" if tier_summary else "")
         )
     except Exception as e:
         _policy_error = f"{type(e).__name__}: {e}"
@@ -139,20 +185,24 @@ def _sigmoid(x):
     return 1.0 / (1.0 + math.exp(-x))
 
 
-def _apply_policy(feature_values: dict, policy=None) -> float:
+def _apply_policy(feature_values: dict, policy=None, feature_order=None) -> float:
     """
     feature_values: {detector_name: raw_score}, must cover every name in
-    policy['feature_order']. Returns P(attack) in [0, 1].
+    the effective feature order. Returns P(attack) in [0, 1].
 
-    `policy` defaults to the global policy. Per-class policies (artifact v2)
-    share the same feature_order but carry their own scaler and coefficients,
-    so they are applied through this same function with an explicit policy.
+    `policy` defaults to the global (floor-tier) policy. Per-class policies
+    (artifact v2) and upgrade-tier policies carry their own scaler and
+    coefficients but no `feature_order` of their own — a per-class or
+    per-tier policy is only ever scored against the feature order of the
+    TIER it belongs to, so callers holding that context pass it explicitly
+    via `feature_order`; omitting it falls back to the floor tier's, which
+    is correct for every call site that predates upgrade tiers.
     """
     pol = policy if policy is not None else _policy
+    order = feature_order if feature_order is not None else _policy["feature_order"]
     z = pol["intercept"]
     for name, mean, scale, coef in zip(
-        _policy["feature_order"], pol["scaler_mean"],
-        pol["scaler_scale"], pol["coefficients"],
+        order, pol["scaler_mean"], pol["scaler_scale"], pol["coefficients"],
     ):
         raw = feature_values[name]
         standardized = (raw - mean) / scale if scale else 0.0
@@ -160,11 +210,12 @@ def _apply_policy(feature_values: dict, policy=None) -> float:
     return _sigmoid(z)
 
 
-def _select_per_class_verdict(feature_values: dict):
+def _select_per_class_verdict(feature_values: dict, policy_tier=None):
     """
-    Scores the prompt under EVERY per-class policy and returns the most
-    severe result, or None when the artifact has no per-class section
-    (v1 artifacts, or per-class scoring disabled).
+    Scores the prompt under EVERY per-class policy IN `tier` (defaults to
+    the floor tier) and returns the most severe result, or None when that
+    tier has no per-class section (v1 artifacts, an upgrade tier that
+    didn't train one, or per-class scoring disabled).
 
     WHY PER-CLASS SCORES RATHER THAN PER-CLASS THRESHOLDS ON ONE SCORE: at
     inference the attack class is unknown — determining it is the job being
@@ -182,23 +233,24 @@ def _select_per_class_verdict(feature_values: dict):
     including the ambiguous-band logic in `_in_upper_ambiguous_band`, work
     completely unchanged.
     """
-    per_class = _policy.get("per_class")
+    policy_tier = policy_tier if policy_tier is not None else _policy
+    per_class = policy_tier.get("per_class")
     if not per_class:
         return None
 
     results = {}
     for cls, pol in per_class.items():
-        score = _apply_policy(feature_values, pol)
+        score = _apply_policy(feature_values, pol, feature_order=policy_tier["feature_order"])
         thr_high = pol["threshold_high"]
         thr_med = pol["threshold_medium"]
         if score >= thr_high:
-            tier = 2
+            severity_tier = 2
         elif score >= thr_med:
-            tier = 1
+            severity_tier = 1
         else:
-            tier = 0
+            severity_tier = 0
         results[cls] = {
-            "score": score, "tier": tier,
+            "score": score, "tier": severity_tier,
             "ratio": (score / thr_high) if thr_high else 0.0,
             "threshold_high": thr_high, "threshold_medium": thr_med,
         }
@@ -290,6 +342,32 @@ def _warm_detectors(names):
         _detectors_warmed = True
 
 
+def _all_tiers():
+    """
+    Every tier this policy can run at, RICHEST FIRST, floor tier always
+    last — the floor is both the worst acceptable outcome and the one
+    guaranteed to validate (see `_load_policy`), so it is always a safe
+    final entry regardless of what upgrade tiers declare.
+    """
+    return list(_policy.get("upgrade_tiers", [])) + [_policy]
+
+
+def _tier_required_features(tier):
+    return [n for n in tier["feature_order"] if n != "anchors"]
+
+
+def _union_required_features():
+    """Every non-anchors detector name needed by ANY tier, order-stable and
+    deduplicated — scored once per request regardless of how many tiers
+    reference it, so trying a richer tier first never means re-scoring."""
+    seen = []
+    for tier in _all_tiers():
+        for name in _tier_required_features(tier):
+            if name not in seen:
+                seen.append(name)
+    return seen
+
+
 def warm_up():
     """
     Loads the policy and every live detector, so the first real request does
@@ -310,7 +388,7 @@ def warm_up():
     if not ok:
         return False, f"policy unavailable, nothing warmed: {detail}"
 
-    names = [n for n in LIVE_MODEL_DETECTORS if n in _policy["feature_order"]]
+    names = _union_required_features()
     _warm_detectors(names)
     if _detectors_warmed:
         return True, f"warmed {len(names)} detector(s): {', '.join(names)}"
@@ -359,7 +437,7 @@ def fused_threat_score(prompt: str, anchor_score: float) -> dict:
         return {"available": False, "score": None, "threshold_high": None,
                 "threshold_medium": None, "detail": detail, "detector_scores": {}}
 
-    names = [n for n in LIVE_MODEL_DETECTORS if n in _policy["feature_order"]]
+    names = _union_required_features()
 
     if settings.FUSION_PARALLEL and len(names) > 1:
         results = _score_detectors_parallel(names, prompt)
@@ -368,7 +446,6 @@ def fused_threat_score(prompt: str, anchor_score: float) -> dict:
 
     feature_values = {"anchors": anchor_score}
     detector_scores = {"anchors": anchor_score}
-    first_error = None
     # Iterate in DECLARED order, not completion order, so the reported error
     # is deterministic and reproducible regardless of which detector happened
     # to finish first — otherwise the same failure would produce different
@@ -376,32 +453,36 @@ def fused_threat_score(prompt: str, anchor_score: float) -> dict:
     # to assert on in a test.
     for name, score, error in results:
         if error is not None:
-            if first_error is None:
-                first_error = error
             continue
         feature_values[name] = score
         detector_scores[name] = score
 
-    if first_error is not None:
-        return {"available": False, "score": None, "threshold_high": None,
-                "threshold_medium": None, "detail": first_error,
-                "detector_scores": detector_scores}
+    # Pick the RICHEST tier whose required features all came back with a
+    # real score. A tier is skipped, not fatal — only if the FLOOR tier
+    # (always last in _all_tiers()) also can't be met does this fail closed.
+    chosen = None
+    for tier in _all_tiers():
+        if all(n in feature_values for n in _tier_required_features(tier)):
+            chosen = tier
+            break
 
-    missing = [f for f in _policy["feature_order"] if f not in feature_values]
-    if missing:
+    if chosen is None:
+        first_error = next((error for _, _, error in results if error is not None), None)
         return {"available": False, "score": None, "threshold_high": None,
                 "threshold_medium": None,
-                "detail": f"no score computed for required feature(s): {missing}",
+                "detail": first_error or "no score computed for a required feature",
                 "detector_scores": detector_scores}
 
     per_class_result = (
-        _select_per_class_verdict(feature_values)
+        _select_per_class_verdict(feature_values, chosen)
         if settings.FUSION_PER_CLASS else None
     )
 
+    tier_note = "" if chosen is _policy else f", tier={chosen.get('tier_id', '?')}"
+
     if per_class_result is not None:
-        winner, results = per_class_result
-        w = results[winner]
+        winner, class_results = per_class_result
+        w = class_results[winner]
         # `score` and the thresholds are the TRIGGERING class's, deliberately:
         # core/risk.py compares score against these same two thresholds, so
         # returning a matched triple keeps its decision cascade — and the
@@ -411,19 +492,19 @@ def fused_threat_score(prompt: str, anchor_score: float) -> dict:
             "score": w["score"],
             "threshold_high": w["threshold_high"],
             "threshold_medium": w["threshold_medium"],
-            "detail": f"fusion applied (per-class, triggered by {winner})",
+            "detail": f"fusion applied (per-class, triggered by {winner}{tier_note})",
             "detector_scores": detector_scores,
             "triggering_class": winner,
-            "class_scores": {c: r["score"] for c, r in results.items()},
+            "class_scores": {c: r["score"] for c, r in class_results.items()},
         }
 
-    probability = _apply_policy(feature_values)
+    probability = _apply_policy(feature_values, chosen, feature_order=chosen["feature_order"])
     return {
         "available": True,
         "score": probability,
-        "threshold_high": _policy["threshold_high"],
-        "threshold_medium": _policy["threshold_medium"],
-        "detail": "fusion applied",
+        "threshold_high": chosen["threshold_high"],
+        "threshold_medium": chosen["threshold_medium"],
+        "detail": f"fusion applied{tier_note}",
         "detector_scores": detector_scores,
         "triggering_class": None,
         "class_scores": {},
