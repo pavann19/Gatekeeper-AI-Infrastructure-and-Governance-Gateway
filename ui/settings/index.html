@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gatekeeper — Settings</title>
+<link rel="stylesheet" href="/ui/shared/theme.css">
+<style>
+  body { padding: 0 0 80px; }
+
+  main {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 40px 24px 0;
+  }
+
+  .identity-chip {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+  .identity-chip b { color: var(--text); font-weight: 600; }
+
+  h2 { font-size: 28px; font-weight: 650; letter-spacing: -0.02em; margin: 0 0 24px; }
+  h3 { font-size: 17px; font-weight: 650; margin: 0 0 4px; }
+  .section-sub { font-size: 13px; color: var(--text-secondary); margin: 0 0 16px; }
+
+  .settings-card {
+    background: var(--surface-solid);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 24px 26px;
+    box-shadow: var(--shadow);
+    margin-bottom: 20px;
+  }
+
+  .tag-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+  .tag-pill {
+    background: rgba(128,128,128,0.1);
+    border-radius: 999px;
+    padding: 6px 14px;
+    font-size: 12.5px;
+    font-weight: 500;
+  }
+
+  .kv-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 14px 20px;
+    margin-top: 4px;
+  }
+  .kv-grid dt { font-size: 11.5px; color: var(--text-tertiary); font-weight: 500; margin-bottom: 2px; }
+  .kv-grid dd { margin: 0; font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  .status-pill {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    padding: 3px 10px;
+    border-radius: 999px;
+  }
+  .status-active { background: var(--low-bg); color: var(--low-text); }
+  .status-suspended { background: var(--high-bg); color: var(--high-text); }
+
+  table.policy-table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13px; }
+  table.policy-table th, table.policy-table td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  table.policy-table th { color: var(--text-tertiary); font-weight: 500; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.02em; }
+
+  .action-badge { font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 999px; }
+  .action-ALLOW { background: var(--low-bg); color: var(--low-text); }
+  .action-BLOCK { background: var(--high-bg); color: var(--high-text); }
+  .action-REVIEW { background: var(--medium-bg); color: var(--medium-text); }
+  .action-RESTRICT { background: var(--medium-bg); color: var(--medium-text); }
+
+  footer { text-align: center; color: var(--text-tertiary); font-size: 12px; margin-top: 48px; }
+</style>
+</head>
+<body>
+
+<header class="gk-header">
+  <div class="gk-brand">
+    <h1>Gatekeeper</h1>
+    <span class="subtitle">Settings</span>
+  </div>
+  <nav class="gk-nav" id="navLinks"></nav>
+  <div class="identity-chip" id="identityChip"></div>
+  <div style="display:flex; gap:8px;">
+    <button class="btn-ghost" id="signOutBtn">Sign Out</button>
+  </div>
+</header>
+
+<main>
+  <div class="gk-status-banner" id="banner"></div>
+
+  <h2>Settings</h2>
+
+  <div class="settings-card">
+    <h3>Privacy</h3>
+    <p class="section-sub">What PII protection is actually applied to every request that passes through this gateway.</p>
+    <div>
+      <dt style="font-size:11.5px; color:var(--text-tertiary); margin-bottom:6px;">Detected &amp; redacted automatically</dt>
+      <div class="tag-row" id="regexTags"></div>
+    </div>
+    <div style="margin-top:16px;">
+      <dt style="font-size:11.5px; color:var(--text-tertiary); margin-bottom:6px;">Contextual entity redaction (NER)</dt>
+      <div class="tag-row" id="nerTags"></div>
+    </div>
+  </div>
+
+  <div class="settings-card">
+    <h3>Protection</h3>
+    <p class="section-sub" id="protectionSub">What actually governs your requests right now.</p>
+    <dl class="kv-grid" id="tenantGrid"></dl>
+    <table class="policy-table">
+      <thead><tr><th>Risk level</th><th>Enforced action</th></tr></thead>
+      <tbody id="policyRows"></tbody>
+    </table>
+  </div>
+
+  <footer>Gatekeeper Settings · the real running configuration, not a description of it</footer>
+</main>
+
+<script src="/ui/shared/auth.js"></script>
+<script>
+const API_BASE = window.location.origin;
+const banner = document.getElementById('banner');
+const signOutBtn = document.getElementById('signOutBtn');
+const identityChip = document.getElementById('identityChip');
+const navLinks = document.getElementById('navLinks');
+
+function showBanner(message, isError) {
+  banner.textContent = message;
+  banner.className = 'gk-status-banner visible' + (isError ? ' error' : '');
+}
+function hideBanner() { banner.className = 'gk-status-banner'; }
+
+function escapeHtml(s) {
+  const div = document.createElement('div');
+  div.textContent = s == null ? '' : String(s);
+  return div.innerHTML;
+}
+
+async function loadPrivacy() {
+  const res = await fetch(API_BASE + '/api/v1/settings/privacy', { headers: gkAuthHeaders() });
+  if (res.status === 401) { gkSignOut(); return; }
+  if (!res.ok) { showBanner('Failed to load privacy settings: HTTP ' + res.status, true); return; }
+  const data = await res.json();
+  document.getElementById('regexTags').innerHTML = data.regex_categories.map(c =>
+    `<span class="tag-pill">${escapeHtml(c)}</span>`).join('');
+  document.getElementById('nerTags').innerHTML = data.ner_labels.map(l =>
+    `<span class="tag-pill">${escapeHtml(l)}</span>`).join('');
+}
+
+async function loadProtection() {
+  const res = await fetch(API_BASE + '/api/v1/settings/protection', { headers: gkAuthHeaders() });
+  if (res.status === 401) { gkSignOut(); return; }
+  if (!res.ok) { showBanner('Failed to load protection settings: HTTP ' + res.status, true); return; }
+  const data = await res.json();
+
+  const t = data.tenant;
+  document.getElementById('protectionSub').textContent =
+    `Tenant "${t.tenant_id}" · capability ${data.policy.capability}`;
+
+  document.getElementById('tenantGrid').innerHTML = `
+    <div><dt>Status</dt><dd><span class="status-pill status-${escapeHtml(t.status)}">${escapeHtml(t.status)}</span></dd></div>
+    <div><dt>Rate limit</dt><dd>${t.rate_limit_rpm != null ? t.rate_limit_rpm + ' rpm' : 'tier default'}</dd></div>
+    <div><dt>Token quota / day</dt><dd>${t.token_quota_daily != null ? t.token_quota_daily.toLocaleString() : 'tier default'}</dd></div>
+  `;
+
+  const rows = Object.entries(data.policy.risk_to_action);
+  document.getElementById('policyRows').innerHTML = rows.length === 0
+    ? `<tr><td colspan="2" style="color:var(--text-tertiary);">No explicit mapping — falls back to default_action: <span class="action-badge action-${escapeHtml(data.policy.default_action)}">${escapeHtml(data.policy.default_action)}</span></td></tr>`
+    : rows.map(([risk, action]) => `
+        <tr>
+          <td>${escapeHtml(risk)}</td>
+          <td><span class="action-badge action-${escapeHtml(action)}">${escapeHtml(action)}</span></td>
+        </tr>
+      `).join('');
+}
+
+signOutBtn.addEventListener('click', gkSignOut);
+
+(async () => {
+  const identity = await gkRequireAuth();
+  if (!identity) return;
+  navLinks.innerHTML = gkNavLinks(identity, 'settings');
+  identityChip.innerHTML = '<b>' + escapeHtml(identity.key_id) + '</b> · ' + escapeHtml(identity.tenant) + ' · ' + escapeHtml(identity.capability);
+
+  try {
+    hideBanner();
+    await Promise.all([loadPrivacy(), loadProtection()]);
+  } catch (e) {
+    showBanner('Could not reach the API — ' + e.message, true);
+  }
+})();
+</script>
+
+</body>
+</html>

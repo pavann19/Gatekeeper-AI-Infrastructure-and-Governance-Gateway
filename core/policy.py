@@ -355,6 +355,13 @@ def resolve_policy_set(tenant_id: str, store: PolicyStore = None) -> PolicySet:
     return (store or _store).get(tenant_id)
 
 
+def get_default_action(store: PolicyStore = None) -> str:
+    """The top-level, tenant-independent fail-safe action -- for a caller
+    (the Settings/Protection view) that wants to show what happens for a
+    capability/risk combination no tenant's policy explicitly maps."""
+    return (store or _store).default_action
+
+
 def policy_decision(capability: str, risk: str, tenant_id: str = DEFAULT_TENANT_ID,
                     store: PolicyStore = None):
     """

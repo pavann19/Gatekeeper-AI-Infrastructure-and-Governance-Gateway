@@ -576,7 +576,33 @@ Original estimate: ~40–65h combined — deferred until engine + gateways are s
       cross-tenant view, and cross-navigation between Activity and Review
       Queue -- all read-only against that real data; nothing in it was
       approved/rejected/modified by this verification pass.
-- [ ] Client UI (remainder): privacy, protection settings
+- [x] Client UI (remainder — privacy & protection settings):
+      `ui/settings/index.html`, backed by two new endpoints,
+      `GET /api/v1/settings/privacy` and `GET /api/v1/settings/protection`.
+      Privacy surfaces the REAL running PII-redaction config
+      (`core.privacy.REGEX_PATTERNS`' category names, `NER_LABELS`) --
+      global, since this pipeline has no per-tenant privacy knob to
+      configure yet, so every caller correctly sees the same answer.
+      Protection surfaces the caller's own real tenant SLA
+      (`core.tenancy.resolve_tenant`: status, rate limit, token quota) and
+      the real risk->action mapping their OWN capability resolves to
+      under their tenant's policy (`core.policy.resolve_policy_set`) --
+      the exact same lookups `/api/v1/assess` makes to decide ALLOW/
+      BLOCK/RESTRICT/REVIEW, not a hand-written description that could
+      drift from what's actually enforced. Every caller sees their own
+      tenant by default; INTERNAL may cross via `?tenant=`, matching the
+      activity feed's rule. 7 new tests.
+
+      This closes every remaining Phase 7 checklist item -- Client UI
+      (auth, dashboard/activity, review approvals, privacy, protection)
+      and Developer UI (request inspector, detector signals, policy
+      editor, model gateway view, tool gateway view, traces, benchmarks,
+      logs) are now all real, tested, and live-verified. Live-verifying
+      this final batch caught one real gap along the way: the Trace page
+      had no way for an INTERNAL caller to cross tenants in the UI even
+      though the backend already supported `?tenant=` -- fixed by adding
+      an INTERNAL-only tenant field to `ui/trace/index.html`, matching
+      the pattern the Activity and Logs pages already used.
 - [x] Developer UI (request inspector + traces + detector signals):
       `ui/trace/index.html`, backed by `core.activity.find_by_request_id`
       and `GET /api/v1/activity/trace/{request_id}`. All three roadmap
@@ -647,6 +673,31 @@ Original estimate: ~40–65h combined — deferred until engine + gateways are s
       the real project's live policy file; fixed by swapping the
       singleton itself for an isolated instance, the same pattern
       `tests/test_policy.py`'s own fixture already used.
+
+**Phase 7 is now completely closed** -- every Client UI item (auth,
+dashboard/activity, review approvals, privacy, protection) and every
+Developer UI item (request inspector, detector signals, policy editor,
+model gateway view, tool gateway view, traces, benchmarks, logs) built as
+real vertical slices: real backend data throughout (the actual audit log,
+the actual tool/provider registries, the actual committed benchmark
+evidence, the actual policy-versioning machinery), no synthesized or
+placeholder content anywhere in the client UI. 9 static pages
+(`ui/login`, `ui/review`, `ui/activity`, `ui/trace`, `ui/gateways`,
+`ui/logs`, `ui/benchmarks`, `ui/policy`, `ui/settings`) sharing one theme
+and one auth flow (`ui/shared/`), mounted directly from `api/main.py` --
+no separate frontend deployment, no build step. 75 new tests across this
+phase's six commits (710 -> 785 passing overall), and every page was driven end-to-end in a real
+browser against a real running instance before being called done,
+including one pass that used the project's own actual accumulated
+`audit.jsonl`/`review_queue.json`/benchmark evidence (read-only) and
+another that exercised a real policy deploy+rollback cycle against an
+isolated copy of the live policy file, never the real one.
+
+Not built, and explicitly out of scope for this phase: a proper SPA
+frontend (deliberately not chosen -- see the Phase 7 kickoff decision to
+build static pages instead), and anything in "Explicitly deferred" below
+(API key management UI, organization management, policy simulation/
+versioning at enterprise depth beyond what's here).
 
 ## Phase 8 — Production hardening (continuous, not a final phase)
 Original estimate: ~20–35h

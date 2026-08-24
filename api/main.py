@@ -21,16 +21,15 @@ from api.schemas import (
 )
 from core.activity import find_by_request_id, get_recent_activity
 from core.benchmarks import list_benchmark_runs
-from core.policy import load_policy_file, validate_policy_file
 from core.policy_versioning import deploy_policy, list_versions, rollback_to
+from core.privacy import NER_LABELS, REGEX_PATTERNS, redact_pii
 from core.auth import auth_required, resolve_principal
-from core.privacy import redact_pii
 from core.rate_limit import assess_rate_limiter, bucket_parameters
 from core.tenancy import resolve_tenant
 from core.risk import assess_risk
 from core.cache import flush_cache
 from core.logger import get_logger, log_event, log_output_event, log_gateway_event
-from core.policy import policy_decision
+from core.policy import get_default_action, load_policy_file, policy_decision, resolve_policy_set, validate_policy_file
 from core.review_queue import enqueue_review, get_review, list_pending_reviews, resolve_review
 from core.tools import execute_tool, get_tool_registry
 from core.llm_providers import get_provider, list_provider_names, LLMProviderError
@@ -1035,6 +1034,82 @@ def whoami(request: Request):
     return WhoAmIResponse(
         capability=principal.capability, tenant=principal.tenant, key_id=principal.key_id,
     )
+
+
+# --- Client UI settings: privacy & protection (Phase 7) ---
+
+@app.get("/api/v1/settings/privacy")
+def privacy_settings(request: Request):
+    """
+    What PII protection is actually applied to every request -- the REAL
+    running configuration from core/privacy.py (`REGEX_PATTERNS`'
+    category names, `NER_LABELS`), not a description written by hand that
+    could drift from what the code actually does. Global: this pipeline
+    has no per-tenant privacy configuration today, so every caller sees
+    the same answer -- an honest reflection of that, not a per-tenant
+    settings page for a knob that doesn't exist yet.
+    """
+    principal = resolve_principal(authorization=request.headers.get("Authorization"))
+    if auth_required() and not principal.authenticated:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required. Present a valid API key as "
+                   "'Authorization: Bearer <key>'.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return {
+        "regex_categories": sorted(REGEX_PATTERNS.keys()),
+        "ner_labels": sorted(NER_LABELS),
+    }
+
+
+@app.get("/api/v1/settings/protection")
+def protection_settings(request: Request):
+    """
+    What actually governs the caller's own requests: their tenant's real
+    SLA config (`core.tenancy.resolve_tenant` -- status, rate limit,
+    token quota) and the real risk->action mapping their OWN capability
+    resolves to under their tenant's policy (`core.policy.
+    resolve_policy_set`) -- the exact same lookups `/api/v1/assess` and
+    friends make to decide ALLOW/BLOCK/RESTRICT/REVIEW, not a summary
+    that could drift from what's actually enforced.
+
+    Every caller sees their OWN tenant by default; INTERNAL may pass
+    `?tenant=<other>` to inspect a different tenant's settings, same
+    cross-tenant rule as the activity feed. The policy mapping shown is
+    always for the REQUESTING principal's own capability -- "what
+    governs me", not an arbitrary capability picker (the Policy Editor
+    is where the full per-capability mapping for every tenant lives).
+    """
+    principal = resolve_principal(authorization=request.headers.get("Authorization"))
+    if auth_required() and not principal.authenticated:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required. Present a valid API key as "
+                   "'Authorization: Bearer <key>'.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    requested_tenant = request.query_params.get("tenant")
+    tenant_id = requested_tenant if (principal.capability == CAPABILITY_INTERNAL and requested_tenant) else principal.tenant
+
+    tenant_config = resolve_tenant(tenant_id)
+    policy_set = resolve_policy_set(tenant_id)
+
+    return {
+        "tenant": {
+            "tenant_id": tenant_config.tenant_id,
+            "display_name": tenant_config.display_name,
+            "status": tenant_config.status,
+            "rate_limit_rpm": tenant_config.rate_limit_rpm,
+            "token_quota_daily": tenant_config.token_quota_daily,
+        },
+        "policy": {
+            "capability": principal.capability,
+            "risk_to_action": policy_set.policies.get(principal.capability, {}),
+            "default_action": get_default_action(),
+        },
+    }
 
 
 # --- Activity feed (Phase 7) ---
