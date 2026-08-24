@@ -60,11 +60,29 @@ PLUS_DEEPSET_5 = DEPLOYED_4 + ["deepset_injection"]
 PLUS_PG2_5 = DEPLOYED_4 + ["prompt_guard_2"]
 PLUS_BOTH_6 = DEPLOYED_4 + ["deepset_injection", "prompt_guard_2"]
 
+# multilingual_head is NOT an off-the-shelf detector: it is fitted on this
+# suite's own rows (scripts/build_multilingual_feature.py) and emitted as
+# full-suite out-of-fold predictions. Two consequences that must not be
+# glossed over when reading these numbers:
+#   1. It is stacking. Feeding an OOF-generated feature into a second CV
+#      over the same rows is the standard stacking protocol, but it is
+#      mildly optimistic -- the fusion's training folds contain rows whose
+#      head-scores came from heads fitted on data overlapping the fusion's
+#      own test fold. build_multilingual_feature.py's held-out split is the
+#      leakage-free number for the head ITSELF; these fusion numbers are
+#      development estimates, not deployment claims.
+#   2. It has seen this data distribution; the pretrained detectors have
+#      not. Comparing them head-to-head flatters the head. Validating it
+#      against a German source held out of the suite entirely is required
+#      before treating its advantage as generalisation rather than fit.
+PLUS_ML_5 = DEPLOYED_4 + ["multilingual_head"]
+ALL_7 = DEPLOYED_4 + ["deepset_injection", "prompt_guard_2", "multilingual_head"]
+
 # Every feature needed by any variant, so one coverage filter serves all of
 # them and every variant is scored on exactly the same rows (otherwise a
 # variant using a thinner-cached feature would be measured on a different,
 # quietly easier population).
-ALL_FEATURES = DEPLOYED_4 + ["deepset_injection", "prompt_guard_2"]
+ALL_FEATURES = DEPLOYED_4 + ["deepset_injection", "prompt_guard_2", "multilingual_head"]
 
 
 def load_scores(name):
@@ -107,7 +125,9 @@ def main():
     for tag, feats in (("deployed_4", DEPLOYED_4),
                        ("plus_deepset_5", PLUS_DEEPSET_5),
                        ("plus_pg2_5", PLUS_PG2_5),
-                       ("plus_both_6", PLUS_BOTH_6)):
+                       ("plus_both_6", PLUS_BOTH_6),
+                       ("plus_ml_5", PLUS_ML_5),
+                       ("all_7", ALL_7)):
         print(f"\n[{tag}] features={feats}")
         scores = oof(feats, rows, caches, y)
         entry = {"features": feats, "trained_on": "all languages", "by_language": {}}
