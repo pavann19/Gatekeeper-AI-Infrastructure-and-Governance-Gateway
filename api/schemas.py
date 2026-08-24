@@ -152,6 +152,24 @@ class AssessOutputResponse(BaseModel):
     )
 
 
+# --- Policy Editor (Phase 7) ---
+
+class PolicyContentRequest(BaseModel):
+    """Candidate policy file content, exactly as it would be written to
+    disk (JSON or YAML text, matching the live file's own extension) --
+    validated or deployed as a whole file, not a partial patch, mirroring
+    how `scripts/manage_policy_versions.py deploy` already works."""
+    content: str = Field(..., min_length=1)
+
+    model_config = {"extra": "forbid"}
+
+
+class PolicyRollbackRequest(BaseModel):
+    version: str = Field(..., min_length=1, description="A version filename from GET /api/v1/policy's 'versions' list.")
+
+    model_config = {"extra": "forbid"}
+
+
 # --- Identity check (Phase 7) ---
 
 class WhoAmIResponse(BaseModel):

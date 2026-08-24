@@ -626,6 +626,27 @@ Original estimate: ~40–65h combined — deferred until engine + gateways are s
       this view. 10 new tests, including one asserting against the
       actual tracked evidence files on disk (a real trip wire if that
       file shape ever drifts from what this view assumes).
+- [x] Developer UI (policy editor): `ui/policy/index.html` plus four new
+      INTERNAL-only endpoints (`GET /api/v1/policy`,
+      `POST /api/v1/policy/validate`, `/deploy`, `/rollback`) that wrap
+      the SAME functions `scripts/manage_policy_versions.py` already used
+      from the CLI (`core.policy.validate_policy_file`,
+      `core.policy_versioning.deploy_policy`/`rollback_to`) -- an HTTP
+      front end for real, already-safe machinery, not a new write path.
+      Deploy validates first and refuses outright on any error, exactly
+      mirroring the CLI's `cmd_deploy`; every deploy snapshots the
+      outgoing policy first, every rollback snapshots what it's about to
+      overwrite too, so a bad rollback is exactly as undoable as a bad
+      deploy. 13 new tests exercising the REAL validate/deploy/reload/
+      rollback cycle end to end (a deploy is asserted to actually change
+      what `policy_decision` returns afterward, not just that a file
+      write succeeded) -- writing these caught a real test-isolation gap
+      first: `core.policy`'s module-level `PolicyStore` singleton
+      captures its file path once at construction, so monkeypatching
+      `settings.POLICY_RULES_FILE` alone left it silently still reading
+      the real project's live policy file; fixed by swapping the
+      singleton itself for an isolated instance, the same pattern
+      `tests/test_policy.py`'s own fixture already used.
 
 ## Phase 8 — Production hardening (continuous, not a final phase)
 Original estimate: ~20–35h

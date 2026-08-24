@@ -2,6 +2,7 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
 import hashlib
 import json
 import os
+import tempfile
 import time
 import asyncio
 import functools
@@ -16,9 +17,12 @@ from api.schemas import (
     AssessRequest, AssessResponse, AssessOutputRequest, AssessOutputResponse,
     ReviewStatusResponse, ReviewResolveRequest, GatewayChatRequest, GatewayChatResponse,
     ToolCallRequest, ToolCallResponse, WhoAmIResponse,
+    PolicyContentRequest, PolicyRollbackRequest,
 )
 from core.activity import find_by_request_id, get_recent_activity
 from core.benchmarks import list_benchmark_runs
+from core.policy import load_policy_file, validate_policy_file
+from core.policy_versioning import deploy_policy, list_versions, rollback_to
 from core.auth import auth_required, resolve_principal
 from core.privacy import redact_pii
 from core.rate_limit import assess_rate_limiter, bucket_parameters
@@ -1153,6 +1157,104 @@ def benchmarks(request: Request):
             detail="INTERNAL capability required to view benchmark results.",
         )
     return list_benchmark_runs()
+
+
+# --- Policy Editor (Phase 7) ---
+#
+# Wraps the SAME functions scripts/manage_policy_versions.py already uses
+# (validate_policy_file, deploy_policy, rollback_to) -- this is an HTTP
+# front end for that real, already-safe machinery, not a new write path
+# with its own logic. In particular deploy NEVER skips validation: see
+# deploy_policy's own docstring for why that discipline lives at the
+# caller, not inside it.
+
+def _require_internal(request: Request):
+    principal = resolve_principal(authorization=request.headers.get("Authorization"))
+    if principal.capability != CAPABILITY_INTERNAL:
+        raise HTTPException(status_code=403, detail="INTERNAL capability required for policy administration.")
+    return principal
+
+
+@app.get("/api/v1/policy")
+def get_policy(request: Request):
+    """Current live policy (parsed) plus the real snapshot history a
+    deploy could roll back to."""
+    _require_internal(request)
+    try:
+        with open(settings.POLICY_RULES_FILE, "r", encoding="utf-8") as f:
+            raw_text = f.read()
+        content = load_policy_file()
+    except FileNotFoundError:
+        raw_text, content = None, None
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Live policy file is unreadable: {e}")
+
+    return {
+        "path": settings.POLICY_RULES_FILE,
+        "raw_text": raw_text,
+        "content": content,
+        "versions": list_versions(),
+    }
+
+
+@app.post("/api/v1/policy/validate")
+def validate_policy(req: PolicyContentRequest, request: Request):
+    """Validates candidate policy content WITHOUT touching the live file
+    -- writes it to a throwaway temp file (same extension as the live
+    file, so YAML-vs-JSON dispatch matches), runs the real
+    `validate_policy_file`, always cleans up."""
+    _require_internal(request)
+    suffix = os.path.splitext(settings.POLICY_RULES_FILE)[1] or ".json"
+    with tempfile.NamedTemporaryFile("w", suffix=suffix, delete=False, encoding="utf-8") as tmp:
+        tmp.write(req.content)
+        tmp_path = tmp.name
+    try:
+        errors = validate_policy_file(tmp_path)
+    finally:
+        os.unlink(tmp_path)
+    return {"valid": not errors, "errors": errors}
+
+
+@app.post("/api/v1/policy/deploy")
+def deploy_policy_endpoint(req: PolicyContentRequest, request: Request):
+    """Validates first and REFUSES to deploy on any error -- the exact
+    discipline `scripts/manage_policy_versions.py::cmd_deploy` already
+    applies, reproduced here rather than bypassed because the caller is
+    now HTTP instead of a CLI operator. Snapshots the outgoing policy
+    before overwriting it (deploy_policy's own behaviour) and reloads it
+    into the live process immediately -- no restart, no window where the
+    old and new policy could both be enforced depending on which worker
+    handled a request."""
+    principal = _require_internal(request)
+    suffix = os.path.splitext(settings.POLICY_RULES_FILE)[1] or ".json"
+    with tempfile.NamedTemporaryFile("w", suffix=suffix, delete=False, encoding="utf-8") as tmp:
+        tmp.write(req.content)
+        tmp_path = tmp.name
+    try:
+        errors = validate_policy_file(tmp_path)
+        if errors:
+            raise HTTPException(status_code=422, detail={"message": "Refusing to deploy: invalid policy.", "errors": errors})
+        previous_version = deploy_policy(tmp_path)
+    finally:
+        os.unlink(tmp_path)
+
+    logger.warning(f"Policy deployed via API by key_id={principal.key_id}. Previous snapshot: {previous_version}")
+    return {"deployed": True, "previous_version": previous_version}
+
+
+@app.post("/api/v1/policy/rollback")
+def rollback_policy_endpoint(req: PolicyRollbackRequest, request: Request):
+    """Restores a named snapshot over the live policy and reloads it --
+    itself snapshotted first by `rollback_to`, so a bad rollback is just
+    as undoable as a bad deploy."""
+    principal = _require_internal(request)
+    try:
+        rollback_to(req.version)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    logger.warning(f"Policy rolled back via API by key_id={principal.key_id} to version={req.version}")
+    return {"rolled_back_to": req.version}
 
 
 # --- Human Review (Phase 4) ---

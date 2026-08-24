@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gatekeeper — Policy</title>
+<link rel="stylesheet" href="/ui/shared/theme.css">
+<style>
+  body { padding: 0 0 80px; }
+
+  main {
+    max-width: 1000px;
+    margin: 0 auto;
+    padding: 40px 24px 0;
+  }
+
+  .identity-chip {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+  .identity-chip b { color: var(--text); font-weight: 600; }
+
+  h2 { font-size: 28px; font-weight: 650; letter-spacing: -0.02em; margin: 0 0 6px; }
+  .path-sub { font-size: 12.5px; color: var(--text-tertiary); font-family: ui-monospace, "SF Mono", Consolas, monospace; margin-bottom: 24px; }
+
+  .layout {
+    display: grid;
+    grid-template-columns: 1fr 260px;
+    gap: 24px;
+    align-items: start;
+  }
+  @media (max-width: 800px) { .layout { grid-template-columns: 1fr; } }
+
+  textarea {
+    width: 100%;
+    min-height: 420px;
+    font-family: ui-monospace, "SF Mono", Consolas, monospace;
+    font-size: 13px;
+    line-height: 1.5;
+    padding: 16px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--surface-solid);
+    color: var(--text);
+    resize: vertical;
+    outline: none;
+  }
+  textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 4px rgba(10,132,255,0.15); }
+  textarea.invalid { border-color: var(--danger); }
+
+  .action-row { display: flex; gap: 8px; margin-top: 12px; }
+
+  .validation-result {
+    margin-top: 12px;
+    padding: 12px 16px;
+    border-radius: var(--radius-sm);
+    font-size: 12.5px;
+    display: none;
+  }
+  .validation-result.visible { display: block; }
+  .validation-result.ok { background: var(--low-bg); color: var(--low-text); }
+  .validation-result.bad { background: var(--high-bg); color: var(--high-text); }
+  .validation-result ul { margin: 6px 0 0; padding-left: 18px; }
+
+  .sidebar h3 { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.02em; color: var(--text-secondary); margin: 0 0 10px; }
+
+  .version-list {
+    background: var(--surface-solid);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+    margin-bottom: 20px;
+  }
+  .version-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    font-size: 11.5px;
+  }
+  .version-row:last-child { border-bottom: none; }
+  .version-name { font-family: ui-monospace, "SF Mono", Consolas, monospace; flex: 1; word-break: break-all; }
+  .version-row button { font-size: 11px; padding: 4px 10px; flex-shrink: 0; }
+  .empty-inline { padding: 16px; text-align: center; color: var(--text-tertiary); font-size: 12px; }
+
+  footer { text-align: center; color: var(--text-tertiary); font-size: 12px; margin-top: 48px; }
+</style>
+</head>
+<body>
+
+<header class="gk-header">
+  <div class="gk-brand">
+    <h1>Gatekeeper</h1>
+    <span class="subtitle">Policy</span>
+  </div>
+  <nav class="gk-nav" id="navLinks"></nav>
+  <div class="identity-chip" id="identityChip"></div>
+  <div style="display:flex; gap:8px;">
+    <button class="btn-ghost" id="refreshBtn">Refresh</button>
+    <button class="btn-ghost" id="signOutBtn">Sign Out</button>
+  </div>
+</header>
+
+<main>
+  <div class="gk-status-banner" id="banner"></div>
+
+  <h2>Policy Editor</h2>
+  <div class="path-sub" id="pathSub"></div>
+
+  <div class="layout">
+    <div>
+      <textarea id="policyText" spellcheck="false"></textarea>
+      <div class="validation-result" id="validationResult"></div>
+      <div class="action-row">
+        <button class="btn-ghost" id="validateBtn">Validate</button>
+        <button class="btn-primary" id="deployBtn">Deploy</button>
+        <button class="btn-ghost" id="revertBtn">Revert edits</button>
+      </div>
+    </div>
+
+    <div class="sidebar">
+      <h3>Snapshot History</h3>
+      <div class="version-list" id="versionList"></div>
+      <p style="font-size:11.5px; color:var(--text-tertiary); line-height:1.5;">
+        Every deploy snapshots the outgoing policy first. Rolling back
+        snapshots the current one too, so a rollback is itself undoable.
+      </p>
+    </div>
+  </div>
+
+  <footer>Gatekeeper Policy Editor · validates before it ever writes, snapshots before it ever overwrites</footer>
+</main>
+
+<script src="/ui/shared/auth.js"></script>
+<script>
+const API_BASE = window.location.origin;
+const banner = document.getElementById('banner');
+const refreshBtn = document.getElementById('refreshBtn');
+const signOutBtn = document.getElementById('signOutBtn');
+const identityChip = document.getElementById('identityChip');
+const navLinks = document.getElementById('navLinks');
+const policyText = document.getElementById('policyText');
+const pathSub = document.getElementById('pathSub');
+const validationResult = document.getElementById('validationResult');
+const validateBtn = document.getElementById('validateBtn');
+const deployBtn = document.getElementById('deployBtn');
+const revertBtn = document.getElementById('revertBtn');
+const versionList = document.getElementById('versionList');
+
+let liveText = '';
+
+function showBanner(message, isError) {
+  banner.textContent = message;
+  banner.className = 'gk-status-banner visible' + (isError ? ' error' : '');
+}
+function hideBanner() { banner.className = 'gk-status-banner'; }
+
+function escapeHtml(s) {
+  const div = document.createElement('div');
+  div.textContent = s == null ? '' : String(s);
+  return div.innerHTML;
+}
+
+function renderVersions(versions) {
+  if (!versions || versions.length === 0) {
+    versionList.innerHTML = '<div class="empty-inline">No snapshots yet.</div>';
+    return;
+  }
+  versionList.innerHTML = versions.map(v => `
+    <div class="version-row">
+      <span class="version-name">${escapeHtml(v)}</span>
+      <button class="btn-ghost" onclick="rollbackTo('${escapeHtml(v)}')">Rollback</button>
+    </div>
+  `).join('');
+}
+
+async function loadPolicy() {
+  refreshBtn.disabled = true;
+  refreshBtn.textContent = 'Refreshing…';
+  try {
+    const res = await fetch(API_BASE + '/api/v1/policy', { headers: gkAuthHeaders() });
+    if (res.status === 401) { gkSignOut(); return; }
+    if (res.status === 403) {
+      showBanner('INTERNAL capability required to view the policy editor.', true);
+      return;
+    }
+    if (!res.ok) {
+      showBanner('Request failed: HTTP ' + res.status, true);
+      return;
+    }
+    const data = await res.json();
+    hideBanner();
+    pathSub.textContent = data.path + (data.raw_text == null ? ' (no live policy file yet)' : '');
+    liveText = data.raw_text != null ? data.raw_text : JSON.stringify(data.content, null, 2);
+    policyText.value = liveText;
+    policyText.classList.remove('invalid');
+    validationResult.className = 'validation-result';
+    renderVersions(data.versions);
+  } catch (e) {
+    showBanner('Could not reach the API — ' + e.message, true);
+  } finally {
+    refreshBtn.disabled = false;
+    refreshBtn.textContent = 'Refresh';
+  }
+}
+
+async function validatePolicy(showResult) {
+  const res = await fetch(API_BASE + '/api/v1/policy/validate', {
+    method: 'POST',
+    headers: Object.assign({ 'Content-Type': 'application/json' }, gkAuthHeaders()),
+    body: JSON.stringify({ content: policyText.value }),
+  });
+  if (res.status === 401) { gkSignOut(); return null; }
+  if (!res.ok) {
+    showBanner('Validate request failed: HTTP ' + res.status, true);
+    return null;
+  }
+  const result = await res.json();
+  if (showResult) {
+    policyText.classList.toggle('invalid', !result.valid);
+    if (result.valid) {
+      validationResult.className = 'validation-result visible ok';
+      validationResult.textContent = 'Valid — safe to deploy.';
+    } else {
+      validationResult.className = 'validation-result visible bad';
+      validationResult.innerHTML = 'Invalid:<ul>' + result.errors.map(e => `<li>${escapeHtml(e)}</li>`).join('') + '</ul>';
+    }
+  }
+  return result;
+}
+
+async function deployPolicy() {
+  const result = await validatePolicy(true);
+  if (!result || !result.valid) {
+    showBanner('Refusing to deploy: fix the validation errors first.', true);
+    return;
+  }
+  deployBtn.disabled = true;
+  deployBtn.innerHTML = '<span class="gk-spinner"></span>Deploying…';
+  try {
+    const res = await fetch(API_BASE + '/api/v1/policy/deploy', {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, gkAuthHeaders()),
+      body: JSON.stringify({ content: policyText.value }),
+    });
+    if (res.status === 401) { gkSignOut(); return; }
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      showBanner('Deploy failed: ' + JSON.stringify(body.detail || res.status), true);
+      return;
+    }
+    const body = await res.json();
+    showBanner('Deployed. Previous snapshot: ' + (body.previous_version || '(none — first deploy)'), false);
+    await loadPolicy();
+  } catch (e) {
+    showBanner('Could not reach the API — ' + e.message, true);
+  } finally {
+    deployBtn.disabled = false;
+    deployBtn.textContent = 'Deploy';
+  }
+}
+
+async function rollbackTo(version) {
+  if (!confirm('Roll back the live policy to ' + version + '? The current live policy will be snapshotted first.')) return;
+  try {
+    const res = await fetch(API_BASE + '/api/v1/policy/rollback', {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, gkAuthHeaders()),
+      body: JSON.stringify({ version }),
+    });
+    if (res.status === 401) { gkSignOut(); return; }
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      showBanner('Rollback failed: ' + (body.detail || res.status), true);
+      return;
+    }
+    showBanner('Rolled back to ' + version + '.', false);
+    await loadPolicy();
+  } catch (e) {
+    showBanner('Could not reach the API — ' + e.message, true);
+  }
+}
+
+refreshBtn.addEventListener('click', loadPolicy);
+signOutBtn.addEventListener('click', gkSignOut);
+validateBtn.addEventListener('click', () => validatePolicy(true));
+deployBtn.addEventListener('click', deployPolicy);
+revertBtn.addEventListener('click', () => {
+  policyText.value = liveText;
+  policyText.classList.remove('invalid');
+  validationResult.className = 'validation-result';
+});
+
+(async () => {
+  const identity = await gkRequireAuth();
+  if (!identity) return;
+  navLinks.innerHTML = gkNavLinks(identity, 'policy');
+  identityChip.innerHTML = '<b>' + escapeHtml(identity.key_id) + '</b> · ' + escapeHtml(identity.tenant) + ' · ' + escapeHtml(identity.capability);
+
+  if (identity.capability !== 'INTERNAL') {
+    showBanner('This key has ' + identity.capability + ' capability — INTERNAL is required to edit policy.', true);
+    return;
+  }
+  loadPolicy();
+})();
+</script>
+
+</body>
+</html>
