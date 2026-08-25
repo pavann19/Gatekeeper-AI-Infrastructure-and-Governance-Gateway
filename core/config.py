@@ -333,6 +333,20 @@ class Settings(BaseSettings):
     # contract core/demo_tools.py::register_demo_tools already documents.
     REGISTER_DEMO_TOOLS: bool = False
 
+    # Registers core/real_tools.py's "http.get" -- the only REAL (non-
+    # sandboxed, live-network-calling) tool this project ships -- into the
+    # tool registry at startup. Defaults OFF, same opt-in contract as
+    # REGISTER_DEMO_TOOLS above and as register_real_tools()'s own
+    # docstring already states. HONEST NOTE: this flag was ADDED during a
+    # live pentest (docs/ROADMAP_V2.md's Phase 8 findings) after
+    # discovering register_real_tools() existed, was fully tested
+    # (tests/test_real_tools.py, tests/test_real_tools_edge_cases.py --
+    # including real SSRF-protection coverage), and was STILL NEVER WIRED
+    # UP anywhere -- no setting gated it, no startup call invoked it, so
+    # the tool was unreachable in every real deployment despite being
+    # production-ready. This is the fix for that gap, not a new feature.
+    REGISTER_REAL_TOOLS: bool = False
+
     # Exact-match hostname allowlist for core/real_tools.py's "http.get"
     # tool -- the first REAL (non-sandboxed) tool this project ships,
     # making an actual outbound network call. Empty by default: fail
