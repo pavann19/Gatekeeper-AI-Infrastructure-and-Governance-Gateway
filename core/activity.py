@@ -44,34 +44,45 @@ MAX_LIMIT = 200
 KNOWN_EVENT_TYPES = ("input_assessment", "output_assessment", "gateway_call", "tool_call")
 
 
-def _tail_raw_lines(path: str, needed: int, max_bytes: int = None):
+def _tail_raw_lines(
+    path: str,
+    needed: int | float,
+    max_bytes: int | None = None,
+    start_pos: int | None = None,
+    carry: bytes = b"",
+    return_state: bool = False,
+):
     """
-    Reads up to `needed` non-blank lines from the end of `path`, returned
-    newest-first (the order the caller wants for an activity feed).
+    Reads up to `needed` non-blank lines from the end of `path` (or starting at
+    `start_pos` when resuming a scan), returned newest-first (the order the caller
+    wants for an activity feed).
 
-    Returns (lines, truncated, exhausted):
-      - truncated: `max_bytes` was hit before `needed` lines were found AND
-        before the start of the file was reached -- there may be more
-        matching lines this call simply didn't scan far enough to see.
-      - exhausted: the scan reached byte 0 of the file -- every line that
-        exists has now been read, however few that turned out to be. A
-        caller retrying with a larger `needed` after `exhausted=True` would
-        get back the exact same lines, not more.
+    Returns (lines, truncated, exhausted) or (lines, truncated, exhausted, next_pos, next_carry)
+    when return_state=True.
     """
     if max_bytes is None:
         max_bytes = MAX_BYTES_SCANNED  # module-level lookup at call time, not def time
 
     if not os.path.exists(path):
+        if return_state:
+            return [], False, True, 0, b""
         return [], False, True
 
     file_size = os.path.getsize(path)
     if file_size == 0:
+        if return_state:
+            return [], False, True, 0, b""
         return [], False, True
 
     lines_newest_first = []
-    pos = file_size
+    pos = file_size if start_pos is None else start_pos
+    if pos <= 0:
+        if return_state:
+            return [], False, True, 0, carry
+        return [], False, True
+
     bytes_scanned = 0
-    carry = b""  # a partial line straddling this chunk and the previous (newer) one
+    carry_buf = carry  # a partial line straddling this chunk and the previous (newer) one
 
     with open(path, "rb") as f:
         while pos > 0 and len(lines_newest_first) < needed and bytes_scanned < max_bytes:
@@ -81,15 +92,15 @@ def _tail_raw_lines(path: str, needed: int, max_bytes: int = None):
             chunk = f.read(read_size)
             bytes_scanned += read_size
 
-            buffer = chunk + carry
+            buffer = chunk + carry_buf
             parts = buffer.split(b"\n")
             if pos > 0:
                 # parts[0] is an incomplete line continuing into the
                 # not-yet-read, earlier part of the file -- hold it over.
-                carry = parts[0]
+                carry_buf = parts[0]
                 complete_parts = parts[1:]
             else:
-                carry = b""
+                carry_buf = b""
                 complete_parts = parts
 
             for raw in reversed(complete_parts):
@@ -99,7 +110,9 @@ def _tail_raw_lines(path: str, needed: int, max_bytes: int = None):
                         break
 
     exhausted = pos == 0
-    truncated = not exhausted and len(lines_newest_first) < needed
+    truncated = not exhausted and len(lines_newest_first) < needed and bytes_scanned >= max_bytes
+    if return_state:
+        return lines_newest_first, truncated, exhausted, pos, carry_buf
     return lines_newest_first, truncated, exhausted
 
 
@@ -118,45 +131,41 @@ def get_recent_activity(limit=DEFAULT_LIMIT, tenant=None, event_types=None, path
     event_type_filter = set(event_types) if event_types else None
 
     events = []
-    scan_truncated = False
-    needed_raw = limit
-    first_attempt = True
-    # A filter can reject most lines read, so we may need a second pass
-    # over a much larger tail window before we have `limit` MATCHING
-    # events or hit MAX_BYTES_SCANNED.
-    #
-    # Phase 8 hardening: this used to grow needed_raw by 4x per retry
-    # (limit, limit*4, limit*16, ...) -- fine for a filter that eventually
-    # finds enough matches after a couple of modest re-reads, but a REAL
-    # performance cliff for a filter that matches NOTHING at all (e.g. a
-    # brand-new tenant polling its own, so-far-empty activity feed -- not
-    # a contrived case, the first thing any new caller does). That case
-    # can never satisfy `len(events) >= limit`, so it always escalated
-    # through most of the growth ladder, and the last 1-2 steps each
-    # re-scan close to the ENTIRE file from scratch. Confirmed live: a
-    # real load test against this exact scenario (concurrency=20,
-    # ~9MB/18k-line audit log, a tenant with zero matching entries) showed
-    # p99 latency of ~6s, against ~130ms for the identical query against a
-    # tenant WITH matching entries found in the first cheap pass -- a
-    # ~45x difference from the SAME code path.
-    #
-    # Fix: after the first (cheap, `limit`-sized) attempt misses, jump
-    # straight to scanning the full MAX_BYTES_SCANNED budget in one more
-    # pass (matching find_by_request_id's own "just scan the whole
-    # budget" approach) instead of continuing to climb through several
-    # more from-scratch re-reads first. Caps this function at exactly 2
-    # `_tail_raw_lines` calls in the worst case, not 5-6 -- a real,
-    # measured improvement (re-benchmarked after this fix; see
-    # docs/ROADMAP_V2.md's Phase 8 entry for the numbers), not just a
-    # theoretical one. A moderate one-time cost increase for the
-    # in-between case (matches exist but aren't found in the first small
-    # window) is an explicit, deliberate trade against the previous
-    # design's guaranteed worst case for the zero-match case, which is
-    # both more common and was unboundedly bad.
-    while True:
-        raw_lines, truncated, exhausted = _tail_raw_lines(audit_path, needed_raw)
-        events = []
-        for raw in raw_lines:
+    
+    # Pass 1: Cheap attempt reading just enough lines for the requested limit
+    raw_lines, truncated, exhausted, pos, carry = _tail_raw_lines(
+        audit_path, needed=limit, max_bytes=MAX_BYTES_SCANNED, return_state=True
+    )
+    for raw in raw_lines:
+        try:
+            record = json.loads(raw)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        record["event_type"] = record.get("event_type") or "legacy"
+        record.setdefault("tenant", "unset")
+        record.setdefault("capability", "unset")
+
+        if tenant is not None and record["tenant"] != tenant:
+            continue
+        if event_type_filter is not None and record["event_type"] not in event_type_filter:
+            continue
+        events.append(record)
+
+    scan_truncated = truncated
+
+    # Pass 2: Resume-based sweep. If more matching events are needed and the file
+    # is not exhausted, continue scanning backward from `pos` (where Pass 1 left off)
+    # rather than restarting from EOF.
+    if len(events) < limit and not truncated and not exhausted and pos > 0:
+        more_lines, truncated2, exhausted2, _, _ = _tail_raw_lines(
+            audit_path,
+            needed=float("inf"),
+            max_bytes=MAX_BYTES_SCANNED,
+            start_pos=pos,
+            carry=carry,
+            return_state=True,
+        )
+        for raw in more_lines:
             try:
                 record = json.loads(raw)
             except (json.JSONDecodeError, UnicodeDecodeError):
@@ -170,15 +179,9 @@ def get_recent_activity(limit=DEFAULT_LIMIT, tenant=None, event_types=None, path
             if event_type_filter is not None and record["event_type"] not in event_type_filter:
                 continue
             events.append(record)
-
-        scan_truncated = truncated
-        # Stop once there are enough matches, the byte cap was hit (nothing
-        # more to safely read), or the whole file has been read (retrying
-        # with a bigger needed_raw cannot produce more lines than exist).
-        if len(events) >= limit or truncated or exhausted:
-            break
-        needed_raw = float("inf") if first_attempt else needed_raw * 4
-        first_attempt = False
+            if len(events) >= limit:
+                break
+        scan_truncated = truncated2
 
     return {"events": events[:limit], "scan_truncated": scan_truncated}
 
