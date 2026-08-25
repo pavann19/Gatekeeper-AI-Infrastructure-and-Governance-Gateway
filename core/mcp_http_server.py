@@ -73,6 +73,7 @@ def create_mcp_app(registry: Optional[ToolRegistry] = None) -> FastAPI:
         sessions[session_id] = queue
 
         async def event_generator():
+            logger.info(f"SSE session {session_id} event_generator started")
             try:
                 # 1. Send the endpoint discovery event
                 endpoint_url = f"/mcp/messages?sessionId={session_id}"
@@ -81,20 +82,19 @@ def create_mcp_app(registry: Optional[ToolRegistry] = None) -> FastAPI:
                 # 2. Keep stream alive / yield any server push messages
                 while True:
                     try:
-                        if await request.is_disconnected():
-                            break
-                    except Exception:
-                        break
-
-                    try:
-                        data = await asyncio.wait_for(queue.get(), timeout=0.5)
+                        data = await asyncio.wait_for(queue.get(), timeout=1.0)
                         yield f"event: message\ndata: {json.dumps(data)}\n\n"
                     except asyncio.TimeoutError:
                         if request.headers.get("X-Test-Stream-Once"):
                             break
                         yield ": ping\n\n"
+            except Exception as e:
+                logger.warning(f"SSE session {session_id} generator exception: {e}")
             finally:
+                logger.info(f"SSE session {session_id} event_generator finally (popping session)")
                 sessions.pop(session_id, None)
+
+
 
         return StreamingResponse(
             event_generator(),

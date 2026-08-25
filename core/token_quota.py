@@ -251,31 +251,27 @@ class RedisTokenQuotaTracker(TokenQuotaBackend):
             logger.error(f"Redis token quota reset failed ({type(e).__name__}: {e}).")
 
 
-def build_token_quota_tracker(max_tracked: int = 10_000) -> TokenQuotaBackend:
+def build_token_quota_tracker(client=None, max_tracked: int = 10_000) -> TokenQuotaBackend:
     """
-    Selects Redis if REDIS_URL is set AND reachable, else falls back to the local
-    in-memory tracker. The decision is logged clearly at startup.
+    Selects Redis if `client` is provided or if `REDIS_URL` is set AND reachable,
+    using the shared ConnectionPool in `core.redis_client`.
+    Falls back gracefully to the local in-memory tracker.
     """
-    redis_url = os.environ.get("REDIS_URL")
-    if not redis_url:
-        logger.info("REDIS_URL not set; using local in-memory token quota tracker (single-node only).")
-        return LocalTokenQuotaTracker(max_tracked=max_tracked)
-
-    try:
-        import redis  # noqa: PLC0415
-
-        client = redis.from_url(redis_url, socket_connect_timeout=2, socket_timeout=2)
-        client.ping()
-        safe_url = redis_url.split("@")[-1]
-        logger.info(f"Connected to Redis at {safe_url}; token quota tracker is now shared across instances.")
+    if client is not None:
         return RedisTokenQuotaTracker(client, max_tracked=max_tracked)
-    except Exception as e:
-        logger.error(
-            f"REDIS_URL is set but Redis is unreachable ({type(e).__name__}: {e}); "
-            f"falling back to local in-memory token quota tracker. Quotas will "
-            f"NOT be shared across gateway instances until this is fixed."
-        )
-        return LocalTokenQuotaTracker(max_tracked=max_tracked)
+
+    from core.redis_client import get_redis_client
+
+    redis_client = get_redis_client()
+    if redis_client is not None:
+        return RedisTokenQuotaTracker(redis_client, max_tracked=max_tracked)
+
+    if os.environ.get("REDIS_URL"):
+        logger.error("falling back to local in-memory token quota tracker.")
+
+    return LocalTokenQuotaTracker(max_tracked=max_tracked)
+
+
 
 
 def extract_total_tokens(usage) -> int:

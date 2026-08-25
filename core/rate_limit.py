@@ -318,31 +318,27 @@ class RedisRateLimiter(RateLimiterBackend):
             return len(self._local_fallback)
 
 
-def build_rate_limiter(name: str = "assess", max_tracked: int = 10_000) -> RateLimiterBackend:
+def build_rate_limiter(name: str = "assess", client=None, max_tracked: int = 10_000) -> RateLimiterBackend:
     """
-    Selects Redis if REDIS_URL is set AND reachable, else falls back to the local
-    in-memory limiter. The decision is logged clearly at startup.
+    Selects Redis if `client` is provided or if `REDIS_URL` is set AND reachable,
+    using the shared ConnectionPool in `core.redis_client`.
+    Falls back gracefully to the local in-memory limiter.
     """
-    redis_url = os.environ.get("REDIS_URL")
-    if not redis_url:
-        logger.info(f"REDIS_URL not set; using local in-memory rate limiter for '{name}' (single-node only).")
-        return LocalRateLimiter(name=name, max_tracked=max_tracked)
-
-    try:
-        import redis  # noqa: PLC0415
-
-        client = redis.from_url(redis_url, socket_connect_timeout=2, socket_timeout=2)
-        client.ping()
-        safe_url = redis_url.split("@")[-1]
-        logger.info(f"Connected to Redis at {safe_url}; rate limiter '{name}' is now shared across instances.")
+    if client is not None:
         return RedisRateLimiter(client, name=name, max_tracked=max_tracked)
-    except Exception as e:
-        logger.error(
-            f"REDIS_URL is set but Redis is unreachable ({type(e).__name__}: {e}); "
-            f"falling back to local in-memory rate limiter for '{name}'. Rate limits will "
-            f"NOT be shared across gateway instances until this is fixed."
-        )
-        return LocalRateLimiter(name=name, max_tracked=max_tracked)
+
+    from core.redis_client import get_redis_client
+
+    redis_client = get_redis_client()
+    if redis_client is not None:
+        return RedisRateLimiter(redis_client, name=name, max_tracked=max_tracked)
+
+    if os.environ.get("REDIS_URL"):
+        logger.error("falling back to local in-memory rate limiter.")
+
+    return LocalRateLimiter(name=name, max_tracked=max_tracked)
+
+
 
 
 def bucket_parameters(requests_per_minute: float, burst_seconds: float) -> tuple[float, float]:
