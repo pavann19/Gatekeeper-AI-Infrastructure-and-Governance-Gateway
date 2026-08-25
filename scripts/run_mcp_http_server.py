@@ -5,11 +5,20 @@ Usage:
     python -m scripts.run_mcp_http_server --port 8001 --host 127.0.0.1
 """
 import argparse
+import os
+import sys
+
+# Ensure repository root is in sys.path when script is run directly
+_repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _repo_root not in sys.path:
+    sys.path.insert(0, _repo_root)
+
 import uvicorn
 
 from core.demo_tools import register_demo_tools
 from core.mcp_http_server import create_mcp_app
 from core.tools import get_tool_registry
+
 
 
 def main():

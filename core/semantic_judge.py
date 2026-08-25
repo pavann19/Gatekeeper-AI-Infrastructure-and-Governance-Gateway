@@ -94,6 +94,8 @@ def _judge_via_llama_guard(prompt: str) -> str:
         ollama_judge_breaker.record_failure()
         return "DANGEROUS"
 
+
+
     raw = response.json().get("message", {}).get("content", "").strip()
     verdict_line = raw.split("\n")[0].strip().lower()
 
@@ -224,7 +226,14 @@ def output_judge(response_text: str) -> str:
     `semantic_judge` fixes it the same way.
     """
     if uses_llama_guard_protocol(OLLAMA_MODEL):
-        return _judge_via_llama_guard(response_text)
+        try:
+            return _judge_via_llama_guard(response_text)
+        except Exception:
+            ollama_judge_breaker.record_failure()
+            return "JUDGE_OFFLINE"
+
+
+
 
     # Same prompt-injection mitigation as semantic_judge's fallback path
     # above, for the same reason: response_text is untrusted (it is, at
