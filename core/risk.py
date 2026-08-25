@@ -26,22 +26,21 @@ logger = get_logger(__name__)
 # --- 1. LOAD POLICIES ---
 def load_policies():
     """
-    Loads safe and threat anchors from POLICY_FILE.
+    Loads semantic threat anchors from POLICY_FILE.
 
     Threat anchors are grouped by attack class (`threat_anchor_classes`) so the
     threat taxonomy is explicit and per-class metrics are possible. A flat
     `threat_anchors` list is still accepted for backwards compatibility.
 
-    Returns (safe_anchors, threat_anchors_flat, threat_anchor_classes).
+    Returns (threat_anchors_flat, threat_anchor_classes).
     """
     if not os.path.exists(POLICY_FILE):
         logger.warning(f"{POLICY_FILE} not found. Semantic threat detection disabled.")
-        return [], [], {}
+        return [], {}
 
     with open(POLICY_FILE, "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    safe = data.get("safe_anchors", [])
     classes = data.get("threat_anchor_classes", {})
 
     if classes:
@@ -51,10 +50,10 @@ def load_policies():
         flat = data.get("threat_anchors", [])
         classes = {"unclassified": flat} if flat else {}
 
-    return safe, flat, classes
+    return flat, classes
 
 
-EDUCATIONAL_ANCHORS, THREAT_ANCHORS, THREAT_ANCHOR_CLASSES = load_policies()
+THREAT_ANCHORS, THREAT_ANCHOR_CLASSES = load_policies()
 
 # EXPANDED ANCHORS for Educational Intent (Safe Harbor)
 EDUCATIONAL_CONTEXT_ANCHORS = [
