@@ -30,20 +30,30 @@ REGEX_PATTERNS = {
 # Only redact high-confidence entities relevant to safety
 NER_LABELS = {"PERSON", "ORG", "GPE"} 
 
-def redact_pii(text: str) -> tuple:
+def redact_pii(text: str, tenant_config=None) -> tuple:
     """
-    Hybrid PII Detection Pipeline.
+    Hybrid PII Detection Pipeline with optional per-tenant overrides.
     Strategy: Fail-Fast. 
-    1. Run Regex. If matches found, return immediately (Latency optimization).
-    2. If clean, run NER to catch subtle context (Names, Locations).
+    1. Run Regex (skipping any patterns disabled for this tenant).
+    2. If clean, run NER for configured labels (default: PERSON, ORG, GPE).
     """
     clean_text = text
     detected_items = []
     detection_source = "NONE"
 
+    disabled_regex = set()
+    ner_labels = NER_LABELS
+    if tenant_config is not None:
+        if getattr(tenant_config, "privacy_disabled_patterns", None):
+            disabled_regex = set(tenant_config.privacy_disabled_patterns)
+        if getattr(tenant_config, "privacy_ner_labels", None) is not None:
+            ner_labels = set(tenant_config.privacy_ner_labels)
+
     # --- STAGE 1: SYMBOLIC (Regex) ---
     regex_hit = False
     for label, pattern in REGEX_PATTERNS.items():
+        if label in disabled_regex:
+            continue
         matches = re.findall(pattern, clean_text)
         if matches:
             regex_hit = True
@@ -55,19 +65,17 @@ def redact_pii(text: str) -> tuple:
 
     # OPTIMIZATION: If Regex found something, we assume the prompt 
     # is "dirty" and skip the expensive NER model to save ~200ms.
-    # (Note: In strict security, you would run both. For this research
-    # prototype, we demonstrate latency-aware architecture).
     if regex_hit:
         return clean_text, {"pii_found": True, "source": detection_source, "items": detected_items}
 
     # --- STAGE 2: NEURAL (spaCy NER) ---
-    if NLP_MODEL:
+    if NLP_MODEL and ner_labels:
         doc = NLP_MODEL(clean_text)
         ner_hit = False
         
         # We iterate in reverse to avoid index shifting issues during replacement
         for ent in reversed(doc.ents):
-            if ent.label_ in NER_LABELS:
+            if ent.label_ in ner_labels:
                 ner_hit = True
                 detection_source = "NER_CONTEXT"
                 mask = f"[REDACTED:{ent.label_}]"

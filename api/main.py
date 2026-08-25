@@ -435,7 +435,7 @@ async def assess_prompt(req: AssessRequest, request: Request, background_tasks: 
     )
 
     # 1. Privacy Layer
-    clean_query, redacted_info = redact_pii(req.prompt)
+    clean_query, redacted_info = redact_pii(req.prompt, tenant_config=tenant_config)
     redacted_items = redacted_info.get("items", [])
 
     # 2. Risk Assessment (Neuro-Symbolic) - offloaded to thread to avoid blocking event loop.
@@ -631,7 +631,7 @@ async def assess_output_endpoint(req: AssessOutputRequest, request: Request):
 
     # 1. Output Assessment (secrets, system-prompt leakage, PII, toxicity, hallucination)
     try:
-        decision, details = await _run_bounded(assess_output, req.response_text, req.system_prompt)
+        decision, details = await _run_bounded(assess_output, req.response_text, req.system_prompt, tenant_config)
     except asyncio.TimeoutError:
         logger.error(
             f"Output assessment timed out after "
@@ -787,7 +787,7 @@ async def gateway_chat(req: GatewayChatRequest, request: Request, background_tas
     #    architectural difference from a sidecar: Gatekeeper decides
     #    whether the provider is called at all, not just whether to trust
     #    a response the caller already obtained.
-    clean_query, redacted_info = redact_pii(req.prompt)
+    clean_query, redacted_info = redact_pii(req.prompt, tenant_config=tenant_config)
     try:
         risk_level, details = await _run_bounded(assess_risk, clean_query, background_tasks.add_task, req.prompt)
     except asyncio.TimeoutError:
@@ -917,7 +917,7 @@ async def gateway_chat(req: GatewayChatRequest, request: Request, background_tas
     from core.output_guardrails import assess_output
     try:
         output_decision, output_details = await _run_bounded(
-            assess_output, llm_response.content, req.system_prompt
+            assess_output, llm_response.content, req.system_prompt, tenant_config
         )
     except asyncio.TimeoutError:
         metrics.assessment_timeouts_total.labels(endpoint="/api/v1/gateway/chat (output)").inc()
@@ -1080,15 +1080,14 @@ def whoami(request: Request):
 # --- Client UI settings: privacy & protection (Phase 7) ---
 
 @app.get("/api/v1/settings/privacy")
-def privacy_settings(request: Request):
+def privacy_settings(request: Request, tenant: str = None):
     """
-    What PII protection is actually applied to every request -- the REAL
-    running configuration from core/privacy.py (`REGEX_PATTERNS`'
-    category names, `NER_LABELS`), not a description written by hand that
-    could drift from what the code actually does. Global: this pipeline
-    has no per-tenant privacy configuration today, so every caller sees
-    the same answer -- an honest reflection of that, not a per-tenant
-    settings page for a knob that doesn't exist yet.
+    What PII protection is actually applied to requests -- the REAL running
+    configuration from core/privacy.py (`REGEX_PATTERNS`' category names,
+    `NER_LABELS`), with any per-tenant overrides applied.
+
+    Every caller sees their OWN tenant by default; INTERNAL may pass
+    `?tenant=<other>` to inspect a different tenant's privacy configuration.
     """
     principal = resolve_principal(authorization=request.headers.get("Authorization"))
     if auth_required() and not principal.authenticated:
@@ -1099,9 +1098,30 @@ def privacy_settings(request: Request):
             headers={"WWW-Authenticate": "Bearer"},
         )
     _reject_suspended_and_rate_limit(principal, request)
+
+    target_tenant_id = principal.tenant
+    if tenant is not None:
+        if principal.capability != CAPABILITY_INTERNAL:
+            raise HTTPException(
+                status_code=403,
+                detail="INTERNAL capability required to inspect another tenant's settings.",
+            )
+        target_tenant_id = tenant
+
+    tenant_config = resolve_tenant(target_tenant_id)
+    disabled_patterns = set(tenant_config.privacy_disabled_patterns or ())
+    active_regex = sorted(k for k in REGEX_PATTERNS.keys() if k not in disabled_patterns)
+    active_ner = sorted(
+        tenant_config.privacy_ner_labels
+        if tenant_config.privacy_ner_labels is not None
+        else NER_LABELS
+    )
+
     return {
-        "regex_categories": sorted(REGEX_PATTERNS.keys()),
-        "ner_labels": sorted(NER_LABELS),
+        "tenant": tenant_config.tenant_id,
+        "regex_categories": active_regex,
+        "ner_labels": active_ner,
+        "disabled_regex_categories": sorted(disabled_patterns),
     }
 
 
