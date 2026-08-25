@@ -16,7 +16,11 @@ def main():
     parser = argparse.ArgumentParser(description="Run Gatekeeper MCP HTTP/SSE Server")
     parser.add_argument("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)")
     parser.add_argument("--port", type=int, default=8001, help="Bind port (default: 8001)")
-    parser.add_argument("--demo-tools", action="store_true", default=True, help="Register demo tools")
+    parser.add_argument(
+        "--demo-tools",
+        action="store_true",
+        help="Register core/demo_tools.py's sandboxed demo tools before serving (default: False).",
+    )
 
     args = parser.parse_args()
 

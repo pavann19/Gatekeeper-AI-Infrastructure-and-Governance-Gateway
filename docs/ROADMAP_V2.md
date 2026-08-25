@@ -1079,13 +1079,17 @@ the end.
       coverage is inherently open-ended, not because anything concrete
       remains outstanding.
 
+## Completed in Roadmap V2 Follow-ups (2026-08-25)
+- [x] **Redis-backed distributed rate limiter & token quota tracker**: `core/rate_limit.py::RedisRateLimiter` and `core/token_quota.py::RedisTokenQuotaTracker` with atomic Lua scripts, TTL auto-expiry, and transparent local in-memory fallback.
+- [x] **Full MCP Transport Support (stdio + HTTP/SSE)**: `core/mcp_server.py` (stdio) and `core/mcp_http_server.py` (networked HTTP/SSE with per-request API key auth, tenant isolation, session-relay queue, and 100KB payload bounding).
+- [x] **Per-tenant PII & Privacy Overrides**: `core/privacy.py` and `core/tenancy.py` supporting `privacy_disabled_patterns` and `privacy_ner_labels` per tenant.
+- [x] **Resume-based Single-pass Activity Log Scanning**: `core/activity.py` tracking byte offset and line carry across tail reads, eliminating redundant I/O on zero-match queries.
+- [x] **Live LLM Provider Validation Test Harness**: `scripts/exercise_live_providers.py` standalone diagnostic tool.
+
 ---
 
 ## Explicitly deferred (280–400h tier)
 
-Not started, not scheduled — revisit only once Phases 1–8 are solid and
-benchmarked: full MCP support, RBAC, API key management UI, organization
-management, advanced quotas/cost controls, model routing/fallback,
-distributed tracing, attack-campaign detection, compliance reporting,
-policy simulation/versioning at enterprise depth, automated red-team
-evaluation, proper frontend/backend separation as a shippable product.
+Not started, not scheduled — revisit only once Phases 1–8 and current feature sets are production benchmarked:
+RBAC & API key management UI, organization management (hierarchical tenants), advanced cost controls/spend forecasting, dynamic latency-based model routing, distributed tracing (OpenTelemetry W3C propagation), attack-campaign detection & IP/tenant clustering, compliance reporting (SOC2/ISO27001 export), automated red-team evaluation harness, proper frontend/backend separation as a shippable product.
+
