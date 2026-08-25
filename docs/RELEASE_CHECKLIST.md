@@ -21,9 +21,10 @@ in under a minute.
 - [x] Every request schema rejects unrecognized fields (`extra="forbid"`)
       — closes the exact privilege-escalation vector (`{"role": "INTERNAL"}`)
       this project's original auth vulnerability was.
-- [ ] Automated dependency-vulnerability scanning in CI — **not yet wired
-      up** (`docs/OWASP_COMPLIANCE.md`'s LLM03 entry). Acceptable to ship
-      without it only if this is a known, tracked gap, not silently absent.
+- [x] Automated dependency-vulnerability scanning in CI —
+      `.github/workflows/dependency-audit.yml` runs `pip-audit` against
+      `requirements.txt`, `requirements-api.txt`, and
+      `requirements-ci.txt` on push/PR to `main` and weekly on Mondays.
 - [x] OWASP API Security Top 10 and OWASP LLM Top 10 mapped with cited
       evidence — `docs/OWASP_COMPLIANCE.md`.
 
@@ -52,11 +53,11 @@ in under a minute.
       both in unit tests (`tests/test_request_limits.py`) and live
       (the p95/p99 assess latency in the perf table is real cold-path
       time, under the 30s deadline).
-- [ ] Multi-worker / distributed rate-limiting behavior — **known
-      limitation, not yet built** (`docs/THREAT_MODEL.md` §8). If this
-      release runs more than one worker process, rate limits and token
-      quotas are per-process, not aggregate. Confirm this is acceptable
-      for the target deployment before shipping multi-worker.
+- [x] Multi-worker / distributed rate-limiting behavior — release
+      decision documented in `docs/DEPLOYMENT_RUNBOOK.md`: this release is
+      approved for one API worker process per deployed instance. More than
+      one worker/replica requires the Redis-backed distributed limiter and
+      quota accounting first (`docs/THREAT_MODEL.md` §8).
 
 ## Operational readiness
 
@@ -73,12 +74,10 @@ in under a minute.
       directly, never calls the side-effecting `is_open()`).
 - [x] CI gate blocks merge on lint or test failure —
       `.github/workflows/ci.yml`, triggers on push/PR to `main`.
-- [ ] Rollback plan — deploying a bad policy is covered
-      (`core/policy_versioning.py`'s snapshot-before-overwrite, itself
-      snapshotted before a rollback). Rolling back a bad **application**
-      release (not a policy change) relies on standard container/image
-      versioning at the deployment layer, outside this repo's scope —
-      confirm the deployment target has this before release.
+- [x] Rollback plan — policy rollback is covered by
+      `core/policy_versioning.py`; application rollback is documented in
+      `docs/DEPLOYMENT_RUNBOOK.md` and requires immutable container image
+      tags plus redeploying the previous known-good tag.
 
 ## Sign-off
 
@@ -89,7 +88,6 @@ in under a minute.
 | Release manager | The Operational readiness section above, the known-limitations list is acceptable for this release's target deployment shape | Pending human sign-off |
 
 This document does not self-certify a release as ready — it is the
-checklist a human signs against. Every unchecked box above is either a
-real, stated gap (fix or explicitly accept before shipping) or a decision
-that depends on the specific deployment target (multi-worker, rollback
-tooling) that only the release manager can make.
+checklist a human signs against. The remaining Pending statuses in the
+sign-off table require the named humans to confirm the cited evidence and
+deployment runbook before release.
