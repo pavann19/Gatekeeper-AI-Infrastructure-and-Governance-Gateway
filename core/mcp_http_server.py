@@ -34,7 +34,7 @@ from core.auth import auth_required, resolve_principal
 from core.config import settings
 from core.logger import get_logger
 from core.mcp_server import handle_request
-from core.rate_limit import assess_rate_limiter, bucket_parameters
+from core.rate_limit import bucket_parameters, mcp_rate_limiter
 from core.tenancy import resolve_tenant
 from core.tools import ToolRegistry, get_tool_registry
 
@@ -107,30 +107,49 @@ def create_mcp_app(registry: Optional[ToolRegistry] = None) -> FastAPI:
             },
         )
 
-    async def _read_and_validate_body(request: Request) -> Dict[str, Any]:
-        """Reads raw body, enforces 100KB size cap, and parses JSON object."""
+    def _jsonrpc_error(status_code: int, code: int, message: str) -> JSONResponse:
+        """
+        A malformed/oversized request never reached a parseable JSON-RPC
+        message, so there is no request `id` to echo back -- per JSON-RPC
+        2.0 §5.1, `id` is `null` in that case, not omitted. The body itself
+        MUST be the JSON-RPC error envelope at the top level (not FastAPI's
+        default `{"detail": ...}` shape wrapped inside it): a spec-compliant
+        MCP client parses every response as JSON-RPC first and would not
+        find `error.code`/`error.message` in `{"detail": "..."}`. This is a
+        real regression this function was added to fix -- the previous pass
+        introduced 100KB size bounding and JSON validation using a plain
+        HTTPException, which is exactly the shape a strict client can't read.
+        """
+        return JSONResponse(
+            status_code=status_code,
+            content={"jsonrpc": "2.0", "id": None, "error": {"code": code, "message": message}},
+        )
+
+    async def _read_and_validate_body(request: Request):
+        """
+        Reads raw body, enforces the 100KB size cap, and parses a JSON
+        object. Returns either (body, None) on success or (None, error_response)
+        on failure -- the caller must check for the error response and
+        return it as-is, never re-wrap it, so the JSON-RPC envelope above
+        reaches the client unmodified.
+        """
         raw_body = await request.body()
         if len(raw_body) > MAX_PAYLOAD_BYTES:
-            raise HTTPException(
-                status_code=413,
-                detail=f"Request payload exceeds maximum size of {MAX_PAYLOAD_BYTES} bytes.",
+            return None, _jsonrpc_error(
+                413, -32000, f"Request payload exceeds maximum size of {MAX_PAYLOAD_BYTES} bytes."
             )
 
         try:
             body = json.loads(raw_body.decode("utf-8"))
         except Exception:
-            raise HTTPException(
-                status_code=400,
-                detail="Parse error: malformed JSON payload.",
-            )
+            return None, _jsonrpc_error(400, -32700, "Parse error: malformed JSON payload.")
 
         if not isinstance(body, dict):
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid request: top-level JSON-RPC payload must be a JSON object.",
+            return None, _jsonrpc_error(
+                400, -32600, "Invalid Request: top-level JSON-RPC payload must be a JSON object."
             )
 
-        return body
+        return body, None
 
     async def _dispatch_rpc(request: Request, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         # 1. Resolve authentication from Authorization header or X-API-Key
@@ -166,7 +185,7 @@ def create_mcp_app(registry: Optional[ToolRegistry] = None) -> FastAPI:
                 rpm = settings.RATE_LIMIT_ANONYMOUS_RPM
 
             capacity, refill = bucket_parameters(rpm, settings.RATE_LIMIT_BURST_SECONDS)
-            allowed, retry_after = assess_rate_limiter.check(identity, capacity, refill)
+            allowed, retry_after = mcp_rate_limiter.check(identity, capacity, refill)
             if not allowed:
                 headers = {"Retry-After": str(int(retry_after) + 1)}
                 raise HTTPException(
@@ -193,7 +212,9 @@ def create_mcp_app(registry: Optional[ToolRegistry] = None) -> FastAPI:
         - If sessionId is provided but unknown/expired: returns HTTP 404.
         - If sessionId is omitted: returns the JSON-RPC response directly (HTTP 200).
         """
-        body = await _read_and_validate_body(request)
+        body, error_response = await _read_and_validate_body(request)
+        if error_response is not None:
+            return error_response
 
         if sessionId is not None:
             queue = sessions.get(sessionId)
@@ -217,7 +238,9 @@ def create_mcp_app(registry: Optional[ToolRegistry] = None) -> FastAPI:
     @app.post("/mcp/jsonrpc")
     async def mcp_jsonrpc(request: Request):
         """Direct stateless JSON-RPC POST endpoint."""
-        body = await _read_and_validate_body(request)
+        body, error_response = await _read_and_validate_body(request)
+        if error_response is not None:
+            return error_response
         response = await _dispatch_rpc(request, body)
         if response is None:
             return JSONResponse(status_code=202, content={})

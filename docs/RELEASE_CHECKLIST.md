@@ -27,10 +27,20 @@ in under a minute.
       `requirements-ci.txt` on push/PR to `main` and weekly on Mondays.
 - [x] OWASP API Security Top 10 and OWASP LLM Top 10 mapped with cited
       evidence — `docs/OWASP_COMPLIANCE.md`.
+- [x] The new MCP HTTP/SSE transport (`core/mcp_http_server.py`) received
+      the same STRIDE-level review as every other endpoint before merge,
+      not a pass on trust — `docs/THREAT_MODEL.md` §6.2. Found and fixed
+      3 real issues in review: the SSE session-relay queue was dead code
+      (any `sessionId` was accepted, responses never actually reached the
+      SSE stream), it shared a rate-limit bucket with the main API
+      (a real cross-traffic-class starvation risk once Redis-backed), and
+      its parse/size error responses weren't valid JSON-RPC. All 3
+      verified fixed live against a real running server, not just by
+      re-reading the diff.
 
 ## Correctness
 
-- [x] Full test suite passes — `python -m pytest tests/` → 1522 passed,
+- [x] Full test suite passes — `python -m pytest tests/` → 1580 passed,
       0 failed (re-verify this exact count before release; it will have
       grown).
 - [x] Lint clean on the CI-gated scope — `ruff check core/ api/` → All
@@ -55,9 +65,17 @@ in under a minute.
       time, under the 30s deadline).
 - [x] Multi-worker / distributed rate-limiting behavior — release
       decision documented in `docs/DEPLOYMENT_RUNBOOK.md`: this release is
-      approved for one API worker process per deployed instance. More than
-      one worker/replica requires the Redis-backed distributed limiter and
-      quota accounting first (`docs/THREAT_MODEL.md` §8).
+      approved for one API worker process per deployed instance without
+      Redis configured. `REDIS_URL` now enables a distributed rate
+      limiter and token quota tracker (`core/rate_limit.py::
+      RedisRateLimiter`, `core/token_quota.py::RedisTokenQuotaTracker`)
+      for genuine multi-worker/multi-replica deployments.
+- [ ] Redis-backed rate limiting/quotas have NOT been verified against a
+      real live Redis server under real concurrent multi-process access —
+      only against the real `redis-py` client API surface and a stateful
+      Lua-equivalent test simulation (`docs/THREAT_MODEL.md` §8). Run
+      this verification before approving a genuinely multi-worker,
+      Redis-backed deployment.
 
 ## Operational readiness
 

@@ -362,3 +362,15 @@ def bucket_parameters(requests_per_minute: float, burst_seconds: float) -> tuple
 # Module-level singleton, shared across all requests in this process — which
 # is distributed if REDIS_URL is set, and process-local if not.
 assess_rate_limiter = build_rate_limiter("assess")
+
+# A SEPARATE singleton for the MCP HTTP/SSE transport (core/mcp_http_server.py)
+# -- a distinct process from the main API (its own uvicorn instance, its own
+# port), so sharing `assess_rate_limiter`'s bucket namespace would be a real
+# bug once REDIS_URL is set: the whole point of the Redis backend is to unify
+# state across independent PROCESSES that are meant to share one budget (the
+# main API's own replicas), not to unify state across independent SERVICES
+# with a caller who happens to reuse the same API key on both. Same reasoning
+# `_gateway_pool` being separate from `_assess_pool` in api/main.py already
+# documents for an analogous case -- the wrong coupling between traffic
+# classes, not just a wrong coupling between requests.
+mcp_rate_limiter = build_rate_limiter("mcp")

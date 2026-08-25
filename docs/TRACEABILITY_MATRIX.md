@@ -37,12 +37,15 @@ register), `docs/OWASP_COMPLIANCE.md` (standards mapping), `docs/ROADMAP_V2.md`
 | Distributed daily token quota tracking across instances | `core/token_quota.py::RedisTokenQuotaTracker` (atomic Lua script + midnight TTL) | `tests/test_redis_token_quota.py` (11 tests: Lua increment, midnight rollover, fallback) | ✅ |
 | Per-tenant PII redaction and custom NER entity labeling | `core/privacy.py`, `core/tenancy.py` (`privacy_disabled_patterns`, `privacy_ner_labels`) | `tests/test_tenant_privacy.py` (4 tests: regex bypass override, custom NER labels) | ✅ |
 | Single-pass reverse tail scanning without duplicate I/O on zero-match queries | `core/activity.py::_tail_raw_lines` (tracks `pos` and `carry` state) | `tests/test_activity.py` (boundary split tests, manual resume contract test) | ✅ |
-| Networked MCP HTTP/SSE transport with per-request authentication and session relay | `core/mcp_http_server.py` (`/mcp/sse`, `/mcp/messages`, `/mcp/jsonrpc`) | `tests/test_mcp_http_server.py` (14 tests: auth, session queue relay, 100KB size cap, 429 rate limit) | ✅ |
+| Networked MCP HTTP/SSE transport with per-request authentication and session relay | `core/mcp_http_server.py` (`/mcp/sse`, `/mcp/messages`, `/mcp/jsonrpc`) | `tests/test_mcp_http_server.py` (15 tests: auth, session queue relay, 100KB size cap, 429 rate limit, rate-limiter isolation) | ✅ (2 real gaps found in review and fixed — see below) |
+| MCP HTTP session-relayed responses must actually reach the SSE stream, not just return 202 | `core/mcp_http_server.py`'s `queue.put()` on dispatch | `tests/test_mcp_http_server.py::test_mcp_sse_session_relay` (queue-level) plus a live end-to-end run against a real running server (real handshake → real session → real POST → real SSE read) | ✅ (was dead code — session queue created but never written to or validated — fixed in review) |
+| MCP HTTP transport must not share a rate-limit budget with the main API for the same key | `core/rate_limit.py::mcp_rate_limiter` (distinct singleton, distinct Redis key namespace from `assess_rate_limiter`) | `tests/test_mcp_http_server.py::test_mcp_rate_limiter_is_isolated_from_the_main_api_limiter` | ✅ (found and fixed in review — originally shared `assess_rate_limiter`, a wrong coupling that would starve budgets across traffic classes once Redis-backed) |
+| MCP HTTP transport's error responses for malformed/oversized requests must be valid JSON-RPC 2.0 | `core/mcp_http_server.py::_jsonrpc_error` | `tests/test_mcp_http_server.py::test_mcp_malformed_json_returns_400`, `test_mcp_non_dict_json_returns_400`, `test_mcp_oversized_payload_returns_413` | ✅ (found and fixed in review — a first pass returned FastAPI's generic `{"detail": ...}` shape instead of the JSON-RPC envelope) |
 | Outbound live LLM provider validation and latency diagnostics | `scripts/exercise_live_providers.py` (`exercise_provider`) | `tests/test_exercise_live_providers.py` (3 tests: response parsing, exception handling) | ✅ |
 
 ## Coverage summary
 
-- **1573 automated tests** as of this session (1522 at session start).
+- **1580 automated tests** as of this session (1522 at session start).
 - **8 real mutants** manually tested against security-critical functions:
   6 killed cleanly, 1 revealed and closed a real gap, 1 correctly deferred
   to existing coverage by the safety classifier.
@@ -50,8 +53,18 @@ register), `docs/OWASP_COMPLIANCE.md` (standards mapping), `docs/ROADMAP_V2.md`
   fixed in the process, not counted as pre-existing passes).
 - **4/4 real load-test runs** with zero 5xx/connection errors (1 real
   concurrency bug found and fixed in the process).
-- **5 real bugs found and fixed this session** that no prior test had
+- **8 real bugs found and fixed this session** that no prior test had
   caught: PII-redaction-poisons-detectors, output-hallucination-check-
   wrong-corpus, `http.get` never registered, startup tool-registration
-  unreachable when warm-up disabled, KeyStore concurrency race.
+  unreachable when warm-up disabled, KeyStore concurrency race, MCP HTTP
+  transport's SSE session relay being dead code, MCP HTTP transport
+  sharing a rate-limit bucket with the main API, MCP HTTP transport's
+  parse/size errors not being valid JSON-RPC.
+- **Review discipline note**: the last 3 bugs above were found by
+  independently re-verifying another contributor's "done" work against
+  this project's own bar (live end-to-end testing, not just reading the
+  diff) rather than trusting its own tests and docs at face value — the
+  first pass's tests for the MCP session relay asserted only that a 202
+  came back, never that the queue was actually written to or that a real
+  SSE client would ever see the response.
 
