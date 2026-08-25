@@ -290,40 +290,53 @@ async def warm_models() -> None:
     already reports per-dependency status. Refusing to boot would turn a
     degraded gateway into no gateway.
     """
+    # BUG FIX (Phase 8, live pentest): tool registration below used to sit
+    # after an early `return` gated on WARM_MODELS_ON_STARTUP, so a
+    # deployment running with model warm-up disabled (a legitimate,
+    # documented configuration -- e.g. fast dev startup) silently never
+    # registered its demo/real tools either, even with REGISTER_DEMO_TOOLS
+    # or REGISTER_REAL_TOOLS explicitly set. Tool registration is an
+    # orthogonal concern to model warm-up and must run regardless.
     if not settings.WARM_MODELS_ON_STARTUP:
         logger.info("Model warm-up disabled; models will load on first request.")
-        return
+    else:
+        def _warm():
+            from core.embeddings import _get_model
+            from core.fusion import warm_up
+            from core.threat_centroid import _get_malicious_centroid
 
-    def _warm():
-        from core.embeddings import _get_model
-        from core.fusion import warm_up
-        from core.threat_centroid import _get_malicious_centroid
+            _get_model()                 # the sentence encoder, used by every stage
+            _get_malicious_centroid()    # anchor centroid; embeds 15 anchors on
+                                         # first use, which measured ~7s of the
+                                         # first request even after the detectors
+                                         # were already warm
+            return warm_up()             # policy + the live fusion detectors
 
-        _get_model()                 # the sentence encoder, used by every stage
-        _get_malicious_centroid()    # anchor centroid; embeds 15 anchors on
-                                     # first use, which measured ~7s of the
-                                     # first request even after the detectors
-                                     # were already warm
-        return warm_up()             # policy + the live fusion detectors
-
-    started = time.perf_counter()
-    try:
-        warmed, detail = await asyncio.get_running_loop().run_in_executor(
-            _assess_pool, _warm
-        )
-        elapsed = time.perf_counter() - started
-        if warmed:
-            logger.info(f"Model warm-up complete in {elapsed:.1f}s — {detail}")
-        else:
-            logger.warning(f"Model warm-up incomplete after {elapsed:.1f}s — {detail}")
-    except Exception:
-        logger.exception("Model warm-up failed; models will load on first request.")
+        started = time.perf_counter()
+        try:
+            warmed, detail = await asyncio.get_running_loop().run_in_executor(
+                _assess_pool, _warm
+            )
+            elapsed = time.perf_counter() - started
+            if warmed:
+                logger.info(f"Model warm-up complete in {elapsed:.1f}s — {detail}")
+            else:
+                logger.warning(f"Model warm-up incomplete after {elapsed:.1f}s — {detail}")
+        except Exception:
+            logger.exception("Model warm-up failed; models will load on first request.")
 
     if settings.REGISTER_DEMO_TOOLS:
         from core.demo_tools import register_demo_tools
         register_demo_tools()
         logger.info("Demo tools registered (REGISTER_DEMO_TOOLS=true) — "
                    "POST /api/v1/tools/call can reach demo.* tools.")
+
+    if settings.REGISTER_REAL_TOOLS:
+        from core.real_tools import register_real_tools
+        register_real_tools()
+        logger.info("Real tools registered (REGISTER_REAL_TOOLS=true) — "
+                   "POST /api/v1/tools/call can reach http.get, subject to "
+                   "TOOL_HTTP_GET_ALLOWED_DOMAINS.")
 
 
 @app.middleware("http")
