@@ -8,9 +8,29 @@ from fastapi.testclient import TestClient
 from core.auth import Principal
 from core.demo_tools import register_demo_tools
 from core.mcp_http_server import MAX_PAYLOAD_BYTES, create_mcp_app
-from core.rate_limit import assess_rate_limiter
+from core.rate_limit import mcp_rate_limiter
 from core.tenancy import TenantConfig
 from core.tools import ToolRegistry
+
+
+@pytest.fixture(autouse=True)
+def _reset_mcp_rate_limiter():
+    """
+    Every test in this file hits the MCP server as the same unauthenticated
+    identity (`ip:testclient`, since none set an Authorization header) against
+    the real, real-time token bucket `mcp_rate_limiter` -- a module-level
+    singleton that persists across tests, same as `assess_rate_limiter` does
+    for api/main.py's own suite (see tests/test_rate_limit.py's `.reset()`
+    usage for the established precedent). Without resetting it, whether
+    later tests in this file pass depends on exact wall-clock timing between
+    test runs (how much the bucket refilled between checks), not on the
+    behaviour actually under test -- confirmed by this file passing or
+    failing nondeterministically depending on run-to-run timing before this
+    fixture was added.
+    """
+    mcp_rate_limiter.reset()
+    yield
+    mcp_rate_limiter.reset()
 
 
 @pytest.fixture
@@ -119,7 +139,11 @@ def test_mcp_oversized_payload_returns_413(mcp_client):
         headers={"Content-Type": "application/json"},
     )
     assert res.status_code == 413
-    assert "exceeds maximum size" in res.json()["detail"]
+    body = res.json()
+    assert body["jsonrpc"] == "2.0"
+    assert body["id"] is None
+    assert body["error"]["code"] == -32000
+    assert "exceeds maximum size" in body["error"]["message"]
 
 
 def test_mcp_malformed_json_returns_400(mcp_client):
@@ -129,7 +153,11 @@ def test_mcp_malformed_json_returns_400(mcp_client):
         headers={"Content-Type": "application/json"},
     )
     assert res.status_code == 400
-    assert "malformed JSON" in res.json()["detail"]
+    body = res.json()
+    assert body["jsonrpc"] == "2.0"
+    assert body["id"] is None
+    assert body["error"]["code"] == -32700
+    assert "malformed JSON" in body["error"]["message"]
 
 
 def test_mcp_non_dict_json_returns_400(mcp_client):
@@ -138,7 +166,11 @@ def test_mcp_non_dict_json_returns_400(mcp_client):
         json=[1, 2, 3],
     )
     assert res.status_code == 400
-    assert "must be a JSON object" in res.json()["detail"]
+    body = res.json()
+    assert body["jsonrpc"] == "2.0"
+    assert body["id"] is None
+    assert body["error"]["code"] == -32600
+    assert "must be a JSON object" in body["error"]["message"]
 
 
 def test_mcp_suspended_tenant_returns_403(mcp_client, monkeypatch):
@@ -179,10 +211,31 @@ def test_mcp_auth_required_returns_401(mcp_client, monkeypatch):
 
 def test_mcp_rate_limit_exceeded_returns_429(mcp_client, monkeypatch):
     # Force rate limiter check to reject
-    monkeypatch.setattr(assess_rate_limiter, "check", lambda key, cap, ref: (False, 15.0))
+    monkeypatch.setattr(mcp_rate_limiter, "check", lambda key, cap, ref: (False, 15.0))
 
     msg = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
     res = mcp_client.post("/mcp/jsonrpc", json=msg)
     assert res.status_code == 429
     assert "Rate limit exceeded" in res.json()["detail"]
     assert res.headers.get("Retry-After") == "16"
+
+
+def test_mcp_rate_limiter_is_isolated_from_the_main_api_limiter():
+    """
+    REGRESSION: the MCP HTTP server originally imported and shared
+    api/main.py's `assess_rate_limiter` singleton, keyed identically by
+    `key:{key_id}`. In the Redis-backed configuration -- the entire point
+    of the distributed rate limiter -- that would mean a caller's MCP
+    traffic and their main-API traffic drain the SAME budget, exactly the
+    "wrong coupling between traffic classes" api/main.py's own
+    `_gateway_pool`/`_assess_pool` separation already guards against for
+    an analogous reason. Fixed by giving the MCP server its own
+    `mcp_rate_limiter` singleton (core/rate_limit.py). This test pins
+    that they are genuinely different objects, not just differently named
+    references to the same one.
+    """
+    from core.rate_limit import assess_rate_limiter
+
+    assert mcp_rate_limiter is not assess_rate_limiter
+    assert mcp_rate_limiter.name == "mcp"
+    assert assess_rate_limiter.name == "assess"
