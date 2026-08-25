@@ -1,5 +1,5 @@
 """
-Per-caller request rate limiting for the expensive assessment endpoints.
+Per-caller request rate limiting for the expensive assessment and gateway endpoints.
 
 WHY THIS EXISTS
 ---------------
@@ -39,22 +39,20 @@ the rightmost value is the address that proxy actually observed, whereas the
 leftmost is whatever the client put there. This assumes exactly one trusted
 hop; deployments with a deeper chain must adjust it deliberately.
 
-DECLARED LIMITATIONS
---------------------
-1. Process-local, like core/circuit_breaker.py. Two replicas each enforce the
-   configured rate, so the effective global limit is N x the configured value.
-   A distributed limiter needs shared state — the Redis instance
-   core/cache_backend.py already introduces is the natural home, and this
-   module's `RateLimiter` interface is deliberately narrow enough to swap.
-2. The bucket registry is LRU-capped (`RATE_LIMIT_MAX_TRACKED`) so that
-   rotating identities cannot exhaust memory. The tradeoff is real and stated
-   rather than hidden: a caller who can cycle through more than that many
-   distinct identities can evict their own bucket and reset their budget.
-   Bounded memory was judged the more important property, since memory
-   exhaustion takes down every tenant while budget evasion degrades one limit.
+DISTRIBUTED VS LOCAL BACKENDS
+-----------------------------
+1. Redis-backed (`RedisRateLimiter`): Shared state across all Gatekeeper replicas.
+   Executes an atomic Lua script for token-bucket refill and spend. Uses Redis
+   server time (`redis.call('TIME')`) so small host clock differences between
+   replicas never cause inconsistent refills. Expired keys are automatically
+   evicted by Redis TTL, avoiding memory leaks.
+2. Local fallback (`LocalRateLimiter` / `RateLimiter`): Process-local in-memory
+   token bucket with LRU cap (`RATE_LIMIT_MAX_TRACKED`). Used when REDIS_URL
+   is unset or when Redis experiences runtime connection failures.
 """
 from __future__ import annotations
 
+import os
 import threading
 import time
 from collections import OrderedDict
@@ -66,7 +64,7 @@ logger = get_logger(__name__)
 
 class _Bucket:
     """One caller's token bucket. Not thread-safe on its own; the owning
-    RateLimiter holds a lock around every mutation."""
+    LocalRateLimiter holds a lock around every mutation."""
 
     __slots__ = ("tokens", "last_refill")
 
@@ -75,9 +73,37 @@ class _Bucket:
         self.last_refill = now
 
 
-class RateLimiter:
+class RateLimiterBackend:
+    """Interface: token-bucket check and state management."""
+
+    def check(
+        self,
+        identity: str,
+        capacity: float,
+        refill_per_second: float,
+        now: float | None = None,
+    ) -> tuple[bool, float]:
+        """
+        Attempts to spend one token for `identity`.
+
+        Returns (allowed, retry_after_seconds). `retry_after_seconds` is 0.0
+        when allowed, and otherwise the time until one token is available —
+        which is what a caller should put in a `Retry-After` header.
+        """
+        raise NotImplementedError
+
+    def reset(self) -> None:
+        """Test/ops hook: forget every bucket."""
+        raise NotImplementedError
+
+    def __len__(self) -> int:
+        """Return the number of tracked identities/keys."""
+        raise NotImplementedError
+
+
+class LocalRateLimiter(RateLimiterBackend):
     """
-    Token-bucket limiter keyed by an opaque identity string.
+    Process-local token-bucket limiter keyed by an opaque identity string.
 
     `capacity` is the burst size; `refill_per_second` is the sustained rate.
     Both are supplied per-call rather than fixed at construction, because
@@ -89,15 +115,17 @@ class RateLimiter:
         self.name = name
         self.max_tracked = max_tracked
         self._lock = threading.Lock()
-        self._buckets: "OrderedDict[str, _Bucket]" = OrderedDict()
+        self._buckets: OrderedDict[str, _Bucket] = OrderedDict()
 
-    def check(self, identity: str, capacity: float, refill_per_second: float):
+    def check(
+        self,
+        identity: str,
+        capacity: float,
+        refill_per_second: float,
+        now: float | None = None,
+    ) -> tuple[bool, float]:
         """
         Attempts to spend one token for `identity`.
-
-        Returns (allowed, retry_after_seconds). `retry_after_seconds` is 0.0
-        when allowed, and otherwise the time until one token is available —
-        which is what a caller should put in a `Retry-After` header.
 
         A non-positive rate disables limiting for that caller rather than
         blocking everything, so a misconfiguration degrades to "no limit"
@@ -107,9 +135,10 @@ class RateLimiter:
         if refill_per_second <= 0 or capacity <= 0:
             return True, 0.0
 
-        # time.monotonic, not time.time: a wall-clock adjustment (NTP step,
-        # DST, manual change) must not hand out free tokens or freeze a bucket.
-        now = time.monotonic()
+        if now is None:
+            # time.monotonic, not time.time: a wall-clock adjustment (NTP step,
+            # DST, manual change) must not hand out free tokens or freeze a bucket.
+            now = time.monotonic()
 
         with self._lock:
             bucket = self._buckets.get(identity)
@@ -131,7 +160,7 @@ class RateLimiter:
             deficit = 1.0 - bucket.tokens
             return False, deficit / refill_per_second
 
-    def _evict_if_needed(self):
+    def _evict_if_needed(self) -> None:
         """Caller must hold the lock. Drops least-recently-used buckets."""
         while len(self._buckets) > self.max_tracked:
             evicted, _ = self._buckets.popitem(last=False)
@@ -140,17 +169,183 @@ class RateLimiter:
                 f"{evicted!r} (tracking cap {self.max_tracked})."
             )
 
-    def reset(self):
+    def reset(self) -> None:
         """Test/ops hook: forget every bucket."""
         with self._lock:
             self._buckets.clear()
 
-    def __len__(self):
+    def __len__(self) -> int:
         with self._lock:
             return len(self._buckets)
 
 
-def bucket_parameters(requests_per_minute: float, burst_seconds: float):
+# Backwards compatibility alias:
+RateLimiter = LocalRateLimiter
+
+
+LUA_TOKEN_BUCKET = """
+local key = KEYS[1]
+local capacity = tonumber(ARGV[1])
+local refill_per_second = tonumber(ARGV[2])
+
+if not capacity or not refill_per_second or capacity <= 0 or refill_per_second <= 0 then
+    return {1, "0.0"}
+end
+
+local now
+if ARGV[3] and ARGV[3] ~= "" and tonumber(ARGV[3]) and tonumber(ARGV[3]) > 0 then
+    now = tonumber(ARGV[3])
+else
+    local t = redis.call('TIME')
+    now = tonumber(t[1]) + (tonumber(t[2]) / 1000000.0)
+end
+
+local data = redis.call('HMGET', key, 'tokens', 'last_refill')
+local tokens = tonumber(data[1])
+local last_refill = tonumber(data[2])
+
+if not tokens or not last_refill then
+    tokens = capacity
+    last_refill = now
+else
+    local elapsed = now - last_refill
+    if elapsed > 0 then
+        tokens = math.min(capacity, tokens + (elapsed * refill_per_second))
+        last_refill = now
+    end
+end
+
+local allowed = 0
+local retry_after = 0.0
+
+if tokens >= 1.0 then
+    tokens = tokens - 1.0
+    allowed = 1
+    retry_after = 0.0
+else
+    allowed = 0
+    local deficit = 1.0 - tokens
+    retry_after = deficit / refill_per_second
+end
+
+redis.call('HSET', key, 'tokens', tostring(tokens), 'last_refill', tostring(last_refill))
+
+-- Auto-expire key after it is fully refilled + safety buffer to avoid leaking Redis memory
+local fill_time = math.ceil(capacity / refill_per_second)
+local ttl = math.max(3600, fill_time * 2)
+redis.call('EXPIRE', key, ttl)
+
+return {allowed, tostring(retry_after)}
+"""
+
+
+class RedisRateLimiter(RateLimiterBackend):
+    """
+    Shared distributed token-bucket limiter backed by Redis.
+    Uses an atomic Lua script to synchronize tokens and timestamps across
+    all Gatekeeper replicas. Falls back cleanly to an internal LocalRateLimiter
+    if Redis operations encounter runtime errors.
+    """
+
+    KEY_PREFIX = "gatekeeper:ratelimit:"
+
+    def __init__(self, client, name: str, max_tracked: int = 10_000):
+        self._client = client
+        self.name = name
+        self.max_tracked = max_tracked
+        self._local_fallback = LocalRateLimiter(name=name, max_tracked=max_tracked)
+        try:
+            self._script = self._client.register_script(LUA_TOKEN_BUCKET)
+        except Exception:
+            self._script = None
+
+    def _redis_key(self, identity: str) -> str:
+        return f"{self.KEY_PREFIX}{self.name}:{identity}"
+
+    def check(
+        self,
+        identity: str,
+        capacity: float,
+        refill_per_second: float,
+        now: float | None = None,
+    ) -> tuple[bool, float]:
+        if refill_per_second <= 0 or capacity <= 0:
+            return True, 0.0
+
+        key = self._redis_key(identity)
+        now_arg = str(now) if now is not None else ""
+
+        try:
+            if self._script is not None:
+                res = self._script(keys=[key], args=[str(capacity), str(refill_per_second), now_arg])
+            else:
+                res = self._client.eval(LUA_TOKEN_BUCKET, 1, key, str(capacity), str(refill_per_second), now_arg)
+
+            allowed_raw = res[0]
+            retry_after_raw = res[1]
+            if isinstance(retry_after_raw, bytes):
+                retry_after_raw = retry_after_raw.decode("utf-8")
+            allowed = bool(int(allowed_raw))
+            retry_after = float(retry_after_raw)
+            return allowed, retry_after
+        except Exception as e:
+            logger.error(
+                f"Redis rate limiter check failed ({type(e).__name__}: {e}); "
+                f"falling back to local in-memory limiter for identity {identity!r}."
+            )
+            return self._local_fallback.check(identity, capacity, refill_per_second, now=now)
+
+    def reset(self) -> None:
+        """Deletes all keys belonging to this rate limiter instance in Redis and resets local fallback."""
+        self._local_fallback.reset()
+        pattern = f"{self.KEY_PREFIX}{self.name}:*"
+        try:
+            for k in self._client.scan_iter(pattern):
+                self._client.delete(k)
+        except Exception as e:
+            logger.error(f"Redis rate limiter reset failed ({type(e).__name__}: {e}).")
+
+    def __len__(self) -> int:
+        """Returns the count of active keys tracked in Redis for this limiter instance."""
+        pattern = f"{self.KEY_PREFIX}{self.name}:*"
+        try:
+            count = 0
+            for _ in self._client.scan_iter(pattern):
+                count += 1
+            return count
+        except Exception as e:
+            logger.error(f"Redis rate limiter __len__ failed ({type(e).__name__}: {e}).")
+            return len(self._local_fallback)
+
+
+def build_rate_limiter(name: str = "assess", max_tracked: int = 10_000) -> RateLimiterBackend:
+    """
+    Selects Redis if REDIS_URL is set AND reachable, else falls back to the local
+    in-memory limiter. The decision is logged clearly at startup.
+    """
+    redis_url = os.environ.get("REDIS_URL")
+    if not redis_url:
+        logger.info(f"REDIS_URL not set; using local in-memory rate limiter for '{name}' (single-node only).")
+        return LocalRateLimiter(name=name, max_tracked=max_tracked)
+
+    try:
+        import redis  # noqa: PLC0415
+
+        client = redis.from_url(redis_url, socket_connect_timeout=2, socket_timeout=2)
+        client.ping()
+        safe_url = redis_url.split("@")[-1]
+        logger.info(f"Connected to Redis at {safe_url}; rate limiter '{name}' is now shared across instances.")
+        return RedisRateLimiter(client, name=name, max_tracked=max_tracked)
+    except Exception as e:
+        logger.error(
+            f"REDIS_URL is set but Redis is unreachable ({type(e).__name__}: {e}); "
+            f"falling back to local in-memory rate limiter for '{name}'. Rate limits will "
+            f"NOT be shared across gateway instances until this is fixed."
+        )
+        return LocalRateLimiter(name=name, max_tracked=max_tracked)
+
+
+def bucket_parameters(requests_per_minute: float, burst_seconds: float) -> tuple[float, float]:
     """
     Converts a human-facing "N requests per minute" limit into the
     (capacity, refill_per_second) pair the bucket actually needs.
@@ -165,5 +360,5 @@ def bucket_parameters(requests_per_minute: float, burst_seconds: float):
 
 
 # Module-level singleton, shared across all requests in this process — which
-# is the entire point, exactly as with core/circuit_breaker.py's breakers.
-assess_rate_limiter = RateLimiter("assess")
+# is distributed if REDIS_URL is set, and process-local if not.
+assess_rate_limiter = build_rate_limiter("assess")

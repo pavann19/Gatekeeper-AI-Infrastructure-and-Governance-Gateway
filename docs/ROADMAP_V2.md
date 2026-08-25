@@ -1047,6 +1047,16 @@ the end.
       threat-model writeup remains open if it's wanted as its own
       deliverable.
       814 passing overall (up from 810).
+- [x] Redis-backed distributed rate limiter -- done 2026-08-25, see
+      `core/rate_limit.py::RedisRateLimiter` and `build_rate_limiter`.
+      Replaces the single-replica limitation where $N$ replicas each enforced
+      independent local limits. Implemented via an atomic Lua script in Redis
+      executing the token bucket algorithm with Redis server-clock time
+      synchronization (`redis.call('TIME')`), per-key TTL auto-expiry to
+      prevent memory leaks, and transparent fallback to `LocalRateLimiter` on
+      connection faults or runtime Redis errors. Zero breaking changes to
+      existing local single-node workflows. 22 new tests in
+      `tests/test_redis_rate_limit.py`, 1544 passed overall in full suite.
 - [x] Full threat-model document (`docs/THREAT_MODEL.md`) written this
       session -- trust boundaries, capability tiers, STRIDE per subsystem,
       the MCP stdio transport's separate trust model, a findings register
