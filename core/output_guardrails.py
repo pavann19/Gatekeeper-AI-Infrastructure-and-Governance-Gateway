@@ -58,7 +58,7 @@ def check_system_prompt_leakage(response_text: str, system_prompt: str,
     return False
 
 
-def assess_output(response_text: str, system_prompt: str = None) -> tuple:
+def assess_output(response_text: str, system_prompt: str = None, tenant_config=None) -> tuple:
     """
     Evaluates the LLM's response before it is returned to the user.
 
@@ -114,7 +114,7 @@ def assess_output(response_text: str, system_prompt: str = None) -> tuple:
         return "BLOCK", details
 
     # 3. PII — redact and continue.
-    clean_text, redacted_info = redact_pii(response_text)
+    clean_text, redacted_info = redact_pii(response_text, tenant_config=tenant_config)
     if redacted_info.get("pii_found"):
         logger.info(f"Output PII redacted (not blocked). Source: {redacted_info.get('source')}")
         details["pii_leakage"] = True

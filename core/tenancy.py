@@ -73,6 +73,10 @@ class TenantConfig:
     # from None's "no override, inherit the default".
     token_quota_daily: int | None = None
 
+    # Phase 7 / Roadmap V2: optional per-tenant privacy overrides
+    privacy_disabled_patterns: tuple[str, ...] | None = None
+    privacy_ner_labels: tuple[str, ...] | None = None
+
     @property
     def suspended(self) -> bool:
         return self.status == "suspended"
@@ -95,7 +99,9 @@ class TenantStore:
             "display_name": "Acme Corp",
             "status": "active",
             "rate_limit_rpm": 500,
-            "token_quota_daily": 200000
+            "token_quota_daily": 200000,
+            "privacy_disabled_patterns": ["AADHAAR"],
+            "privacy_ner_labels": ["PERSON", "ORG"]
           },
           "acme-trial": {
             "display_name": "Acme Corp (trial)",
@@ -174,12 +180,34 @@ class TenantStore:
                     )
                     quota = None
 
+            priv_disabled = grant.get("privacy_disabled_patterns")
+            if priv_disabled is not None:
+                if isinstance(priv_disabled, list):
+                    priv_disabled = tuple(str(p).upper() for p in priv_disabled if str(p).strip())
+                else:
+                    logger.error(
+                        f"Ignoring privacy_disabled_patterns for tenant {tenant_id!r}: not a list."
+                    )
+                    priv_disabled = None
+
+            priv_ner = grant.get("privacy_ner_labels")
+            if priv_ner is not None:
+                if isinstance(priv_ner, list):
+                    priv_ner = tuple(str(lbl).upper() for lbl in priv_ner if str(lbl).strip())
+                else:
+                    logger.error(
+                        f"Ignoring privacy_ner_labels for tenant {tenant_id!r}: not a list."
+                    )
+                    priv_ner = None
+
             self._tenants[tenant_id] = TenantConfig(
                 tenant_id=tenant_id,
                 display_name=str(grant.get("display_name", tenant_id)),
                 status=status,
                 rate_limit_rpm=rpm,
                 token_quota_daily=quota,
+                privacy_disabled_patterns=priv_disabled,
+                privacy_ner_labels=priv_ner,
             )
 
         logger.info(f"Loaded {len(self._tenants)} tenant(s) from {self.path}")
