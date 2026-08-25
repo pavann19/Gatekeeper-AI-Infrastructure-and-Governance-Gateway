@@ -2,12 +2,14 @@
 Tests for core/mcp_http_server.py (MCP HTTP / SSE transport).
 """
 import asyncio
-import json
 import pytest
 from fastapi.testclient import TestClient
 
+from core.auth import Principal
 from core.demo_tools import register_demo_tools
-from core.mcp_http_server import create_mcp_app
+from core.mcp_http_server import MAX_PAYLOAD_BYTES, create_mcp_app
+from core.rate_limit import assess_rate_limiter
+from core.tenancy import TenantConfig
 from core.tools import ToolRegistry
 
 
@@ -104,3 +106,83 @@ def test_mcp_notification_returns_202(mcp_client):
     msg = {"jsonrpc": "2.0", "method": "notifications/initialized"}
     res = mcp_client.post("/mcp/jsonrpc", json=msg)
     assert res.status_code == 202
+
+
+# --- Security, pentest, and edge-case hardening tests ---
+
+def test_mcp_oversized_payload_returns_413(mcp_client):
+    """Requests exceeding 100KB are rejected with 413 Payload Too Large."""
+    oversized_data = "x" * (MAX_PAYLOAD_BYTES + 1024)
+    res = mcp_client.post(
+        "/mcp/jsonrpc",
+        content=f'{{"jsonrpc": "2.0", "id": 1, "method": "tools/list", "padding": "{oversized_data}"}}',
+        headers={"Content-Type": "application/json"},
+    )
+    assert res.status_code == 413
+    assert "exceeds maximum size" in res.json()["detail"]
+
+
+def test_mcp_malformed_json_returns_400(mcp_client):
+    res = mcp_client.post(
+        "/mcp/jsonrpc",
+        content="{not valid json",
+        headers={"Content-Type": "application/json"},
+    )
+    assert res.status_code == 400
+    assert "malformed JSON" in res.json()["detail"]
+
+
+def test_mcp_non_dict_json_returns_400(mcp_client):
+    res = mcp_client.post(
+        "/mcp/jsonrpc",
+        json=[1, 2, 3],
+    )
+    assert res.status_code == 400
+    assert "must be a JSON object" in res.json()["detail"]
+
+
+def test_mcp_suspended_tenant_returns_403(mcp_client, monkeypatch):
+    from core import mcp_http_server as server_mod
+
+    monkeypatch.setattr(
+        server_mod,
+        "resolve_principal",
+        lambda authorization=None: Principal(authenticated=True, tenant="suspended-corp", key_id="susp-key", capability="GENERAL"),
+    )
+    monkeypatch.setattr(
+        server_mod,
+        "resolve_tenant",
+        lambda tenant: TenantConfig(tenant_id="suspended-corp", status="suspended"),
+    )
+
+    msg = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+    res = mcp_client.post("/mcp/jsonrpc", json=msg)
+    assert res.status_code == 403
+    assert "suspended" in res.json()["detail"]
+
+
+def test_mcp_auth_required_returns_401(mcp_client, monkeypatch):
+    from core import mcp_http_server as server_mod
+
+    monkeypatch.setattr(server_mod, "auth_required", lambda: True)
+    monkeypatch.setattr(
+        server_mod,
+        "resolve_principal",
+        lambda authorization=None: Principal(authenticated=False, tenant="anonymous", key_id="anonymous", capability="GENERAL"),
+    )
+
+    msg = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+    res = mcp_client.post("/mcp/jsonrpc", json=msg)
+    assert res.status_code == 401
+    assert "Authentication required" in res.json()["detail"]
+
+
+def test_mcp_rate_limit_exceeded_returns_429(mcp_client, monkeypatch):
+    # Force rate limiter check to reject
+    monkeypatch.setattr(assess_rate_limiter, "check", lambda key, cap, ref: (False, 15.0))
+
+    msg = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+    res = mcp_client.post("/mcp/jsonrpc", json=msg)
+    assert res.status_code == 429
+    assert "Rate limit exceeded" in res.json()["detail"]
+    assert res.headers.get("Retry-After") == "16"

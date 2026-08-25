@@ -7,13 +7,13 @@ application code but must be true for an application release.
 
 The deployment environment supports both single-worker local execution and multi-replica distributed deployment:
 
-- When `REDIS_URL` is set and reachable, `core/rate_limit.py` automatically initializes `RedisRateLimiter`, synchronizing token-bucket rate limits atomically across all API replicas via Redis server-clock Lua scripts.
-- When `REDIS_URL` is not set (or during transient Redis outages), `core/rate_limit.py` gracefully uses `LocalRateLimiter` (process-local LRU token bucket).
+- When `REDIS_URL` is set and reachable, `core/rate_limit.py` and `core/token_quota.py` automatically initialize `RedisRateLimiter` and `RedisTokenQuotaTracker`, synchronizing token-bucket rate limits and daily token quotas atomically across all API replicas via Redis Lua scripts.
+- When `REDIS_URL` is not set (or during transient Redis outages), `core/rate_limit.py` and `core/token_quota.py` gracefully fall back to `LocalRateLimiter` and `LocalTokenQuotaTracker` (process-local LRU token buckets and daily counters).
 
 Concrete settings for this release:
 
 - In single-node deployments without Redis, run one Uvicorn worker per container so local limits are not split across processes.
-- In multi-worker or multi-replica deployments (such as `docker-compose.yml`), configure `REDIS_URL` (e.g. `REDIS_URL=redis://redis:6379/0`) to enable shared distributed rate limiting across all instances.
+- In multi-worker or multi-replica deployments (such as `docker-compose.yml`), configure `REDIS_URL` (e.g. `REDIS_URL=redis://redis:6379/0`) to enable shared distributed rate limiting and token quotas across all instances.
 
 ## Application Rollback
 

@@ -33,10 +33,16 @@ register), `docs/OWASP_COMPLIANCE.md` (standards mapping), `docs/ROADMAP_V2.md`
 | The generated OpenAPI contract must match real enforced behavior | `api/schemas.py` (source of truth FastAPI generates from) | `tests/test_openapi_contract.py` (4 tests: spec validity, endpoint completeness, size-bound conformance, `additionalProperties: false` conformance) | ✅ (added this session) |
 | Every OWASP API/LLM Top 10 category has a stated, cited status | N/A (mapping document) | `docs/OWASP_COMPLIANCE.md` | ✅ 15 covered, 3 partial (stated honestly), 1 not applicable |
 | Performance under real concurrent load meets a stated SLO | Bounded thread pools, per-tenant rate limits, timeouts | `_evidence/perf_slo_benchmark.json` — real load test, 4 endpoints, zero 5xx/connection errors across all runs | ✅ |
+| Distributed rate limiting across multiple instances | `core/rate_limit.py::RedisRateLimiter` (atomic Lua script + token bucket) | `tests/test_redis_rate_limit.py` (22 tests: Lua script accuracy, TTL expiry, fallback on error) | ✅ |
+| Distributed daily token quota tracking across instances | `core/token_quota.py::RedisTokenQuotaTracker` (atomic Lua script + midnight TTL) | `tests/test_redis_token_quota.py` (11 tests: Lua increment, midnight rollover, fallback) | ✅ |
+| Per-tenant PII redaction and custom NER entity labeling | `core/privacy.py`, `core/tenancy.py` (`privacy_disabled_patterns`, `privacy_ner_labels`) | `tests/test_tenant_privacy.py` (4 tests: regex bypass override, custom NER labels) | ✅ |
+| Single-pass reverse tail scanning without duplicate I/O on zero-match queries | `core/activity.py::_tail_raw_lines` (tracks `pos` and `carry` state) | `tests/test_activity.py` (boundary split tests, manual resume contract test) | ✅ |
+| Networked MCP HTTP/SSE transport with per-request authentication and session relay | `core/mcp_http_server.py` (`/mcp/sse`, `/mcp/messages`, `/mcp/jsonrpc`) | `tests/test_mcp_http_server.py` (14 tests: auth, session queue relay, 100KB size cap, 429 rate limit) | ✅ |
+| Outbound live LLM provider validation and latency diagnostics | `scripts/exercise_live_providers.py` (`exercise_provider`) | `tests/test_exercise_live_providers.py` (3 tests: response parsing, exception handling) | ✅ |
 
 ## Coverage summary
 
-- **1522 automated tests** as of this session (845 at session start).
+- **1573 automated tests** as of this session (1522 at session start).
 - **8 real mutants** manually tested against security-critical functions:
   6 killed cleanly, 1 revealed and closed a real gap, 1 correctly deferred
   to existing coverage by the safety classifier.
@@ -48,3 +54,4 @@ register), `docs/OWASP_COMPLIANCE.md` (standards mapping), `docs/ROADMAP_V2.md`
   caught: PII-redaction-poisons-detectors, output-hallucination-check-
   wrong-corpus, `http.get` never registered, startup tool-registration
   unreachable when warm-up disabled, KeyStore concurrency race.
+
