@@ -20,6 +20,25 @@ DISTRIBUTED VS LOCAL BACKENDS
 2. Local fallback (`LocalTokenQuotaTracker` / `TokenQuotaTracker`): In-memory
    thread-safe tracker with LRU cap. Used when REDIS_URL is unset or when Redis
    is temporarily unavailable.
+
+WHY A DAILY WINDOW, PROCESS-LOCAL AS FALLBACK, MIRRORING core/rate_limit.py
+---------------------------------------------------------------------------
+The local fallback uses the same bounded in-memory strategy as RateLimiter:
+an LRU-capped registry prevents unbounded tenant_id proliferation from becoming
+a memory exhaustion vector (though tenant_id is operator-provisioned via
+core/tenancy.py, this provides defensive bounding). In multi-replica deployments,
+RedisTokenQuotaTracker ensures exact global quota enforcement across all nodes.
+
+UNMETERED PROVIDERS AND USAGE SHAPES
+------------------------------------
+Usage that a provider does not report (Ollama's /api/chat returns none) adds
+zero to the tracked total for that call — there is nothing to count, and
+silently estimating a number would misrepresent actual spend as a metered
+fact. A tenant calling only Ollama will never be quota-limited by this
+module no matter how much they use it; that is a stated gap, not a bug, and
+sits alongside `LLMResponse.usage`'s own "not consumed by anything" note
+in core/llm_providers.py that this module is now the one place that DOES
+consume it.
 """
 from __future__ import annotations
 
@@ -83,6 +102,9 @@ class LocalTokenQuotaTracker(TokenQuotaBackend):
         self._usage: OrderedDict[str, _TenantUsage] = OrderedDict()
 
     def _get_current(self, tenant_id: str) -> _TenantUsage:
+        """Caller must hold the lock. Rolls a tenant's counter over to a
+        fresh day boundary transparently — a request at 00:00:01 UTC must
+        not still be charged against yesterday's total."""
         today = _today_utc()
         usage = self._usage.get(tenant_id)
         if usage is None or usage.day != today:
@@ -94,6 +116,13 @@ class LocalTokenQuotaTracker(TokenQuotaBackend):
         return usage
 
     def would_exceed(self, tenant_id: str, quota: int) -> bool:
+        """
+        True if this tenant has already used up their daily quota — the call
+        being considered has not happened yet and adds nothing here; see
+        `record()` for after a call completes.
+
+        quota <= 0 means unlimited: always returns False.
+        """
         if quota <= 0:
             return False
         with self._lock:
@@ -105,6 +134,8 @@ class LocalTokenQuotaTracker(TokenQuotaBackend):
             return self._get_current(tenant_id).tokens_used
 
     def record(self, tenant_id: str, tokens: int) -> None:
+        """Adds `tokens` to today's running total. A non-positive value is a
+        no-op — nothing to record for a provider that reported no usage."""
         if tokens <= 0:
             return
         with self._lock:
@@ -120,6 +151,7 @@ class LocalTokenQuotaTracker(TokenQuotaBackend):
             )
 
     def reset(self) -> None:
+        """Test/ops hook: forget every tenant's tracked usage."""
         with self._lock:
             self._usage.clear()
 

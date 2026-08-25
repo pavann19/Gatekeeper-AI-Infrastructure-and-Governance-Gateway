@@ -285,3 +285,76 @@ def test_zero_match_case_is_meaningfully_faster_than_the_old_growth_ladder(tmp_p
     # bound; a regression back to the old growth ladder would multiply this
     # several times over on a file this size, not stay within a small margin.
     assert elapsed < 1.0
+
+
+# --- Dedicated regression tests for resume-scan boundary & carry reconstruction ---
+
+def test_resume_scan_boundary_exact_reconstruction_across_tiny_chunks(tmp_path, monkeypatch):
+    """
+    Forces tiny CHUNK_SIZE (19 bytes) and verifies that a multi-pass query
+    resuming from `start_pos` and `carry` reconstructs every single line across
+    chunk boundaries without dropped, corrupted, or duplicated records.
+    """
+    monkeypatch.setattr(activity_mod, "CHUNK_SIZE", 19)
+    p = tmp_path / "audit.jsonl"
+
+    # 50 records of varying sizes: first 5 are tenant 'beta', next 45 are 'acme'
+    records = [_event(tenant="acme", request_id=f"acme-{i}", extra_padding="x" * (i % 7)) for i in range(45)]
+    records += [_event(tenant="beta", request_id=f"beta-{i}") for i in range(5)]
+    _write_jsonl(p, records)
+
+    # Ask for 10 'acme' events: pass 1 reads tail (seeing mostly 'beta'), pass 2 resumes for 'acme'
+    result = get_recent_activity(tenant="acme", limit=10, path=str(p))
+    assert len(result["events"]) == 10
+    expected_ids = [f"acme-{i}" for i in range(44, 34, -1)]
+    assert [e["request_id"] for e in result["events"]] == expected_ids
+
+
+def test_resume_scan_exactness_matches_full_file_reverse_iteration(tmp_path, monkeypatch):
+    """
+    Validates that get_recent_activity with multi-pass resume produces the EXACT same
+    result as reading the entire file backwards in memory.
+    """
+    monkeypatch.setattr(activity_mod, "CHUNK_SIZE", 31)
+    p = tmp_path / "audit.jsonl"
+
+    all_records = []
+    for i in range(150):
+        t = "target" if i % 5 == 0 else f"other-{i % 3}"
+        all_records.append(_event(tenant=t, request_id=str(i), custom_field=f"val_{i}_{'y' * (i % 11)}"))
+    _write_jsonl(p, all_records)
+
+    result = get_recent_activity(tenant="target", limit=20, path=str(p))
+    expected_matches = [r for r in reversed(all_records) if r["tenant"] == "target"][:20]
+
+    assert len(result["events"]) == len(expected_matches)
+    assert [e["request_id"] for e in result["events"]] == [r["request_id"] for r in expected_matches]
+
+
+def test_tail_raw_lines_return_state_contract(tmp_path, monkeypatch):
+    """Directly tests the return_state=True contract and manual resume iteration."""
+    monkeypatch.setattr(activity_mod, "CHUNK_SIZE", 128)
+    p = tmp_path / "audit.jsonl"
+    _write_jsonl(p, [_event(request_id=f"rec-{i}") for i in range(25)])
+
+    # Pass 1: read first 5 lines from EOF
+    lines1, trunc1, exh1, pos1, carry1 = activity_mod._tail_raw_lines(
+        str(p), needed=5, max_bytes=activity_mod.MAX_BYTES_SCANNED, return_state=True
+    )
+    assert len(lines1) == 5
+    assert not exh1
+    assert pos1 > 0
+
+    # Pass 2: resume from pos1 and carry1 to read remaining lines
+    lines2, trunc2, exh2, pos2, carry2 = activity_mod._tail_raw_lines(
+        str(p), needed=float("inf"), max_bytes=activity_mod.MAX_BYTES_SCANNED,
+        start_pos=pos1, carry=carry1, return_state=True
+    )
+    assert exh2
+    assert pos2 == 0
+    assert len(lines1) + len(lines2) == 25
+
+    # Full line sequence must match all 25 records newest-first (24 down to 0)
+    all_reconstructed = [json.loads(line)["request_id"] for line in (lines1 + lines2)]
+    assert all_reconstructed == [f"rec-{i}" for i in range(24, -1, -1)]
+
