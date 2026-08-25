@@ -11,29 +11,19 @@ recorded usage has crossed its quota; the call that pushes a tenant over the
 line is always allowed to complete. This is the same shape every commercial
 LLM API's usage cap actually has, not a limitation specific to this gateway.
 
-WHY A DAILY WINDOW, PROCESS-LOCAL, MIRRORING core/rate_limit.py
------------------------------------------------------------------
-Same declared limitations as RateLimiter: two replicas each enforce the
-configured quota independently, so the effective global quota is N x the
-configured value in a multi-process deployment (fixable later by moving the
-counter to the shared Redis backend core/cache_backend.py already
-introduces, same note core/rate_limit.py makes about itself). The registry
-is LRU-capped for the same reason RateLimiter's bucket dict is: an unbounded
-number of distinct tenant_ids must not be a memory-exhaustion vector, though
-in practice tenant_id is operator-provisioned (core/tenancy.py), not
-caller-chosen, so this is a defensive bound rather than an anticipated attack.
-
-Usage that a provider does not report (Ollama's /api/chat returns none) adds
-zero to the tracked total for that call — there is nothing to count, and
-silently estimating a number would misrepresent actual spend as a metered
-fact. A tenant calling only Ollama will never be quota-limited by this
-module no matter how much they use it; that is a stated gap, not a bug, and
-sits alongside `LLMResponse.usage`'s own "not consumed by anything" note
-in core/llm_providers.py that this module is now the one place that DOES
-consume it.
+DISTRIBUTED VS LOCAL BACKENDS
+-----------------------------
+1. Redis-backed (`RedisTokenQuotaTracker`): Shared state across all replicas.
+   Keys are per-tenant per-UTC-calendar-day (`gatekeeper:quota:<tenant_id>:<YYYY-MM-DD>`).
+   Uses atomic Redis increment operations (`INCRBY` / Lua script) with automatic
+   midnight-rollover TTL.
+2. Local fallback (`LocalTokenQuotaTracker` / `TokenQuotaTracker`): In-memory
+   thread-safe tracker with LRU cap. Used when REDIS_URL is unset or when Redis
+   is temporarily unavailable.
 """
 from __future__ import annotations
 
+import os
 import threading
 from collections import OrderedDict
 from datetime import datetime, timezone
@@ -51,9 +41,26 @@ def seconds_until_utc_midnight() -> float:
     """What a caller should put in a Retry-After header when quota-blocked —
     the window resets at UTC midnight, not "some arbitrary interval later"."""
     from datetime import timedelta
+
     now = datetime.now(timezone.utc)
     next_midnight = datetime.combine(now.date(), datetime.min.time(), tzinfo=timezone.utc) + timedelta(days=1)
     return max(0.0, (next_midnight - now).total_seconds())
+
+
+class TokenQuotaBackend:
+    """Interface for token quota tracking backends."""
+
+    def would_exceed(self, tenant_id: str, quota: int) -> bool:
+        raise NotImplementedError
+
+    def usage_today(self, tenant_id: str) -> int:
+        raise NotImplementedError
+
+    def record(self, tenant_id: str, tokens: int) -> None:
+        raise NotImplementedError
+
+    def reset(self) -> None:
+        raise NotImplementedError
 
 
 class _TenantUsage:
@@ -64,23 +71,18 @@ class _TenantUsage:
         self.tokens_used = 0
 
 
-class TokenQuotaTracker:
+class LocalTokenQuotaTracker(TokenQuotaBackend):
     """
-    Tracks cumulative token usage per tenant per UTC calendar day.
-
-    `max_tracked` bounds memory the same way RateLimiter._buckets does — see
-    module docstring's "defensive bound rather than an anticipated attack".
+    Tracks cumulative token usage per tenant per UTC calendar day in memory.
+    `max_tracked` bounds memory via LRU eviction.
     """
 
     def __init__(self, max_tracked: int = 10_000):
         self.max_tracked = max_tracked
         self._lock = threading.Lock()
-        self._usage: "OrderedDict[str, _TenantUsage]" = OrderedDict()
+        self._usage: OrderedDict[str, _TenantUsage] = OrderedDict()
 
     def _get_current(self, tenant_id: str) -> _TenantUsage:
-        """Caller must hold the lock. Rolls a tenant's counter over to a
-        fresh day boundary transparently — a request at 00:00:01 UTC must
-        not still be charged against yesterday's total."""
         today = _today_utc()
         usage = self._usage.get(tenant_id)
         if usage is None or usage.day != today:
@@ -92,13 +94,6 @@ class TokenQuotaTracker:
         return usage
 
     def would_exceed(self, tenant_id: str, quota: int) -> bool:
-        """
-        True if this tenant has already used up their daily quota — the call
-        being considered has not happened yet and adds nothing here; see
-        `record()` for after a call completes.
-
-        quota <= 0 means unlimited: always returns False.
-        """
         if quota <= 0:
             return False
         with self._lock:
@@ -110,15 +105,13 @@ class TokenQuotaTracker:
             return self._get_current(tenant_id).tokens_used
 
     def record(self, tenant_id: str, tokens: int) -> None:
-        """Adds `tokens` to today's running total. A non-positive value is a
-        no-op — nothing to record for a provider that reported no usage."""
         if tokens <= 0:
             return
         with self._lock:
             usage = self._get_current(tenant_id)
             usage.tokens_used += tokens
 
-    def _evict_if_needed(self):
+    def _evict_if_needed(self) -> None:
         while len(self._usage) > self.max_tracked:
             evicted, _ = self._usage.popitem(last=False)
             logger.debug(
@@ -126,10 +119,131 @@ class TokenQuotaTracker:
                 f"{evicted!r} (tracking cap {self.max_tracked})."
             )
 
-    def reset(self):
-        """Test/ops hook: forget every tenant's tracked usage."""
+    def reset(self) -> None:
         with self._lock:
             self._usage.clear()
+
+
+# Backwards compatibility alias:
+TokenQuotaTracker = LocalTokenQuotaTracker
+
+
+LUA_RECORD_QUOTA = """
+local key = KEYS[1]
+local tokens = tonumber(ARGV[1])
+local ttl = tonumber(ARGV[2])
+
+local current = redis.call('INCRBY', key, tokens)
+if current == tokens then
+    redis.call('EXPIRE', key, ttl)
+end
+return current
+"""
+
+
+class RedisTokenQuotaTracker(TokenQuotaBackend):
+    """
+    Distributed daily token quota tracker backed by Redis.
+    Falls back gracefully to an internal LocalTokenQuotaTracker on Redis errors.
+    """
+
+    KEY_PREFIX = "gatekeeper:quota:"
+
+    def __init__(self, client, max_tracked: int = 10_000):
+        self._client = client
+        self.max_tracked = max_tracked
+        self._local_fallback = LocalTokenQuotaTracker(max_tracked=max_tracked)
+        try:
+            self._record_script = self._client.register_script(LUA_RECORD_QUOTA)
+        except Exception:
+            self._record_script = None
+
+    def _redis_key(self, tenant_id: str) -> str:
+        return f"{self.KEY_PREFIX}{tenant_id}:{_today_utc()}"
+
+    def would_exceed(self, tenant_id: str, quota: int) -> bool:
+        if quota <= 0:
+            return False
+
+        key = self._redis_key(tenant_id)
+        try:
+            raw = self._client.get(key)
+            used = int(raw) if raw is not None else 0
+            return used >= quota
+        except Exception as e:
+            logger.error(
+                f"Redis token quota would_exceed check failed ({type(e).__name__}: {e}); "
+                f"falling back to local tracker for tenant {tenant_id!r}."
+            )
+            return self._local_fallback.would_exceed(tenant_id, quota)
+
+    def usage_today(self, tenant_id: str) -> int:
+        key = self._redis_key(tenant_id)
+        try:
+            raw = self._client.get(key)
+            return int(raw) if raw is not None else 0
+        except Exception as e:
+            logger.error(
+                f"Redis token quota usage_today check failed ({type(e).__name__}: {e}); "
+                f"falling back to local tracker for tenant {tenant_id!r}."
+            )
+            return self._local_fallback.usage_today(tenant_id)
+
+    def record(self, tenant_id: str, tokens: int) -> None:
+        if tokens <= 0:
+            return
+
+        key = self._redis_key(tenant_id)
+        # Keep until midnight plus 24 hours buffer so historical queries near boundary don't immediately lose data
+        ttl = int(seconds_until_utc_midnight()) + 86400
+
+        try:
+            if self._record_script is not None:
+                self._record_script(keys=[key], args=[str(tokens), str(ttl)])
+            else:
+                self._client.eval(LUA_RECORD_QUOTA, 1, key, str(tokens), str(ttl))
+        except Exception as e:
+            logger.error(
+                f"Redis token quota record failed ({type(e).__name__}: {e}); "
+                f"falling back to local tracker for tenant {tenant_id!r}."
+            )
+            self._local_fallback.record(tenant_id, tokens)
+
+    def reset(self) -> None:
+        self._local_fallback.reset()
+        pattern = f"{self.KEY_PREFIX}*"
+        try:
+            for k in self._client.scan_iter(pattern):
+                self._client.delete(k)
+        except Exception as e:
+            logger.error(f"Redis token quota reset failed ({type(e).__name__}: {e}).")
+
+
+def build_token_quota_tracker(max_tracked: int = 10_000) -> TokenQuotaBackend:
+    """
+    Selects Redis if REDIS_URL is set AND reachable, else falls back to the local
+    in-memory tracker. The decision is logged clearly at startup.
+    """
+    redis_url = os.environ.get("REDIS_URL")
+    if not redis_url:
+        logger.info("REDIS_URL not set; using local in-memory token quota tracker (single-node only).")
+        return LocalTokenQuotaTracker(max_tracked=max_tracked)
+
+    try:
+        import redis  # noqa: PLC0415
+
+        client = redis.from_url(redis_url, socket_connect_timeout=2, socket_timeout=2)
+        client.ping()
+        safe_url = redis_url.split("@")[-1]
+        logger.info(f"Connected to Redis at {safe_url}; token quota tracker is now shared across instances.")
+        return RedisTokenQuotaTracker(client, max_tracked=max_tracked)
+    except Exception as e:
+        logger.error(
+            f"REDIS_URL is set but Redis is unreachable ({type(e).__name__}: {e}); "
+            f"falling back to local in-memory token quota tracker. Quotas will "
+            f"NOT be shared across gateway instances until this is fixed."
+        )
+        return LocalTokenQuotaTracker(max_tracked=max_tracked)
 
 
 def extract_total_tokens(usage) -> int:
@@ -156,6 +270,6 @@ def extract_total_tokens(usage) -> int:
     return 0
 
 
-# Module-level singleton, shared across all requests in this process — same
-# reasoning as core/rate_limit.py's assess_rate_limiter.
-gateway_token_quota = TokenQuotaTracker()
+# Module-level singleton, shared across all requests in this process — which
+# is distributed if REDIS_URL is set, and process-local if not.
+gateway_token_quota = build_token_quota_tracker()
