@@ -1,0 +1,19 @@
+{
+  "endpoint": "/api/v1/whoami",
+  "method": "GET",
+  "concurrency": 20,
+  "total_requests": 300,
+  "total_elapsed_s": 0.467,
+  "throughput_rps": 642.41,
+  "status_counts": {
+    "200": 64,
+    "429": 236
+  },
+  "latency_ms": {
+    "min": 18.51,
+    "p50": 28.78,
+    "p95": 36.9,
+    "p99": 39.2,
+    "max": 45.73
+  }
+}

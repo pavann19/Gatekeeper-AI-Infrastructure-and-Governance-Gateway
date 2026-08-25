@@ -1,0 +1,18 @@
+{
+  "endpoint": "/api/v1/assess",
+  "method": "POST",
+  "concurrency": 10,
+  "total_requests": 100,
+  "total_elapsed_s": 14.556,
+  "throughput_rps": 6.87,
+  "status_counts": {
+    "200": 100
+  },
+  "latency_ms": {
+    "min": 411.49,
+    "p50": 558.83,
+    "p95": 9245.6,
+    "p99": 9622.43,
+    "max": 9622.43
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "endpoint": "/health",
+  "method": "GET",
+  "concurrency": 20,
+  "total_requests": 300,
+  "total_elapsed_s": 0.997,
+  "throughput_rps": 301.05,
+  "status_counts": {
+    "200": 300
+  },
+  "latency_ms": {
+    "min": 37.79,
+    "p50": 64.44,
+    "p95": 69.38,
+    "p99": 88.35,
+    "max": 90.5
+  }
+}
