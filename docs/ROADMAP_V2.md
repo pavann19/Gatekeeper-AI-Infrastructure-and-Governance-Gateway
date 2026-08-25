@@ -1047,6 +1047,27 @@ the end.
       threat-model writeup remains open if it's wanted as its own
       deliverable.
       814 passing overall (up from 810).
+- [x] Full threat-model document (`docs/THREAT_MODEL.md`) written this
+      session -- trust boundaries, capability tiers, STRIDE per subsystem,
+      the MCP stdio transport's separate trust model, a findings register
+      (10 entries, all fixed and cross-referenced to their narrative
+      entries below), known limitations, and explicitly-deferred scope.
+      Followed by a fresh, line-by-line re-read of the entire
+      `api/main.py` (1530 lines, every endpoint) specifically hunting for
+      anything piecemeal per-endpoint patching across many prior turns
+      might have missed systemically -- auth/tenant-suspension/rate-limit
+      ordering, capability checks, size bounds, error-path audit logging,
+      and the policy-editor's validate-before-deploy discipline were all
+      re-verified endpoint by endpoint. Zero new findings: every endpoint
+      already carries the hardening applied earlier in Phase 8. A repo-wide
+      grep for TODO/FIXME/XXX/HACK/deferred-style comments across every
+      `.py` file also came back empty -- no "do this later" markers left
+      unaddressed anywhere in `core/` or `api/`. 845 passing overall
+      (`tests/`, matching CI's scope), full `ruff check core/ api/` clean.
+      This closes out this item as thoroughly covered for the current
+      codebase; it stays `[~]` rather than `[x]` only because audit
+      coverage is inherently open-ended, not because anything concrete
+      remains outstanding.
 
 ---
 
