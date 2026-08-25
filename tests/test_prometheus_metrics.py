@@ -263,7 +263,7 @@ def test_timeouts_are_counted(monkeypatch):
     monkeypatch.setattr("api.main.settings.ASSESS_TIMEOUT_SECONDS", 0.05)
     before = sample("gatekeeper_assessment_timeouts_total", endpoint="/api/v1/assess")
 
-    with patch("api.main.assess_risk", side_effect=lambda p, s: _time.sleep(1.0)):
+    with patch("api.main.assess_risk", side_effect=lambda p, s, r=None: _time.sleep(1.0)):
         response = client.post("/api/v1/assess", json={"prompt": "hello"})
 
     assert response.status_code == 503
@@ -283,7 +283,7 @@ def test_in_flight_gauge_is_decremented_even_on_timeout(monkeypatch):
 
     monkeypatch.setattr("api.main.settings.ASSESS_TIMEOUT_SECONDS", 0.05)
 
-    with patch("api.main.assess_risk", side_effect=lambda p, s: _time.sleep(0.5)):
+    with patch("api.main.assess_risk", side_effect=lambda p, s, r=None: _time.sleep(0.5)):
         client.post("/api/v1/assess", json={"prompt": "hello"})
 
     assert sample("gatekeeper_assessments_in_flight") == 0.0

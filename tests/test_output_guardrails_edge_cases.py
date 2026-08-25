@@ -104,13 +104,30 @@ def test_leakage_case_sensitive_verbatim_match():
 # ---------------------------------------------------------------------------
 
 def test_assess_output_blocks_on_hallucination_when_everything_else_passes():
-    with patch("core.output_guardrails.output_judge", return_value="SAFE"), \
+    """HALLUCINATION_CHECK_ENABLED defaults False (see core/config.py's
+    docstring -- a live pentest found this check compares output against
+    the wrong reference corpus). This test explicitly enables it to prove
+    the gated code path itself still works correctly when turned on."""
+    with patch("core.output_guardrails.settings.HALLUCINATION_CHECK_ENABLED", True), \
+         patch("core.output_guardrails.output_judge", return_value="SAFE"), \
          patch("core.output_guardrails.check_semantic_grounding", return_value=False):
         decision, details = assess_output("a response about an unrelated domain")
         assert decision == "BLOCK"
         assert details["hallucination_detected"] is True
         assert details["source"] == "semantic_grounding_check"
         assert details["clean_response"] is None
+
+
+def test_assess_output_hallucination_check_skipped_by_default():
+    """The regression this whole gate exists for: with the flag at its
+    real default (False), a response that WOULD have failed grounding must
+    still ALLOW, because the check never runs at all."""
+    with patch("core.output_guardrails.output_judge", return_value="SAFE"), \
+         patch("core.output_guardrails.check_semantic_grounding", return_value=False) as mock_grounding:
+        decision, details = assess_output("a response about an unrelated domain")
+        assert decision == "ALLOW"
+        assert details["hallucination_detected"] is False
+        mock_grounding.assert_not_called()
 
 
 def test_assess_output_grounding_check_runs_on_redacted_text():
@@ -122,7 +139,8 @@ def test_assess_output_grounding_check_runs_on_redacted_text():
         seen["text"] = text
         return True
 
-    with patch("core.output_guardrails.output_judge", return_value="SAFE"), \
+    with patch("core.output_guardrails.settings.HALLUCINATION_CHECK_ENABLED", True), \
+         patch("core.output_guardrails.output_judge", return_value="SAFE"), \
          patch("core.output_guardrails.check_semantic_grounding", side_effect=_fake_grounding):
         assess_output("Contact john.doe@example.com for the report.")
         assert "john.doe@example.com" not in seen["text"]

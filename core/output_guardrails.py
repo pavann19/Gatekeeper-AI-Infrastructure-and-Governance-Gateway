@@ -1,4 +1,5 @@
 # core/output_guardrails.py
+from core.config import settings
 from core.privacy import redact_pii
 from core.secrets_detection import detect_secrets
 from core.semantic_judge import output_judge
@@ -128,7 +129,14 @@ def assess_output(response_text: str, system_prompt: str = None) -> tuple:
         return "BLOCK", details
 
     # 5. Semantic Grounding Check (Hallucination) — on the redacted text.
-    if not check_semantic_grounding(clean_text):
+    #    Gated by HALLUCINATION_CHECK_ENABLED (default False): see that
+    #    setting's docstring in core/config.py for why -- this check
+    #    currently borrows an INPUT-side anchor set as its reference
+    #    "expected domain", a category error a live pentest caught blocking
+    #    ordinary, legitimate output. Left wired up, not deleted, so it can
+    #    be re-enabled once a real output-domain corpus replaces the
+    #    borrowed one.
+    if settings.HALLUCINATION_CHECK_ENABLED and not check_semantic_grounding(clean_text):
         logger.warning("🚫 OUTPUT BLOCKED: Response diverged significantly from expected semantic domain (Hallucination).")
         details["hallucination_detected"] = True
         details["source"] = "semantic_grounding_check"

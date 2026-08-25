@@ -434,7 +434,7 @@ async def assess_prompt(req: AssessRequest, request: Request, background_tasks: 
     #    multi-second tail latency to this response.
     try:
         risk_level, details = await _run_bounded(
-            assess_risk, clean_query, background_tasks.add_task
+            assess_risk, clean_query, background_tasks.add_task, req.prompt
         )
     except asyncio.TimeoutError:
         # 503, NOT a fabricated BLOCK verdict. A timeout is an availability
@@ -776,7 +776,7 @@ async def gateway_chat(req: GatewayChatRequest, request: Request, background_tas
     #    a response the caller already obtained.
     clean_query, redacted_info = redact_pii(req.prompt)
     try:
-        risk_level, details = await _run_bounded(assess_risk, clean_query, background_tasks.add_task)
+        risk_level, details = await _run_bounded(assess_risk, clean_query, background_tasks.add_task, req.prompt)
     except asyncio.TimeoutError:
         metrics.assessment_timeouts_total.labels(endpoint="/api/v1/gateway/chat (input)").inc()
         raise HTTPException(

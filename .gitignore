@@ -70,3 +70,6 @@ _evidence/*.log
 
 # API key store (hashed keys, but still a credential inventory)
 api_keys.json
+
+# Local tenant fixtures (e.g. from live pentest setup) -- not real deployment config
+tenants.json

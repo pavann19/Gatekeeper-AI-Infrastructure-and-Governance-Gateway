@@ -112,7 +112,21 @@ class Settings(BaseSettings):
                 f"DOMAIN_GUARDRAIL_MODE must be one of {sorted(allowed)}, got {v!r}"
             )
         return normalized
-    
+
+    # Output hallucination check (core.output_guardrails.check_semantic_grounding).
+    # Defaults OFF: a live pentest (docs/ROADMAP_V2.md's Phase 8 findings)
+    # found it compares OUTPUT text against `educational_store`'s centroid --
+    # which is actually the INPUT-side educational-context anchor set
+    # (core/risk.py's EDUCATIONAL_CONTEXT_ANCHORS, populated as a side
+    # effect of prior /assess calls), a category error. Once that store is
+    # warm, any legitimate response that isn't itself educational-content-
+    # shaped -- a support reply, code, a factual answer -- risks a false
+    # "hallucination" BLOCK. Same shape of mistake as DOMAIN_GUARDRAIL_MODE
+    # above: a real check, wired to the wrong reference corpus, left
+    # disabled until a real "acceptable assistant output" corpus exists to
+    # replace the borrowed one.
+    HALLUCINATION_CHECK_ENABLED: bool = False
+
     # Execution Environment
     OLLAMA_API_URL: str = "http://localhost:11434/api/generate"
     # "mistral" was the original default, stale since Llama Guard 3 became

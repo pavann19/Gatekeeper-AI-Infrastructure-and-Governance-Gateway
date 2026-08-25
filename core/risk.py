@@ -682,7 +682,7 @@ def judge_arbitration(prompt: str, threat_present: bool = False) -> tuple:
 # POLICY ARBITER — STAGED ORCHESTRATOR
 # ============================================================================
 
-def assess_risk(prompt: str, background_scheduler=None) -> tuple:
+def assess_risk(prompt: str, background_scheduler=None, raw_prompt: str = None) -> tuple:
     """
     Staged governance pipeline:
         Stage 0: Cache lookup
@@ -708,7 +708,25 @@ def assess_risk(prompt: str, background_scheduler=None) -> tuple:
     quality requires a single definitive verdict per prompt, not one that a
     background task might revise after the fact. Only the live API path
     (api/main.py) passes a real scheduler.
+    `raw_prompt`, if provided, is used ONLY for the local, in-process text
+    classifiers below (hard-ban regex, domain alignment, the fusion
+    sub-detectors) — never for the embedding, the persisted semantic cache,
+    or the judge escalation, all of which stay on `prompt` exactly as
+    before. This is a deliberate, narrow boundary, not a blanket "use raw
+    text everywhere": a live pentest (see docs/ROADMAP_V2.md's Phase 8
+    findings) found that `[REDACTED:PERSON]`-style placeholder tokens are
+    themselves out-of-distribution for text classifiers trained on natural
+    language — "Summarize the plot of Romeo and Juliet" was flagged
+    RESTRICT purely because redaction turned "Juliet" into a bracketed
+    token that spiked injection/toxicity sub-detector scores on an
+    otherwise benign sentence, reproduced with an unrelated second prompt.
+    Passing the original text to these in-process, non-persisted
+    classifiers fixes that false-positive class without touching the two
+    places redaction exists specifically to protect: anything written to
+    disk (the semantic cache) or sent to a process this one calls out to
+    (the LLM judge).
     """
+    text_for_detectors = raw_prompt if raw_prompt is not None else prompt
 
     # ---- INIT: Ensure FAISS indexes are populated (lazy, once only) ----
     _ensure_faiss_initialized()
@@ -736,7 +754,7 @@ def assess_risk(prompt: str, background_scheduler=None) -> tuple:
                              "fusion_triggering_class": None, "fusion_class_scores": {}}
 
     # ---- STAGE 1: HARD BAN (SYMBOLIC VETO) ----
-    triggered, detail = hard_ban_triggered(prompt)
+    triggered, detail = hard_ban_triggered(text_for_detectors)
     if triggered:
         # HARD RULE: Educational context NEVER overrides Symbolic Violations
         save_cache_entry(prompt, prompt_vec, "HIGH", 1.0, source="symbolic_rule")
@@ -765,10 +783,10 @@ def assess_risk(prompt: str, background_scheduler=None) -> tuple:
                       "fusion_triggering_class": None, "fusion_class_scores": {}}
 
     # ---- STAGE 2: COLLECT SEMANTIC SIGNALS ----
-    signals = collect_semantic_signals(prompt, prompt_vec, fast=fast)
+    signals = collect_semantic_signals(text_for_detectors, prompt_vec, fast=fast)
 
     # ---- STAGE 3: DETERMINISTIC FUSION ----
-    risk, source, judge_required, topicality = fuse_signals(signals, prompt)
+    risk, source, judge_required, topicality = fuse_signals(signals, text_for_detectors)
 
     judge_invoked = False
 
