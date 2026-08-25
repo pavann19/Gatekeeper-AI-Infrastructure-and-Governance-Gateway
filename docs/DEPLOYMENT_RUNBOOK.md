@@ -5,23 +5,15 @@ application code but must be true for an application release.
 
 ## Runtime Shape
 
-The approved release shape is a single API worker process per deployed
-instance.
+The deployment environment supports both single-worker local execution and multi-replica distributed deployment:
 
-`core/rate_limit.py` and `core/token_quota.py` keep their counters in
-process memory. That is correct for one worker, but a multi-worker or
-multi-replica deployment would multiply the effective limit by the number
-of workers. Do not deploy this release with multiple API workers unless
-the rate limiter and token quota are first moved to a shared store such as
-Redis.
+- When `REDIS_URL` is set and reachable, `core/rate_limit.py` automatically initializes `RedisRateLimiter`, synchronizing token-bucket rate limits atomically across all API replicas via Redis server-clock Lua scripts.
+- When `REDIS_URL` is not set (or during transient Redis outages), `core/rate_limit.py` gracefully uses `LocalRateLimiter` (process-local LRU token bucket).
 
 Concrete settings for this release:
 
-- Run one Uvicorn/Gunicorn worker for the API container.
-- Scale vertically before scaling the API process count.
-- Treat any change to more than one API worker or replica as a release
-  architecture change requiring Redis-backed distributed rate limiting and
-  quota accounting.
+- In single-node deployments without Redis, run one Uvicorn worker per container so local limits are not split across processes.
+- In multi-worker or multi-replica deployments (such as `docker-compose.yml`), configure `REDIS_URL` (e.g. `REDIS_URL=redis://redis:6379/0`) to enable shared distributed rate limiting across all instances.
 
 ## Application Rollback
 
