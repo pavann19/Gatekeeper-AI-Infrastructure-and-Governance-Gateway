@@ -218,7 +218,7 @@ def test_slow_assessment_returns_503_not_a_fabricated_verdict(monkeypatch):
     monkeypatch.setattr("api.main.settings.ASSESS_TIMEOUT_SECONDS", 0.05)
     monkeypatch.setattr("api.main.settings.RATE_LIMIT_ENABLED", False)
 
-    def slow_assess(prompt, scheduler):
+    def slow_assess(prompt, scheduler, raw_prompt=None):
         time.sleep(1.0)
         return LOW_RISK
 
