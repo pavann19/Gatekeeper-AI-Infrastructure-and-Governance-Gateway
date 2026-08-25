@@ -221,6 +221,7 @@ def test_similarity_returns_zero_when_prompt_vec_is_none(monkeypatch):
 
 
 def test_similarity_of_identical_vector_to_centroid_is_one(monkeypatch):
+    pytest.importorskip("sentence_transformers")  # real cosine_similarity() needs it
     _write_policies(classes={"c": ["anchor"]})
     monkeypatch.setattr("core.embeddings.get_embedding", lambda text: [1.0, 0.0])
 
@@ -229,6 +230,7 @@ def test_similarity_of_identical_vector_to_centroid_is_one(monkeypatch):
 
 
 def test_similarity_of_orthogonal_vector_to_centroid_is_zero(monkeypatch):
+    pytest.importorskip("sentence_transformers")  # real cosine_similarity() needs it
     _write_policies(classes={"c": ["anchor"]})
     monkeypatch.setattr("core.embeddings.get_embedding", lambda text: [1.0, 0.0])
 
@@ -237,6 +239,7 @@ def test_similarity_of_orthogonal_vector_to_centroid_is_zero(monkeypatch):
 
 
 def test_similarity_of_opposite_vector_to_centroid_is_negative_one(monkeypatch):
+    pytest.importorskip("sentence_transformers")  # real cosine_similarity() needs it
     _write_policies(classes={"c": ["anchor"]})
     monkeypatch.setattr("core.embeddings.get_embedding", lambda text: [1.0, 0.0])
 
@@ -245,6 +248,7 @@ def test_similarity_of_opposite_vector_to_centroid_is_negative_one(monkeypatch):
 
 
 def test_similarity_handles_tensor_like_prompt_vec_via_tolist(monkeypatch):
+    pytest.importorskip("sentence_transformers")  # real cosine_similarity() needs it
     _write_policies(classes={"c": ["anchor"]})
     monkeypatch.setattr("core.embeddings.get_embedding", lambda text: [1.0, 0.0])
 
@@ -259,6 +263,7 @@ def test_similarity_handles_tensor_like_prompt_vec_via_tolist(monkeypatch):
 def test_similarity_averages_multiple_anchors_correctly(monkeypatch):
     # Two anchors at [1,0] and [0,1] -> centroid [0.5,0.5] (not normalized).
     # Cosine similarity of [1,0] against [0.5,0.5] is 1/sqrt(2).
+    pytest.importorskip("sentence_transformers")  # real cosine_similarity() needs it
     _write_policies(classes={"c": ["anchor_a", "anchor_b"]})
     vectors = {"anchor_a": [1.0, 0.0], "anchor_b": [0.0, 1.0]}
     monkeypatch.setattr("core.embeddings.get_embedding", lambda text: vectors[text])

@@ -7,6 +7,8 @@ between findings that the existing file doesn't combine.
 """
 from unittest.mock import patch
 
+import pytest
+
 from core.output_guardrails import (
     assess_output,
     check_semantic_grounding,
@@ -206,6 +208,7 @@ def test_assess_output_empty_response_text_does_not_crash():
 # ---------------------------------------------------------------------------
 
 def test_grounding_real_cosine_math_identical_vectors_passes():
+    pytest.importorskip("sentence_transformers")  # real cosine_similarity() needs it
     with patch("core.output_guardrails.educational_store") as store, \
          patch("core.output_guardrails.get_embedding", return_value=[1.0, 0.0, 0.0]):
         store.get_centroid.return_value = [1.0, 0.0, 0.0]
@@ -213,6 +216,7 @@ def test_grounding_real_cosine_math_identical_vectors_passes():
 
 
 def test_grounding_real_cosine_math_orthogonal_vectors_fails():
+    pytest.importorskip("sentence_transformers")  # real cosine_similarity() needs it
     with patch("core.output_guardrails.educational_store") as store, \
          patch("core.output_guardrails.get_embedding", return_value=[1.0, 0.0, 0.0]):
         store.get_centroid.return_value = [0.0, 1.0, 0.0]
