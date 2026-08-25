@@ -8,10 +8,21 @@ slow. A small set of integration tests load the real cached
 all-mpnet-base-v2 model (already present in this machine's HF cache) to
 verify actual output shape/behaviour.
 """
+import pytest
 import torch
 
 import core.embeddings as embeddings_mod
 from core.embeddings import cosine_similarity, get_embedding
+
+# core/embeddings.py's cosine_similarity() unconditionally imports the real
+# `sentence_transformers.util` (and _get_model() the real SentenceTransformer
+# class), so any test exercising either -- even with fake vectors, not just
+# the "real model" integration tests below -- needs the real package
+# installed. CI's requirements-ci.txt deliberately excludes it (no network/
+# GB-scale weights budget in CI); these tests skip cleanly there rather than
+# failing, matching this project's own precedent in test_llama_guard.py's
+# `torch = pytest.importorskip("torch")`.
+pytest.importorskip("sentence_transformers")
 
 
 def _reset_model_cache(monkeypatch):
