@@ -1,0 +1,75 @@
+{
+  "health": {
+    "endpoint": "/health",
+    "method": "GET",
+    "concurrency": 20,
+    "total_requests": 300,
+    "total_elapsed_s": 0.997,
+    "throughput_rps": 301.05,
+    "status_counts": {
+      "200": 300
+    },
+    "latency_ms": {
+      "min": 37.79,
+      "p50": 64.44,
+      "p95": 69.38,
+      "p99": 88.35,
+      "max": 90.5
+    }
+  },
+  "whoami": {
+    "endpoint": "/api/v1/whoami",
+    "method": "GET",
+    "concurrency": 20,
+    "total_requests": 300,
+    "total_elapsed_s": 0.467,
+    "throughput_rps": 642.41,
+    "status_counts": {
+      "200": 64,
+      "429": 236
+    },
+    "latency_ms": {
+      "min": 18.51,
+      "p50": 28.78,
+      "p95": 36.9,
+      "p99": 39.2,
+      "max": 45.73
+    }
+  },
+  "assess": {
+    "endpoint": "/api/v1/assess",
+    "method": "POST",
+    "concurrency": 10,
+    "total_requests": 100,
+    "total_elapsed_s": 14.556,
+    "throughput_rps": 6.87,
+    "status_counts": {
+      "200": 100
+    },
+    "latency_ms": {
+      "min": 411.49,
+      "p50": 558.83,
+      "p95": 9245.6,
+      "p99": 9622.43,
+      "max": 9622.43
+    }
+  },
+  "activity": {
+    "endpoint": "/api/v1/activity",
+    "method": "GET",
+    "concurrency": 20,
+    "total_requests": 300,
+    "total_elapsed_s": 1.316,
+    "throughput_rps": 228.04,
+    "status_counts": {
+      "200": 300
+    },
+    "latency_ms": {
+      "min": 55.25,
+      "p50": 85.32,
+      "p95": 95.53,
+      "p99": 99.45,
+      "max": 100.03
+    }
+  }
+}

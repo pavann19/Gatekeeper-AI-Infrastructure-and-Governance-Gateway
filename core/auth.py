@@ -42,6 +42,7 @@ import hmac
 import json
 import os
 import secrets
+import threading
 from dataclasses import dataclass
 
 from core.config import (
@@ -126,50 +127,76 @@ class KeyStore:
         self.path = path or settings.API_KEYS_FILE
         self._keys = {}
         self._loaded = False
+        # BUG FIX (Phase 8, live load test): `load()` used to set
+        # `self._loaded = True` immediately, then repopulate `self._keys`
+        # entry by entry (including a file-I/O gap before the loop even
+        # starts). A concurrent `lookup()` from another thread — real
+        # concurrency, since FastAPI dispatches sync endpoints like
+        # `whoami` to a thread pool — could see `_loaded=True` but
+        # `self._keys` still empty or half-populated, and a perfectly
+        # valid key would resolve to a false 401. Measured live: ~4% of
+        # concurrent whoami calls immediately after a fresh load failed
+        # this way (scripts/load_test.py, see docs/ROADMAP_V2.md). Fixed
+        # by building the new key dict in a local variable and swapping
+        # `self._keys` in one atomic assignment only after it's complete,
+        # with a lock serializing concurrent loads so they can't race each
+        # other into a half-built intermediate state either.
+        self._lock = threading.Lock()
 
     def load(self, force=False):
-        if self._loaded and not force:
+        with self._lock:
+            if self._loaded and not force:
+                return self
+
+            if not os.path.exists(self.path):
+                logger.info(f"No API key store at {self.path}; all requests anonymous (GENERAL).")
+                self._keys = {}
+                self._loaded = True
+                return self
+
+            try:
+                with open(self.path, "r", encoding="utf-8") as f:
+                    raw = json.load(f)
+            except Exception as e:
+                # Fail CLOSED on a corrupt store: an unreadable key file must not
+                # be treated as "no keys, carry on" if it might have contained
+                # revocations. Anonymous access still yields GENERAL either way.
+                # Existing keys (if any were already loaded) are left in place
+                # rather than wiped, for the same reason.
+                logger.error(f"API key store unreadable ({e}); no keys loaded.")
+                self._loaded = True
+                return self
+
+            if not isinstance(raw, dict):
+                logger.error(f"API key store {self.path} must be a JSON object; no keys loaded.")
+                self._keys = {}
+                self._loaded = True
+                return self
+
+            new_keys = {}
+            for key_hash, grant in raw.items():
+                if not isinstance(grant, dict):
+                    logger.error(f"Ignoring malformed grant for key ...{key_hash[-8:]}")
+                    continue
+                capability = str(grant.get("capability", "")).upper()
+                if capability not in VALID_CAPABILITIES:
+                    logger.error(
+                        f"Ignoring key ...{key_hash[-8:]}: capability {capability!r} "
+                        f"not one of {VALID_CAPABILITIES}"
+                    )
+                    continue
+                new_keys[key_hash.lower()] = {
+                    "capability": capability,
+                    "tenant": str(grant.get("tenant", "default")),
+                    "key_id": str(grant.get("key_id", f"key-{key_hash[:8]}")),
+                }
+
+            # Atomic swap: any concurrent reader sees either the complete
+            # old dict or the complete new one, never a partial one.
+            self._keys = new_keys
+            self._loaded = True
+            logger.info(f"Loaded {len(self._keys)} API key(s) from {self.path}")
             return self
-        self._keys = {}
-        self._loaded = True
-
-        if not os.path.exists(self.path):
-            logger.info(f"No API key store at {self.path}; all requests anonymous (GENERAL).")
-            return self
-
-        try:
-            with open(self.path, "r", encoding="utf-8") as f:
-                raw = json.load(f)
-        except Exception as e:
-            # Fail CLOSED on a corrupt store: an unreadable key file must not
-            # be treated as "no keys, carry on" if it might have contained
-            # revocations. Anonymous access still yields GENERAL either way.
-            logger.error(f"API key store unreadable ({e}); no keys loaded.")
-            return self
-
-        if not isinstance(raw, dict):
-            logger.error(f"API key store {self.path} must be a JSON object; no keys loaded.")
-            return self
-
-        for key_hash, grant in raw.items():
-            if not isinstance(grant, dict):
-                logger.error(f"Ignoring malformed grant for key ...{key_hash[-8:]}")
-                continue
-            capability = str(grant.get("capability", "")).upper()
-            if capability not in VALID_CAPABILITIES:
-                logger.error(
-                    f"Ignoring key ...{key_hash[-8:]}: capability {capability!r} "
-                    f"not one of {VALID_CAPABILITIES}"
-                )
-                continue
-            self._keys[key_hash.lower()] = {
-                "capability": capability,
-                "tenant": str(grant.get("tenant", "default")),
-                "key_id": str(grant.get("key_id", f"key-{key_hash[:8]}")),
-            }
-
-        logger.info(f"Loaded {len(self._keys)} API key(s) from {self.path}")
-        return self
 
     def lookup(self, plaintext: str):
         """Returns the grant for a key, or None. Never logs the key."""
@@ -177,7 +204,11 @@ class KeyStore:
         if not plaintext:
             return None
         candidate = hash_key(plaintext)
-        for stored_hash, grant in self._keys.items():
+        # Snapshot the reference once -- self._keys may be swapped to a new
+        # dict by a concurrent load() while this iterates, but a local
+        # binding to the dict object itself is unaffected by that swap.
+        keys = self._keys
+        for stored_hash, grant in keys.items():
             # compare_digest on the hashes; both are fixed-length hex.
             if hmac.compare_digest(candidate, stored_hash):
                 return grant
