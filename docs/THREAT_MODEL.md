@@ -303,7 +303,9 @@ listed here so a reviewer doesn't have to go find them individually.
   deployment gets N× the configured limit, since each worker enforces
   independently. A distributed version needs shared state (the Redis
   instance `core/cache_backend.py` already introduces is the stated
-  natural home).
+  natural home). The release decision in `docs/DEPLOYMENT_RUNBOOK.md`
+  is to run one API worker process per deployed instance until that
+  Redis-backed implementation exists.
 - **Rate limiter bucket registry is LRU-capped**
   (`RATE_LIMIT_MAX_TRACKED`) — bounded memory was judged more important
   than perfect per-identity accounting; a caller cycling through more
