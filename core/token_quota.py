@@ -264,10 +264,17 @@ def build_token_quota_tracker(client=None, max_tracked: int = 10_000) -> TokenQu
 
     redis_client = get_redis_client()
     if redis_client is not None:
+        logger.info("Token quota tracker is now shared across instances via Redis.")
         return RedisTokenQuotaTracker(redis_client, max_tracked=max_tracked)
 
     if os.environ.get("REDIS_URL"):
-        logger.error("falling back to local in-memory token quota tracker.")
+        logger.error(
+            "REDIS_URL is set but Redis is unreachable; falling back to local "
+            "in-memory token quota tracker. Quotas will NOT be shared across "
+            "gateway instances until this is fixed."
+        )
+    else:
+        logger.info("REDIS_URL not set; using local in-memory token quota tracker (single-node only).")
 
     return LocalTokenQuotaTracker(max_tracked=max_tracked)
 

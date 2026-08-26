@@ -60,6 +60,46 @@ def test_mcp_sse_handshake(mcp_client):
     assert "/mcp/messages?sessionId=" in response.text
 
 
+def test_mcp_sse_disconnect_check_is_present_and_breaks_the_loop(mcp_client, monkeypatch):
+    """
+    REGRESSION: a prior pass removed the `request.is_disconnected()` check
+    from the SSE loop entirely, so an abruptly-disconnected client's
+    session (queue + generator) would never be cleaned up -- confirmed
+    live against a real running server (an abrupt RST-closed connection
+    left the session un-cleaned-up 45+ seconds later). This test forces
+    `is_disconnected()` to report True on the very first loop iteration
+    and confirms the generator exits immediately rather than looping
+    forever, without depending on real socket-level disconnect timing
+    (which this suite cannot control) to prove the code path exists and
+    works.
+    """
+    import starlette.requests
+
+    monkeypatch.setattr(starlette.requests.Request, "is_disconnected", lambda self: True)
+    response = mcp_client.get("/mcp/sse")
+    assert response.status_code == 200
+    # No ping/message lines should appear -- the loop must exit on the
+    # very first disconnect check, before ever reaching the queue.get().
+    assert ": ping" not in response.text
+
+
+def test_mcp_sse_session_force_closed_after_max_lifetime(mcp_app, mcp_client, monkeypatch):
+    """
+    Defense-in-depth backstop: even if disconnect detection never fires
+    (confirmed live as a real platform-dependent risk, not hypothetical),
+    a session must not leak forever. Shortens MAX_SESSION_LIFETIME_SECONDS
+    so the test doesn't take 10 real minutes, then confirms the stream
+    actually closes and the session is genuinely removed from
+    app.state.sessions, not just that the HTTP response eventually ends.
+    """
+    import core.mcp_http_server as server_mod
+
+    monkeypatch.setattr(server_mod, "MAX_SESSION_LIFETIME_SECONDS", 1)
+    response = mcp_client.get("/mcp/sse")
+    assert response.status_code == 200
+    assert mcp_app.state.sessions == {}
+
+
 def test_mcp_sse_session_relay(mcp_app, mcp_client):
     """
     Verifies full SSE session relay:

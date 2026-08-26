@@ -331,10 +331,17 @@ def build_rate_limiter(name: str = "assess", client=None, max_tracked: int = 10_
 
     redis_client = get_redis_client()
     if redis_client is not None:
+        logger.info(f"Rate limiter '{name}' is now shared across instances via Redis.")
         return RedisRateLimiter(redis_client, name=name, max_tracked=max_tracked)
 
     if os.environ.get("REDIS_URL"):
-        logger.error("falling back to local in-memory rate limiter.")
+        logger.error(
+            f"REDIS_URL is set but Redis is unreachable; falling back to local "
+            f"in-memory rate limiter for '{name}'. Rate limits will NOT be shared "
+            f"across gateway instances until this is fixed."
+        )
+    else:
+        logger.info(f"REDIS_URL not set; using local in-memory rate limiter for '{name}' (single-node only).")
 
     return LocalRateLimiter(name=name, max_tracked=max_tracked)
 
