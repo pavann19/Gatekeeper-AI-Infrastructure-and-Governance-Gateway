@@ -163,9 +163,19 @@ class RedisExactCache(ExactCacheBackend):
 
 def build_exact_cache_backend(client=None, max_size=5000) -> ExactCacheBackend:
     """
-    Selects Redis if `client` is provided or if `REDIS_URL` is set AND reachable,
-    using the shared ConnectionPool in `core.redis_client`.
-    Falls back gracefully to the local file-backed store.
+    Selects Redis if `client` is provided or if `REDIS_URL` is set AND
+    reachable, using the shared ConnectionPool in `core.redis_client`.
+    Falls back gracefully to the local file-backed store — logged clearly
+    either way, so a deployment that meant to run distributed but has a
+    silently-broken Redis connection sees it in the startup log, not via
+    mysteriously inconsistent verdicts across instances later.
+
+    `max_size` only applies to the local fallback — an in-process dict
+    needs an explicit cap. Redis is left to its own TTL-based expiry;
+    imposing a client-side entry count on a shared store doesn't map
+    cleanly onto multiple instances writing to it concurrently, and
+    Redis's own maxmemory-policy is the right lever for that if ever
+    needed.
     """
     if client is not None:
         return RedisExactCache(client)
@@ -174,10 +184,17 @@ def build_exact_cache_backend(client=None, max_size=5000) -> ExactCacheBackend:
 
     redis_client = get_redis_client()
     if redis_client is not None:
+        logger.info("Cache is now shared across instances via Redis.")
         return RedisExactCache(redis_client)
 
     if os.environ.get("REDIS_URL"):
-        logger.error("falling back to local in-memory exact cache.")
+        logger.error(
+            "REDIS_URL is set but Redis is unreachable; falling back to the "
+            "local file-backed cache. Verdicts will NOT be shared across "
+            "gateway instances until this is fixed."
+        )
+    else:
+        logger.info("REDIS_URL not set; using local file-backed cache (single-node only).")
 
     return LocalExactCache(max_size=max_size)
 

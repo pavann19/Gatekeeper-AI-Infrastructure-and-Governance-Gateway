@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 import uuid
 from typing import Any, Dict, Optional
 
@@ -42,6 +43,18 @@ logger = get_logger(__name__)
 
 # Max request payload size: 100KB (matches Phase 8 schema hardening)
 MAX_PAYLOAD_BYTES = 100 * 1024
+
+# Defense-in-depth backstop for a leaked SSE session (§7 finding, this
+# review): `request.is_disconnected()` is the correct, standard Starlette
+# mechanism for detecting an abrupt client disconnect, but its reliability
+# depends on the ASGI server proactively surfacing an `http.disconnect`
+# message -- confirmed live on this dev machine (Windows) that an abruptly
+# RST-closed connection was still not detected 45+ seconds later, even
+# though the check is present and correct. Rather than trust platform-
+# specific socket behavior alone, every session is also force-closed after
+# a hard maximum lifetime regardless of activity, so a session can never
+# leak indefinitely even if disconnect detection never fires at all.
+MAX_SESSION_LIFETIME_SECONDS = 600
 
 
 def _client_address(request: Request) -> str:
@@ -71,6 +84,7 @@ def create_mcp_app(registry: Optional[ToolRegistry] = None) -> FastAPI:
         session_id = str(uuid.uuid4())
         queue: asyncio.Queue = asyncio.Queue()
         sessions[session_id] = queue
+        session_started_at = time.monotonic()
 
         async def event_generator():
             logger.info(f"SSE session {session_id} event_generator started")
@@ -81,6 +95,28 @@ def create_mcp_app(registry: Optional[ToolRegistry] = None) -> FastAPI:
 
                 # 2. Keep stream alive / yield any server push messages
                 while True:
+                    if time.monotonic() - session_started_at > MAX_SESSION_LIFETIME_SECONDS:
+                        logger.info(f"SSE session {session_id} exceeded max lifetime; closing")
+                        break
+                    # REGRESSION FIX: a prior pass removed this disconnect
+                    # check entirely. Without it, a client that disconnects
+                    # abruptly (closed tab, network drop, no clean FIN) is
+                    # never detected -- writing a ping into a dead socket
+                    # does not reliably raise on its own, so the generator
+                    # runs forever and its session entry leaks in `sessions`
+                    # permanently. Confirmed live: an abrupt RST-closed
+                    # connection left the session un-cleaned-up 18+ seconds
+                    # later with zero cleanup log line, across many ping
+                    # cycles. `is_disconnected()` is the ASGI-level check
+                    # Starlette provides specifically because socket-level
+                    # write failures are not a reliable signal here.
+                    try:
+                        if await request.is_disconnected():
+                            logger.info(f"SSE session {session_id} client disconnected")
+                            break
+                    except Exception:
+                        break
+
                     try:
                         data = await asyncio.wait_for(queue.get(), timeout=1.0)
                         yield f"event: message\ndata: {json.dumps(data)}\n\n"
