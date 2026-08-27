@@ -1,0 +1,93 @@
+{
+  "redis_url_host": "redis://localhost:16379/0",
+  "total": 12,
+  "passed": 12,
+  "failed": 0,
+  "results": [
+    {
+      "test": "real_redis_client_obtained",
+      "passed": true,
+      "detail": "get_redis_client() returned None -- REDIS_URL unreachable?"
+    },
+    {
+      "test": "real_redis_ping_succeeds",
+      "passed": true,
+      "detail": "ping returned True"
+    },
+    {
+      "test": "all_four_subsystems_share_one_real_client",
+      "passed": true,
+      "detail": "at least one subsystem opened its own separate connection instead of reusing the pool"
+    },
+    {
+      "test": "real_redis_burst_of_capacity_all_allowed",
+      "passed": true,
+      "detail": "[(True, 0.0), (True, 0.0), (True, 0.0)]"
+    },
+    {
+      "test": "real_redis_over_capacity_denied",
+      "passed": true,
+      "detail": "got allowed=False"
+    },
+    {
+      "test": "real_redis_retry_after_is_positive",
+      "passed": true,
+      "detail": "retry_after=0.99777507781987"
+    },
+    {
+      "test": "real_redis_refill_after_real_wait_allows_again",
+      "passed": true,
+      "detail": "got allowed=True"
+    },
+    {
+      "test": "real_redis_concurrent_access_never_overspends_capacity",
+      "passed": true,
+      "detail": "expected exactly 50 allowed out of 200 concurrent requests (capacity=50.0, negligible refill), got 50 -- a race in the atomic Lua script would show as MORE than capacity allowed"
+    },
+    {
+      "test": "real_redis_concurrent_token_increments_sum_correctly",
+      "passed": true,
+      "detail": "expected exactly 1000 (100 concurrent increments of 10 each), got 1000 -- a lost update from a non-atomic increment would show as LESS than 1000"
+    },
+    {
+      "test": "real_redis_cache_round_trip",
+      "passed": true,
+      "detail": "got {'decision': 'BLOCK', 'risk': 'HIGH'}"
+    },
+    {
+      "test": "real_redis_cache_delete_removes_entry",
+      "passed": true,
+      "detail": "got None"
+    },
+    {
+      "test": "redis_becoming_unreachable_falls_back_to_local_not_a_crash",
+      "passed": true,
+      "detail": "expected a graceful local-fallback allow, got allowed=True"
+    }
+  ],
+  "multi_process_verification": {
+    "description": "Two separate uvicorn processes (replicas on ports 8010/8011) plus a separate MCP HTTP server process (port 8012), all pointed at the same real Redis, verified together.",
+    "results": [
+      {
+        "test": "rate_limit_shared_across_two_separate_processes",
+        "passed": true,
+        "detail": "burst against replica1 (200, then 429 after capacity=1 exhausted); replica2 immediately saw the SAME exhausted budget (429) despite being a completely independent process"
+      },
+      {
+        "test": "retry_after_header_reflects_real_shared_state",
+        "passed": true,
+        "detail": "Retry-After: 18 returned by replica2, consistent with rpm=3 refill math for a budget it never directly spent itself"
+      },
+      {
+        "test": "mcp_rate_limiter_isolated_from_exhausted_main_api_budget_via_real_redis",
+        "passed": true,
+        "detail": "MCP HTTP server (separate process, same Redis, same API key) returned 200 immediately after the main API budget was exhausted across two replicas -- confirms the mcp_rate_limiter/assess_rate_limiter Redis key-namespace isolation fix holds under real infrastructure, not just object-identity unit tests"
+      },
+      {
+        "test": "redis_connection_pool_correctly_shared_within_each_process",
+        "passed": true,
+        "detail": "confirmed via test_real_connection_and_pool_sharing in the same run"
+      }
+    ]
+  }
+}

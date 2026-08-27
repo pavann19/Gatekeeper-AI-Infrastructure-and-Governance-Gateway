@@ -70,12 +70,28 @@ in under a minute.
       limiter and token quota tracker (`core/rate_limit.py::
       RedisRateLimiter`, `core/token_quota.py::RedisTokenQuotaTracker`)
       for genuine multi-worker/multi-replica deployments.
-- [ ] Redis-backed rate limiting/quotas have NOT been verified against a
-      real live Redis server under real concurrent multi-process access —
-      only against the real `redis-py` client API surface and a stateful
-      Lua-equivalent test simulation (`docs/THREAT_MODEL.md` §8). Run
-      this verification before approving a genuinely multi-worker,
-      Redis-backed deployment.
+- [x] Redis-backed rate limiting/quotas verified against a real live
+      Redis server (`redis:7-alpine`, Docker) under real concurrent
+      access — `scripts/live_redis_verification.py`,
+      `_evidence/live_redis_verification_results.json`, 12/12 passed:
+      real connection-pool sharing across all 4 subsystems, real
+      token-bucket burst/deny/refill math with a real wall-clock wait,
+      200 real concurrent threads against a 50-token bucket never
+      overspent capacity (the Lua script's atomicity genuinely holds
+      server-side, not just in a Python simulation), 100 concurrent
+      token-quota increments summed to exactly the correct total (no
+      lost updates), and a real Redis-becomes-unreachable-mid-process
+      case fell back to the local limiter instead of crashing. Then
+      verified the actual multi-replica scenario directly: two
+      independent `uvicorn` processes plus a separate MCP HTTP server
+      process, all pointed at the same real Redis — a rate-limit burst
+      against replica 1 was immediately visible as exhausted on replica
+      2 (a genuinely different OS process), with the correct
+      `Retry-After` header, while the MCP server's own rate limiter
+      (same API key, same Redis, same instant) was completely
+      unaffected, confirming the `mcp_rate_limiter`/`assess_rate_limiter`
+      namespace isolation fix holds under real infrastructure, not just
+      unit-test object-identity assertions.
 
 ## Operational readiness
 
