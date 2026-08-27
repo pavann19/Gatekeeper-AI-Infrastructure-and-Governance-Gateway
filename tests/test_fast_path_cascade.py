@@ -198,3 +198,33 @@ def test_both_new_sources_are_registered_in_the_metrics_allowlist():
     from core.metrics import KNOWN_SOURCES
     assert "fast_path_meta_intent" in KNOWN_SOURCES
     assert "fast_path_anchor_critical" in KNOWN_SOURCES
+
+
+# ---------------------------------------------------------------------------
+# Per-stage timings must survive assess_risk's Stage-5 return, or
+# metrics.record_assessment's stage_duration_seconds histogram stays empty
+# forever (the *_ms keys were computed in Stage 2 and silently discarded).
+# ---------------------------------------------------------------------------
+
+def test_deep_path_return_carries_stage_timings(monkeypatch, drive_past_cache_and_hardban):
+    from core.metrics import STAGE_KEYS
+
+    monkeypatch.setattr(risk_mod, "_fast_path_signals",
+                        lambda vec: {"meta_intent_score": 0.0, "threat_score": 0.0})
+    monkeypatch.setattr(risk_mod, "collect_semantic_signals", lambda p, v, fast=None: {
+        "threat_score": 0.0, "is_educational": False, "domain_score": None,
+        "domain_aligned": None, "meta_intent_score": 0.0, "centroid_score": 0.0,
+        "fusion_available": False, "fusion_score": None,
+        "fusion_threshold_high": None, "fusion_threshold_medium": None,
+        # the timings Stage 2 really measures:
+        "meta_intent_ms": 4.2, "faiss_threat_search_ms": 1.1,
+        "domain_alignment_ms": 0.0, "fusion_ms": 37.5,
+    })
+    monkeypatch.setattr(risk_mod, "SEMANTIC_THRESHOLD_HIGH", 0.99)
+
+    _, details = risk_mod.assess_risk("clears fast path, deep path decides")
+
+    for key in STAGE_KEYS:  # meta_intent_ms, faiss_threat_search_ms, domain_alignment_ms, fusion_ms
+        assert key in details, f"{key} dropped before assess_risk returned"
+        assert isinstance(details[key], (int, float)), f"{key} not numeric: {details[key]!r}"
+    assert details["fusion_ms"] == 37.5

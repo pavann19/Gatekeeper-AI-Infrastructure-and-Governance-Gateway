@@ -853,4 +853,15 @@ def assess_risk(prompt: str, background_scheduler=None, raw_prompt: str = None) 
                   "fusion_triggering_class": signals.get("fusion_triggering_class"),
                   "fusion_class_scores": signals.get("fusion_class_scores", {}),
                   "anchor_threat_score": signals["threat_score"],
-                  "meta_intent_score": signals["meta_intent_score"]}
+                  "meta_intent_score": signals["meta_intent_score"],
+                  # Per-stage timings measured in Stage 2 (collect_semantic_
+                  # signals). Only the deep path pays these, so only this
+                  # return carries them; the early-exit paths (cache hit,
+                  # symbolic veto, fast path) never ran those stages. Without
+                  # this passthrough the keys were computed and discarded,
+                  # leaving metrics.record_assessment's stage_duration_seconds
+                  # histogram permanently empty (STAGE_KEYS in core/metrics.py).
+                  "meta_intent_ms": signals.get("meta_intent_ms"),
+                  "faiss_threat_search_ms": signals.get("faiss_threat_search_ms"),
+                  "domain_alignment_ms": signals.get("domain_alignment_ms"),
+                  "fusion_ms": signals.get("fusion_ms")}
