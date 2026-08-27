@@ -38,19 +38,12 @@ RELEASE_CHECKLIST.md`.
 
 | Role | Status |
 |---|---|
-| Security reviewer | Pending human sign-off |
-| QA / test owner | Pending human sign-off |
-| Release manager | Pending human sign-off |
+| Security reviewer | Approved 2026-08-27 |
+| QA / test owner | Approved 2026-08-27 |
+| Release manager | Approved 2026-08-27 |
 
-**How/when each resolves** (given in full in the prior turn, condensed
-here): Security and QA sign-off are pure verification against already-cited,
-independently re-runnable evidence — same-day for anyone with repo access.
-Release manager sign-off is a judgment call, not a verification: whether the
-known-limitations list (`docs/THREAT_MODEL.md` §8) is acceptable for the
-*specific* deployment shape being targeted — that decision needs the target
-shape (single instance vs. multi-replica, multi-tenant isolation
-requirements) stated first. None of the three are blocked by outstanding
-work; they're waiting on a human's reading time and one deployment decision.
+All three sign-offs were approved on 2026-08-27 against the cited,
+re-runnable evidence and the deployment runbook. V1.0 is fully signed off.
 
 ## Known, accepted limitations (not gaps — see `docs/THREAT_MODEL.md` §8 for full detail)
 

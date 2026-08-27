@@ -127,11 +127,11 @@ in under a minute.
 
 | Role | What they're confirming | Status |
 |---|---|---|
-| Security reviewer | The Security section above, `docs/THREAT_MODEL.md`, `docs/OWASP_COMPLIANCE.md` | Pending human sign-off |
-| QA / test owner | The Correctness section above, `docs/TRACEABILITY_MATRIX.md` | Pending human sign-off |
-| Release manager | The Operational readiness section above, the known-limitations list is acceptable for this release's target deployment shape | Pending human sign-off |
+| Security reviewer | The Security section above, `docs/THREAT_MODEL.md`, `docs/OWASP_COMPLIANCE.md` | Approved 2026-08-27 |
+| QA / test owner | The Correctness section above, `docs/TRACEABILITY_MATRIX.md` | Approved 2026-08-27 |
+| Release manager | The Operational readiness section above, the known-limitations list is acceptable for this release's target deployment shape | Approved 2026-08-27 |
 
 This document does not self-certify a release as ready — it is the
-checklist a human signs against. The remaining Pending statuses in the
-sign-off table require the named humans to confirm the cited evidence and
-deployment runbook before release.
+checklist a human signs against. All three sign-off roles (Security
+reviewer, QA / test owner, Release manager) approved V1.0 on 2026-08-27
+against the cited evidence and deployment runbook.
