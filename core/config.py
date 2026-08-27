@@ -127,6 +127,33 @@ class Settings(BaseSettings):
     # replace the borrowed one.
     HALLUCINATION_CHECK_ENABLED: bool = False
 
+    # Output-judge fallback ("inverter") — core.semantic_judge.output_judge.
+    # WHY THIS EXISTS: when the primary judge (Ollama/Llama Guard) is
+    # unreachable, output_judge() returns the sentinel "JUDGE_OFFLINE", and
+    # core.output_guardrails.assess_output only ever checks
+    # `if verdict == "DANGEROUS"` -- anything else, including
+    # "JUDGE_OFFLINE", falls through to ALLOW. That is a silent fail-OPEN:
+    # exactly the window an attacker would want, and exactly the outage a
+    # real deployment WILL eventually hit (Ollama restarts, OOMs, or the
+    # host it runs on reboots). Fix: when the primary judge is unreachable,
+    # fall back to `toxic_bert` -- already loaded and warmed at startup for
+    # the INPUT-side fusion ensemble (core/fusion.py's LIVE_MODEL_DETECTORS,
+    # chosen there specifically for being fast enough for synchronous
+    # request handling, unlike Llama Guard) -- instead of allowing blind.
+    # It is not as accurate as the primary judge, but a fast, local,
+    # network-independent second opinion beats no opinion at all: the same
+    # reasoning as an inverter picking up a house's critical circuits the
+    # instant utility power drops, not a substitute for the grid but enough
+    # to keep the lights from going out entirely. True JUDGE_OFFLINE (fail
+    # open) is now reached only if THIS fallback model also fails to load.
+    OUTPUT_JUDGE_FALLBACK_ENABLED: bool = True
+    # toxic_bert emits an independent sigmoid probability per label (see
+    # TransformerDetector's multi_label=True path); 0.5 is the same neutral
+    # midpoint threshold used to interpret any single sigmoid output before
+    # a fitted policy exists for it, deliberately conservative rather than
+    # tuned, since this path only ever runs during a primary-judge outage.
+    OUTPUT_JUDGE_FALLBACK_THRESHOLD: float = 0.5
+
     # Execution Environment
     OLLAMA_API_URL: str = "http://localhost:11434/api/generate"
     # "mistral" was the original default, stale since Llama Guard 3 became

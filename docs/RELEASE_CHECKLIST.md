@@ -37,10 +37,20 @@ in under a minute.
       its parse/size error responses weren't valid JSON-RPC. All 3
       verified fixed live against a real running server, not just by
       re-reading the diff.
+- [x] The output toxicity judge does not silently fail open when its
+      primary backend is unreachable — `output_judge()` returning
+      `JUDGE_OFFLINE` used to fall through `assess_output`'s `if verdict
+      == "DANGEROUS"` check to ALLOW. Fixed with a local fallback judge
+      (`core/semantic_judge.py::_fallback_output_judge`, reusing the
+      already-warmed `toxic_bert` detector — no cold-start cost at the
+      moment it's needed) engaged before the offline sentinel is ever
+      returned. `docs/THREAT_MODEL.md` §7 finding #16, `docs/
+      TRACEABILITY_MATRIX.md`, 7 new tests, verified live against the
+      real model (71ms warm-call latency).
 
 ## Correctness
 
-- [x] Full test suite passes — `python -m pytest tests/` → 1580 passed,
+- [x] Full test suite passes — `python -m pytest tests/` → 1601 passed,
       0 failed (re-verify this exact count before release; it will have
       grown).
 - [x] Lint clean on the CI-gated scope — `ruff check core/ api/` → All

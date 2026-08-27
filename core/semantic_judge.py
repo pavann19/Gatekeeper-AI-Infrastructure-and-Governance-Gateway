@@ -1,10 +1,48 @@
 import requests
 import json
-from core.config import OLLAMA_API_URL, OLLAMA_MODEL
+from core.config import OLLAMA_API_URL, OLLAMA_MODEL, settings
 from core.circuit_breaker import ollama_judge_breaker
 from core.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def _fallback_output_judge(response_text: str) -> str:
+    """
+    The "inverter": a fast, local, network-independent second opinion for
+    output_judge(), used ONLY when the primary judge (Ollama/Llama Guard) is
+    unreachable. See OUTPUT_JUDGE_FALLBACK_ENABLED's docstring in
+    core/config.py for the full rationale.
+
+    Reuses `toxic_bert` (core/detectors.py), already loaded and warmed at
+    process startup as part of the INPUT-side fusion ensemble
+    (core/fusion.py's LIVE_MODEL_DETECTORS) specifically because it is fast
+    enough for synchronous request handling -- millisecond CPU inference,
+    no network call, nothing to be "unreachable". It is a weaker judge than
+    Llama Guard (a general toxicity classifier, not a purpose-built safety
+    taxonomy), which is exactly why it is the fallback and not the primary.
+
+    Returns "SAFE" or "DANGEROUS" on success. Returns "JUDGE_OFFLINE" only
+    if the fallback model itself is unavailable (e.g. never downloaded, or
+    disabled via OUTPUT_JUDGE_FALLBACK_ENABLED=False) -- true fail-open is
+    now reached only when BOTH the primary and the fallback are down.
+    """
+    if not settings.OUTPUT_JUDGE_FALLBACK_ENABLED:
+        return "JUDGE_OFFLINE"
+    try:
+        from core.detectors import get_detector
+
+        detector = get_detector("toxic_bert")
+        score = detector.score_batch([response_text])[0]
+        verdict = "DANGEROUS" if score >= settings.OUTPUT_JUDGE_FALLBACK_THRESHOLD else "SAFE"
+        logger.warning(
+            f"⚡ Primary output judge unreachable -- inverter (toxic_bert) engaged. "
+            f"score={score:.3f} threshold={settings.OUTPUT_JUDGE_FALLBACK_THRESHOLD} verdict={verdict}"
+        )
+        return verdict
+    except Exception as e:
+        logger.error(f"Output-judge fallback (toxic_bert) also unavailable: {type(e).__name__}: {e}")
+        return "JUDGE_OFFLINE"
 
 
 def judge_available() -> tuple:
@@ -230,7 +268,7 @@ def output_judge(response_text: str) -> str:
             return _judge_via_llama_guard(response_text)
         except Exception:
             ollama_judge_breaker.record_failure()
-            return "JUDGE_OFFLINE"
+            return _fallback_output_judge(response_text)
 
 
 
@@ -276,4 +314,4 @@ def output_judge(response_text: str) -> str:
         return "DANGEROUS"
 
     except Exception:
-        return "JUDGE_OFFLINE"
+        return _fallback_output_judge(response_text)
