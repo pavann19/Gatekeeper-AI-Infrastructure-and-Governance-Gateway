@@ -432,11 +432,23 @@ listed here so a reviewer doesn't have to go find them individually.
   a multi-worker deployment gets N× the configured limit, since each
   worker enforces independently. `docs/DEPLOYMENT_RUNBOOK.md` records
   the release-layer decision for which mode a given deployment runs in
-  — this is now a configuration choice, not an unconditional gap. The
-  Redis-backed paths have been verified against the real `redis-py`
-  client API and a stateful Lua-equivalent test simulation, but NOT yet
-  against a real live Redis server under real concurrent multi-process
-  access — that verification is still open.
+  — this is now a configuration choice, not an unconditional gap.
+  RESOLVED, not just revisited: the Redis-backed paths were first
+  verified against the real `redis-py` client API and a stateful
+  Lua-equivalent test simulation, then against a real live Redis server
+  (`redis:7-alpine`) under real concurrent access — 200 concurrent
+  threads against a 50-token bucket never overspent capacity (the Lua
+  script's atomicity genuinely holds server-side), 100 concurrent token
+  increments summed to exactly the correct total, and a real
+  Redis-becomes-unreachable case fell back cleanly. Then verified the
+  actual production scenario directly: two independent `uvicorn`
+  processes plus a separate MCP HTTP server process, all against the
+  same real Redis — a rate-limit burst against one process was
+  immediately visible as exhausted on the other (genuinely different OS
+  processes, not threads), while the MCP server's own rate limiter
+  (same key, same Redis, same instant) stayed correctly unaffected.
+  `scripts/live_redis_verification.py`,
+  `_evidence/live_redis_verification_results.json`.
 - **Rate limiter bucket registry is LRU-capped in local-fallback mode**
   (`RATE_LIMIT_MAX_TRACKED`) — bounded memory was judged more important
   than perfect per-identity accounting; a caller cycling through more
