@@ -309,3 +309,74 @@ def test_output_judge_under_guard_default_does_not_fail_closed_on_every_response
             return_value=MockResponse({"message": {"content": "safe"}}),
         ):
             assert output_judge("Here is a recipe for banana bread.") == "SAFE"
+
+
+# ---------------------------------------------------------------------------
+# The "inverter": output_judge's fallback to a fast local model
+# (core.semantic_judge._fallback_output_judge, toxic_bert) when the primary
+# judge is unreachable, instead of returning the bare JUDGE_OFFLINE sentinel
+# that core.output_guardrails.assess_output silently treats as ALLOW. See
+# OUTPUT_JUDGE_FALLBACK_ENABLED's docstring in core/config.py.
+# ---------------------------------------------------------------------------
+
+from core.semantic_judge import _fallback_output_judge
+
+
+def test_output_judge_falls_back_to_toxic_bert_when_guard_path_is_down():
+    """
+    THE REGRESSION THIS GUARDS: before the inverter existed, this exact
+    scenario -- Llama Guard configured, Ollama unreachable -- returned the
+    bare "JUDGE_OFFLINE" sentinel, which assess_output's `if verdict ==
+    "DANGEROUS"` check silently treats as ALLOW. A genuinely toxic response
+    must now be caught by the local fallback instead of sailing through.
+    """
+    with mock.patch("core.semantic_judge.OLLAMA_MODEL", "llama-guard3"):
+        with mock.patch("core.semantic_judge._judge_via_llama_guard",
+                        side_effect=ConnectionError("refused")):
+            with mock.patch("core.semantic_judge.ollama_judge_breaker.record_failure"):
+                with mock.patch("core.semantic_judge._fallback_output_judge",
+                                return_value="DANGEROUS") as fallback:
+                    assert output_judge("some response") == "DANGEROUS"
+                    fallback.assert_called_once_with("some response")
+
+
+def test_output_judge_falls_back_to_toxic_bert_when_chat_path_is_down():
+    with mock.patch("core.semantic_judge.OLLAMA_MODEL", "llama3.2"):
+        with mock.patch("core.semantic_judge.requests.post",
+                        side_effect=ConnectionError("refused")):
+            with mock.patch("core.semantic_judge._fallback_output_judge",
+                            return_value="SAFE") as fallback:
+                assert output_judge("some response") == "SAFE"
+                fallback.assert_called_once_with("some response")
+
+
+def test_fallback_judge_blocks_when_toxic_bert_score_exceeds_threshold():
+    """Live-model scoring path: high toxic_bert score -> DANGEROUS, using the
+    real detector wrapper's return shape (a list of one float from
+    score_batch), not a mock of _fallback_output_judge's own internals."""
+    fake_detector = mock.Mock()
+    fake_detector.score_batch.return_value = [0.91]
+    with mock.patch("core.detectors.get_detector", return_value=fake_detector):
+        assert _fallback_output_judge("some toxic text") == "DANGEROUS"
+        fake_detector.score_batch.assert_called_once_with(["some toxic text"])
+
+
+def test_fallback_judge_allows_when_toxic_bert_score_is_below_threshold():
+    fake_detector = mock.Mock()
+    fake_detector.score_batch.return_value = [0.02]
+    with mock.patch("core.detectors.get_detector", return_value=fake_detector):
+        assert _fallback_output_judge("a perfectly ordinary response") == "SAFE"
+
+
+def test_fallback_judge_disabled_by_config_returns_judge_offline():
+    """OUTPUT_JUDGE_FALLBACK_ENABLED=False must restore the pre-fix, fully
+    fail-open-on-both-outages behaviour exactly, not silently half-apply."""
+    with mock.patch("core.semantic_judge.settings.OUTPUT_JUDGE_FALLBACK_ENABLED", False):
+        assert _fallback_output_judge("anything") == "JUDGE_OFFLINE"
+
+
+def test_fallback_judge_itself_unavailable_returns_judge_offline_not_a_crash():
+    """True fail-open is reached only when BOTH the primary judge AND this
+    fallback are down -- e.g. toxic_bert was never downloaded."""
+    with mock.patch("core.detectors.get_detector", side_effect=KeyError("toxic_bert")):
+        assert _fallback_output_judge("anything") == "JUDGE_OFFLINE"

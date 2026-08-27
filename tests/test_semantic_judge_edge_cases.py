@@ -107,17 +107,28 @@ def test_semantic_judge_connection_error_fails_closed_to_judge_offline():
     assert result == "JUDGE_OFFLINE"
 
 
-def test_output_judge_timeout_fails_closed_to_judge_offline():
-    """output_judge has its own try/except Exception -> JUDGE_OFFLINE, entirely
-    separate from semantic_judge's; must be exercised independently."""
+def test_output_judge_timeout_falls_back_to_inverter_not_bare_judge_offline():
+    """output_judge has its own try/except Exception -> fallback, entirely
+    separate from semantic_judge's; must be exercised independently.
+
+    Prior to the output-judge inverter (core.semantic_judge.
+    _fallback_output_judge, see core/config.py's
+    OUTPUT_JUDGE_FALLBACK_ENABLED), this asserted a bare "JUDGE_OFFLINE" --
+    which core.output_guardrails.assess_output's `if verdict == "DANGEROUS"`
+    check silently treats as ALLOW, a fail-open on a primary-judge timeout.
+    Now the timeout routes to the local fallback judge instead; only if
+    THAT is also unavailable does "JUDGE_OFFLINE" still surface."""
     with mock.patch("core.semantic_judge.OLLAMA_MODEL", "llama3.2"):
         with mock.patch(
             "core.semantic_judge.requests.post",
             side_effect=requests.exceptions.Timeout("read timed out"),
         ):
-            result = output_judge("some generated text")
+            with mock.patch("core.semantic_judge._fallback_output_judge",
+                            return_value="SAFE") as fallback:
+                result = output_judge("some generated text")
+                fallback.assert_called_once_with("some generated text")
 
-    assert result == "JUDGE_OFFLINE"
+    assert result == "SAFE"
 
 
 # --- Malformed LLM response bodies ------------------------------------------

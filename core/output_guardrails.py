@@ -78,7 +78,16 @@ def assess_output(response_text: str, system_prompt: str = None, tenant_config=N
     4. Toxicity / harmful content, via Semantic Judge — BLOCK. Runs on the
        PII-redacted text, not the raw text, for the same reason (2) redacts
        rather than reveals: a toxicity judge does not need to see PII to do
-       its job, so there is no reason to widen exposure of it further.
+       its job, so there is no reason to widen exposure of it further. This
+       function only checks `verdict == "DANGEROUS"`, so any other string
+       output_judge() returns falls through to ALLOW below — that is now
+       safe rather than a silent fail-open, because output_judge() itself
+       no longer returns the bare JUDGE_OFFLINE sentinel when the primary
+       judge is down: it falls back to a fast local model first (the
+       "inverter", core/semantic_judge.py::_fallback_output_judge,
+       OUTPUT_JUDGE_FALLBACK_ENABLED in core/config.py) and only reaches
+       JUDGE_OFFLINE — and therefore ALLOW — if that fallback is also
+       unavailable.
     5. Semantic Grounding Check (hallucination) — BLOCK. Same redacted text.
 
     Returns:
