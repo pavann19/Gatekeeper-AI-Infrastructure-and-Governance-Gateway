@@ -1,7 +1,7 @@
 """
-Evaluates the deterministic detector over the multi-source evaluation suite,
-sliced by attack class, language and source, with bootstrap confidence
-intervals on every headline number.
+Evaluates the risk detector over the multi-source evaluation suite, sliced by
+attack class, language and source, with bootstrap confidence intervals on
+every headline number.
 
 This is the script that produces the results chapter. It answers the questions a
 single pooled accuracy figure cannot:
@@ -10,13 +10,25 @@ single pooled accuracy figure cannot:
   - How much of the error is the English-only encoder?
   - Does performance hold across sources, or is it fitted to one distribution?
 
-The semantic judge is excluded (non-deterministic, expensive, not reproducible);
-this measures the deterministic signal path only, which is what the thresholds
-are calibrated against.
+Two scoring modes, both judge-excluded (the judge is non-deterministic,
+expensive, and not reproducible):
+
+  deterministic (default) — anchors + meta-intent + symbolic veto only. This
+      is the fast-path floor the thresholds in core/config.py are calibrated
+      against. Cheap: one embedding per row.
+
+  --fusion — the full core.fusion.fused_threat_score() ensemble as deployed
+      (the richest reachable upgrade tier), falling back to the deterministic
+      score only on rows where fusion reports itself unavailable. This is the
+      accuracy of the system people actually run, minus the judge. Expensive:
+      ~0.5 s per row for the 8-detector ensemble, so use --jobs and/or
+      --limit. Writes to its own signals cache and report file; never
+      touches the deterministic artifacts.
 
 Usage:
     python -m scripts.evaluate_suite
     python -m scripts.evaluate_suite --limit 500 --bootstrap 500
+    python -m scripts.evaluate_suite --fusion --jobs 3
 """
 import argparse
 import json
@@ -30,8 +42,24 @@ from evaluation.metrics import (
 )
 
 SUITE_FILE = os.path.join("data", "eval_suite.jsonl")
-SIGNALS_FILE = os.path.join("_evidence", "suite_signals.jsonl")
-REPORT_FILE = os.path.join("_evidence", "suite_evaluation.json")
+
+_SIGNALS_FILE = {
+    "deterministic": os.path.join("_evidence", "suite_signals.jsonl"),
+    "fusion": os.path.join("_evidence", "suite_signals_fusion.jsonl"),
+}
+_REPORT_FILE = {
+    "deterministic": os.path.join("_evidence", "suite_evaluation.json"),
+    "fusion": os.path.join("_evidence", "suite_evaluation_fusion.json"),
+}
+_DETECTOR_DESC = {
+    "deterministic": "deterministic signals (anchors + meta-intent + symbolic)",
+    "fusion": "fusion ensemble (fused_threat_score, richest reachable tier; "
+              "deterministic fallback on unavailable rows; judge excluded)",
+}
+
+# Back-compat aliases — some callers import these by name.
+SIGNALS_FILE = _SIGNALS_FILE["deterministic"]
+REPORT_FILE = _REPORT_FILE["deterministic"]
 
 
 def load_suite(limit=None):
@@ -47,49 +75,121 @@ def load_suite(limit=None):
     return records[:limit] if limit else records
 
 
-def extract_signals(records, refresh=False):
+def _score_row_deterministic(r, deps):
+    get_embedding, check_meta_intent, hard_ban_triggered, threat_store = deps
+    symbolic, _ = hard_ban_triggered(r["text"])
+    vec = get_embedding(r["text"])
+    threat = float(threat_store.get_max_similarity(vec))
+    meta = float(check_meta_intent(vec))
+    # Single continuous detector score. Symbolic hits are a deterministic
+    # veto and take the maximum by construction.
+    score = 1.0 if symbolic else max(threat, meta)
+    return {**r, "symbolic": bool(symbolic), "threat_score": threat,
+            "meta_intent_score": meta, "score": score}
+
+
+def _score_row_fusion(r, deps):
+    get_embedding, check_meta_intent, hard_ban_triggered, threat_store = deps
+    from core.fusion import fused_threat_score
+
+    symbolic, _ = hard_ban_triggered(r["text"])
+    vec = get_embedding(r["text"])
+    threat = float(threat_store.get_max_similarity(vec))
+    meta = float(check_meta_intent(vec))
+    det_floor = max(threat, meta)
+
+    if symbolic:
+        return {**r, "symbolic": True, "threat_score": threat,
+                "meta_intent_score": meta, "fusion_available": False,
+                "fusion_score": None, "fusion_detail": "symbolic veto (fusion skipped)",
+                "score": 1.0}
+
+    fusion = fused_threat_score(r["text"], anchor_score=threat)
+    if fusion.get("available") and fusion.get("score") is not None:
+        score = float(fusion["score"])
+    else:
+        score = det_floor  # honest fallback, not an imputed zero
+    return {**r, "symbolic": False, "threat_score": threat,
+            "meta_intent_score": meta,
+            "fusion_available": bool(fusion.get("available")),
+            "fusion_score": fusion.get("score"),
+            "fusion_detail": fusion.get("detail"),
+            "score": score}
+
+
+def extract_signals(records, refresh=False, mode="deterministic", jobs=1):
     """
-    Scores every row with the deterministic detector. Cached — this is the only
-    expensive step (one embedding per row).
+    Scores every row and caches the result. `mode` selects the scorer:
+    'deterministic' (anchors+meta+symbolic, one embedding per row) or 'fusion'
+    (the full ensemble, ~0.5s per row). Each mode has its own cache file so
+    the two never collide.
     """
-    if os.path.exists(SIGNALS_FILE) and not refresh:
+    signals_file = _SIGNALS_FILE[mode]
+    if os.path.exists(signals_file) and not refresh:
         cached = {}
-        with open(SIGNALS_FILE, "r", encoding="utf-8") as f:
+        with open(signals_file, "r", encoding="utf-8") as f:
             for line in f:
                 row = json.loads(line)
                 cached[row["id"]] = row
         if all(r["id"] in cached for r in records):
-            print(f"Loaded cached signals for {len(records)} rows "
-                  f"({SIGNALS_FILE}; --refresh to recompute)")
+            print(f"Loaded cached {mode} signals for {len(records)} rows "
+                  f"({signals_file}; --refresh to recompute)")
             return [cached[r["id"]] for r in records]
-        print("Cache incomplete — recomputing.")
+        print(f"{mode} cache incomplete — recomputing.")
 
     from tqdm import tqdm
+    from core.config import settings
     from core.embeddings import get_embedding
     from core.risk import _ensure_faiss_initialized, check_meta_intent, hard_ban_triggered
     from core.vector_store import threat_store
 
     _ensure_faiss_initialized()
+    deps = (get_embedding, check_meta_intent, hard_ban_triggered, threat_store)
+    score_row = _score_row_fusion if mode == "fusion" else _score_row_deterministic
 
+    # Warm the ensemble once, single-threaded, before any fan-out: transformers'
+    # lazy module loader races when several threads first import a cold model
+    # (see core/fusion.py::_warm_detectors). Cheap insurance.
+    if mode == "fusion" and records:
+        score_row(records[0], deps)
+
+    n_fusion_unavailable = 0
     scored = []
-    print(f"Scoring {len(records)} prompts...")
-    for r in tqdm(records):
-        symbolic, _ = hard_ban_triggered(r["text"])
-        vec = get_embedding(r["text"])
-        threat = float(threat_store.get_max_similarity(vec))
-        meta = float(check_meta_intent(vec))
-        # Single continuous detector score. Symbolic hits are a deterministic
-        # veto and take the maximum by construction.
-        score = 1.0 if symbolic else max(threat, meta)
-        scored.append({**r, "symbolic": bool(symbolic), "threat_score": threat,
-                       "meta_intent_score": meta,
-                       "score": score})
+    print(f"Scoring {len(records)} prompts ({mode}, jobs={jobs})...")
+
+    if jobs > 1:
+        # Row-level threads replace fusion's own detector-level threads, so
+        # turn the latter off to avoid jobs * detectors thread oversubscription.
+        orig_parallel = settings.FUSION_PARALLEL
+        settings.FUSION_PARALLEL = False
+        try:
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=jobs) as ex:
+                for row in tqdm(ex.map(lambda r: score_row(r, deps), records),
+                                total=len(records)):
+                    scored.append(row)
+                    n_fusion_unavailable += (mode == "fusion"
+                                             and not row.get("fusion_available")
+                                             and not row.get("symbolic"))
+        finally:
+            settings.FUSION_PARALLEL = orig_parallel
+    else:
+        for r in tqdm(records):
+            row = score_row(r, deps)
+            scored.append(row)
+            n_fusion_unavailable += (mode == "fusion"
+                                     and not row.get("fusion_available")
+                                     and not row.get("symbolic"))
+
+    if mode == "fusion" and n_fusion_unavailable:
+        print(f"  WARNING: fusion unavailable on {n_fusion_unavailable}/"
+              f"{len(scored)} rows — deterministic fallback used for those.")
 
     os.makedirs("_evidence", exist_ok=True)
-    with open(SIGNALS_FILE, "w", encoding="utf-8") as f:
+    with open(signals_file, "w", encoding="utf-8") as f:
         for row in scored:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
-    print(f"Cached signals -> {SIGNALS_FILE}")
+    print(f"Cached {mode} signals -> {signals_file}")
     return scored
 
 
@@ -113,10 +213,19 @@ def main():
     parser.add_argument("--fpr-budget", type=float, default=0.05)
     parser.add_argument("--bootstrap", type=int, default=2000)
     parser.add_argument("--refresh", action="store_true")
+    parser.add_argument("--fusion", action="store_true",
+                        help="score with the full fusion ensemble instead of "
+                             "the deterministic floor (slow; ~0.5s/row)")
+    parser.add_argument("--jobs", type=int, default=1,
+                        help="row-level worker threads for --fusion "
+                             "(3-4 is a sane max on a laptop)")
     args = parser.parse_args()
 
+    mode = "fusion" if args.fusion else "deterministic"
+    report_file = _REPORT_FILE[mode]
+
     records = load_suite(limit=args.limit)
-    scored = extract_signals(records, refresh=args.refresh)
+    scored = extract_signals(records, refresh=args.refresh, mode=mode, jobs=args.jobs)
 
     scores = [r["score"] for r in scored]
     labels = [r["label"] for r in scored]
@@ -168,22 +277,27 @@ def main():
     fp = sum(1 for r in benign if r["score"] >= global_threshold)
     print(f"  {'benign (FPR)':<20} {fp:>5}/{len(benign):<5} = {fp / len(benign):6.1%}")
 
+    fusion_unavail = sum(1 for r in scored
+                         if not r.get("symbolic") and r.get("fusion_available") is False)
     report = {
         "config": {
+            "mode": mode,
             "fpr_budget": args.fpr_budget,
             "bootstrap_resamples": args.bootstrap,
             "global_threshold": global_threshold,
             "judge_excluded": True,
-            "detector": "deterministic signals (anchors + meta-intent + symbolic)",
+            "detector": _DETECTOR_DESC[mode],
+            "n_rows": len(scored),
+            "n_fusion_unavailable": fusion_unavail if mode == "fusion" else None,
         },
         "overall": overall,
         "by_attack_class": by_class,
         "by_language": by_lang,
         "by_source": by_source,
     }
-    with open(REPORT_FILE, "w", encoding="utf-8") as f:
+    with open(report_file, "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2, ensure_ascii=False)
-    print(f"\nReport -> {REPORT_FILE}")
+    print(f"\nReport -> {report_file}")
 
 
 if __name__ == "__main__":
