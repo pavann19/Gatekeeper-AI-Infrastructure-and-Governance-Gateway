@@ -45,7 +45,14 @@ class ScalableVectorStore:
         if index.ntotal == 0:
             return 0.0
 
-        vec = query_vec.cpu().numpy().reshape(1, -1).astype('float32')
+        if hasattr(query_vec, "cpu"):
+            vec = query_vec.cpu().numpy()
+        elif hasattr(query_vec, "numpy"):
+            vec = query_vec.numpy()
+        else:
+            vec = np.array(query_vec, dtype="float32")
+
+        vec = vec.reshape(1, -1).astype("float32")
         faiss.normalize_L2(vec)
 
         scores, _ = index.search(vec, 1)
