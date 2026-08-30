@@ -62,7 +62,7 @@ class FakeEncoder:
 
 def _install_fake_encoder(monkeypatch, encoder):
     fake_module = types.ModuleType("sentence_transformers")
-    fake_module.SentenceTransformer = lambda model_id: encoder
+    fake_module.SentenceTransformer = lambda model_id, **kw: encoder
     monkeypatch.setitem(sys.modules, "sentence_transformers", fake_module)
 
 

@@ -35,10 +35,12 @@ declared sources, and any number that ignores this is not a fair comparison.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import threading
 
+from core.config import settings
 from core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -47,6 +49,113 @@ logger = get_logger(__name__)
 CLASS_INJECTION = "prompt_injection"
 CLASS_JAILBREAK = "jailbreak"
 CLASS_HARMFUL = "harmful_content"
+
+
+class ModelIntegrityError(RuntimeError):
+    """Raised when a detector model's revision or weight SHA256 hash does not match models/detector_manifest.json."""
+
+    pass
+
+
+def _is_auth_error(e: Exception) -> bool:
+    """Returns True if the exception indicates Hugging Face authentication, licence, or gated repo access failure."""
+    msg = str(e).lower()
+    err_type = type(e).__name__.lower()
+    if "gated" in err_type or "gated" in msg:
+        return True
+    if "401" in msg or "403" in msg or "unauthorized" in msg or "forbidden" in msg or "restricted" in msg:
+        return True
+    if "repositorynotfound" in err_type or "repositorynotfound" in msg:
+        if "access" in msg or "private" in msg or "gated" in msg or "restricted" in msg or "auth" in msg:
+            return True
+    resp = getattr(e, "response", None)
+    if resp is not None and getattr(resp, "status_code", None) in (401, 403):
+        return True
+    return False
+
+
+def _verify_detector_integrity(
+    name: str, model_id: str, revision: str | None, manifest_path: str = "models/detector_manifest.json"
+) -> None:
+    """Verifies that the detector model's revision and weight file SHA256 match models/detector_manifest.json.
+
+    Raises ModelIntegrityError on mismatch or missing manifest.
+    """
+    if not os.path.exists(manifest_path):
+        raise ModelIntegrityError(
+            f"Detector manifest not found at '{manifest_path}' during DETECTOR_VERIFY_HASHES check for '{name}'"
+        )
+
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+    except Exception as e:
+        raise ModelIntegrityError(f"Failed to read detector manifest '{manifest_path}': {e}") from e
+
+    if name not in manifest:
+        raise ModelIntegrityError(
+            f"Detector '{name}' ({model_id}) not found in manifest '{manifest_path}'"
+        )
+
+    entry = manifest[name]
+    expected_rev = entry.get("revision")
+    if expected_rev and revision and expected_rev != revision:
+        raise ModelIntegrityError(
+            f"Detector '{name}' revision mismatch: expected '{expected_rev}', got '{revision}'"
+        )
+
+    expected_sha256 = entry.get("sha256")
+    if not expected_sha256:
+        return
+
+    # Locate the weight file in cache
+    filename = entry.get("filename")
+    candidates = [filename] if filename else ["model.safetensors", "pytorch_model.bin"]
+    weight_path = None
+    try:
+        from huggingface_hub import hf_hub_download, try_to_load_from_cache
+
+        for cand in candidates:
+            if cand is None:
+                continue
+            cached = try_to_load_from_cache(repo_id=model_id, filename=cand, revision=revision)
+            if isinstance(cached, str) and os.path.exists(cached):
+                weight_path = cached
+                break
+
+        if not weight_path:
+            for cand in candidates:
+                if cand is None:
+                    continue
+                try:
+                    weight_path = hf_hub_download(
+                        repo_id=model_id, filename=cand, revision=revision, local_files_only=True
+                    )
+                    if os.path.exists(weight_path):
+                        break
+                except Exception:
+                    pass
+    except Exception as e:
+        raise ModelIntegrityError(
+            f"Failed resolving weight cache path for detector '{name}' ({model_id}@{revision}): {e}"
+        ) from e
+
+    if not weight_path or not os.path.exists(weight_path):
+        raise ModelIntegrityError(
+            f"Could not locate cached weight file for detector '{name}' ({model_id}@{revision}) to verify hash"
+        )
+
+    h = hashlib.sha256()
+    with open(weight_path, "rb") as f:
+        while chunk := f.read(65536):
+            h.update(chunk)
+    actual_sha256 = h.hexdigest()
+
+    if actual_sha256 != expected_sha256:
+        raise ModelIntegrityError(
+            f"Detector '{name}' integrity verification failed: weight file '{weight_path}' "
+            f"SHA256 mismatch: expected {expected_sha256}, got {actual_sha256}"
+        )
 
 
 class Detector:
@@ -140,9 +249,10 @@ class TransformerDetector(Detector):
     """
 
     def __init__(self, name, model_id, positive_labels, targets,
-                 multi_label=False, max_length=256, trained_on=(), description=""):
+                 multi_label=False, max_length=256, revision=None, trained_on=(), description=""):
         self.name = name
         self.model_id = model_id
+        self.revision = revision
         self.positive_labels = {label.lower() for label in positive_labels}
         self.targets = tuple(targets)
         self.multi_label = multi_label
@@ -165,9 +275,9 @@ class TransformerDetector(Detector):
                 import torch  # noqa: F401
                 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-                logger.info(f"Loading detector '{self.name}' ({self.model_id})...")
-                self._tokenizer = AutoTokenizer.from_pretrained(self.model_id)
-                model = AutoModelForSequenceClassification.from_pretrained(self.model_id)
+                logger.info(f"Loading detector '{self.name}' ({self.model_id}@{self.revision})...")
+                self._tokenizer = AutoTokenizer.from_pretrained(self.model_id, revision=self.revision)
+                model = AutoModelForSequenceClassification.from_pretrained(self.model_id, revision=self.revision)
                 model.eval()
                 self._model = model
 
@@ -183,15 +293,29 @@ class TransformerDetector(Detector):
                     )
                     self._model = None
                     logger.error(f"Detector '{self.name}' label mismatch: {self._load_error}")
+                    return
+
+                if getattr(settings, "DETECTOR_VERIFY_HASHES", False):
+                    _verify_detector_integrity(self.name, self.model_id, self.revision)
+
+                logger.info(f"Detector '{self.name}' verified and loaded ({self.model_id}@{self.revision})")
+            except ModelIntegrityError:
+                raise
             except Exception as e:
                 self._load_error = f"{type(e).__name__}: {str(e)[:200]}"
-                logger.warning(f"Detector '{self.name}' unavailable: {self._load_error}")
+                if _is_auth_error(e):
+                    logger.error(
+                        f"Detector '{self.name}' unavailable due to authentication/licence (gated model): {self._load_error}"
+                    )
+                else:
+                    logger.warning(f"Detector '{self.name}' unavailable: {self._load_error}")
 
     def available(self):
         self._load()
         if self._load_error:
             return False, self._load_error
-        return True, f"loaded {self.model_id}"
+        rev_info = f"@{self.revision}" if self.revision else ""
+        return True, f"loaded {self.model_id}{rev_info}"
 
     def score_batch(self, texts, batch_size=16):
         self._load()
@@ -252,10 +376,11 @@ class EmbeddingHeadDetector(Detector):
     the exact sklearn/Python version that trained the artifact.
     """
 
-    def __init__(self, name, artifact_path, targets, description=""):
+    def __init__(self, name, artifact_path, targets, revision="e8f8c211226b894fcb81acc59f3b34ba3efd5f42", description=""):
         self.name = name
         self.artifact_path = artifact_path
         self.targets = tuple(targets)
+        self.revision = revision
         self.trained_on = ()  # see class docstring — this field doesn't apply here
         self.description = description
         self._encoder = None
@@ -286,18 +411,36 @@ class EmbeddingHeadDetector(Detector):
                     raise ValueError("scaler/coefficients length mismatch")
 
                 from sentence_transformers import SentenceTransformer
-                logger.info(f"Loading detector '{self.name}' ({artifact['model_id']})...")
-                self._encoder = SentenceTransformer(artifact["model_id"])
+
+                model_id = artifact["model_id"]
+                revision = self.revision or artifact.get("revision")
+                try:
+                    self._encoder = SentenceTransformer(model_id, revision=revision)
+                except TypeError:
+                    self._encoder = SentenceTransformer(model_id)
                 self._artifact = artifact
+
+                if getattr(settings, "DETECTOR_VERIFY_HASHES", False):
+                    _verify_detector_integrity(self.name, model_id, revision)
+
+                logger.info(f"Detector '{self.name}' verified and loaded ({model_id}@{revision})")
+            except ModelIntegrityError:
+                raise
             except Exception as e:
                 self._load_error = f"{type(e).__name__}: {str(e)[:200]}"
-                logger.warning(f"Detector '{self.name}' unavailable: {self._load_error}")
+                if _is_auth_error(e):
+                    logger.error(
+                        f"Detector '{self.name}' unavailable due to authentication/licence: {self._load_error}"
+                    )
+                else:
+                    logger.warning(f"Detector '{self.name}' unavailable: {self._load_error}")
 
     def available(self):
         self._load()
         if self._load_error:
             return False, self._load_error
-        return True, f"loaded {self._artifact['model_id']} + {self.artifact_path}"
+        rev_info = f"@{self.revision}" if self.revision else ""
+        return True, f"loaded {self._artifact['model_id']}{rev_info} + {self.artifact_path}"
 
     def _apply_head(self, vec):
         import math
@@ -366,10 +509,11 @@ class LlamaGuardDetector(Detector):
     generate, and is for diagnostics rather than bulk scoring.
     """
 
-    def __init__(self, name, model_id, targets=(CLASS_HARMFUL,), dtype="bfloat16",
+    def __init__(self, name, model_id, revision=None, targets=(CLASS_HARMFUL,), dtype="bfloat16",
                  max_length=2048, min_free_gb=3.0, description="", trained_on=()):
         self.name = name
         self.model_id = model_id
+        self.revision = revision
         self.targets = tuple(targets)
         self.trained_on = tuple(trained_on)
         self.description = description
@@ -440,11 +584,11 @@ class LlamaGuardDetector(Detector):
 
                 torch_dtype = getattr(torch, self.dtype, torch.float32)
                 logger.info(
-                    f"Loading '{self.name}' ({self.model_id}, {self.dtype}) — "
+                    f"Loading '{self.name}' ({self.model_id}@{self.revision}, {self.dtype}) — "
                     f"this is a multi-GB download on first use."
                 )
 
-                tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+                tokenizer = AutoTokenizer.from_pretrained(self.model_id, revision=self.revision)
                 # Left padding keeps the verdict position last in every row of a
                 # batch, which is what makes logits[:, -1] correct.
                 tokenizer.padding_side = "left"
@@ -459,6 +603,7 @@ class LlamaGuardDetector(Detector):
 
                 model = AutoModelForCausalLM.from_pretrained(
                     self.model_id,
+                    revision=self.revision,
                     torch_dtype=torch_dtype,
                     low_cpu_mem_usage=True,
                 )
@@ -468,18 +613,30 @@ class LlamaGuardDetector(Detector):
                 self._model = model
                 self._safe_id = safe_id
                 self._unsafe_id = unsafe_id
+
+                if getattr(settings, "DETECTOR_VERIFY_HASHES", False):
+                    _verify_detector_integrity(self.name, self.model_id, self.revision)
+
                 logger.info(
-                    f"Detector '{self.name}' ready (safe={safe_id}, unsafe={unsafe_id})"
+                    f"Detector '{self.name}' verified and loaded (safe={safe_id}, unsafe={unsafe_id})"
                 )
+            except ModelIntegrityError:
+                raise
             except Exception as e:
                 self._load_error = f"{type(e).__name__}: {str(e)[:200]}"
-                logger.warning(f"Detector '{self.name}' unavailable: {self._load_error}")
+                if _is_auth_error(e):
+                    logger.error(
+                        f"Detector '{self.name}' unavailable due to authentication/licence (gated model): {self._load_error}"
+                    )
+                else:
+                    logger.warning(f"Detector '{self.name}' unavailable: {self._load_error}")
 
     def available(self):
         self._load()
         if self._model is None:
             return False, self._load_error or "not loaded"
-        return True, f"loaded {self.model_id} ({self.dtype})"
+        rev_info = f"@{self.revision}" if self.revision else ""
+        return True, f"loaded {self.model_id}{rev_info} ({self.dtype})"
 
     # -- prompt construction ------------------------------------------------
 
@@ -706,8 +863,9 @@ class NemoGuardJailbreakDetector(Detector):
     description = ("NVIDIA NeMo Guardrails model-based jailbreak rail "
                    "(Snowflake embed + NemoGuard RF; training data undisclosed)")
 
-    def __init__(self, model_dir=None):
+    def __init__(self, model_dir=None, revision="92d97331f1f4b6a366c1f161354b9f3390cc219f"):
         self._model_dir = model_dir or os.path.join(".hf_cache", "nemoguard")
+        self.revision = revision
         self._classifier = None
         self._load_error = None
         self._lock = threading.Lock()
@@ -755,10 +913,11 @@ class NemoGuardJailbreakDetector(Detector):
                 embed = SnowflakeEmbed.__new__(SnowflakeEmbed)
                 embed.device = "cpu"
                 embed.tokenizer = AutoTokenizer.from_pretrained(
-                    SNOWFLAKE_MODEL_ID, trust_remote_code=True
+                    SNOWFLAKE_MODEL_ID, revision=self.revision, trust_remote_code=True
                 )
                 embed.model = AutoModel.from_pretrained(
                     SNOWFLAKE_MODEL_ID,
+                    revision=self.revision,
                     trust_remote_code=True,
                     add_pooling_layer=False,
                     safe_serialization=True,
@@ -773,16 +932,28 @@ class NemoGuardJailbreakDetector(Detector):
                 )
 
                 self._classifier = classifier
-                logger.info("Detector 'nemoguard_jailbreak' ready.")
+
+                if getattr(settings, "DETECTOR_VERIFY_HASHES", False):
+                    _verify_detector_integrity(self.name, SNOWFLAKE_MODEL_ID, self.revision)
+
+                logger.info("Detector 'nemoguard_jailbreak' verified and loaded.")
+            except ModelIntegrityError:
+                raise
             except Exception as e:
                 self._load_error = f"{type(e).__name__}: {str(e)[:200]}"
-                logger.warning(f"Detector '{self.name}' unavailable: {self._load_error}")
+                if _is_auth_error(e):
+                    logger.error(
+                        f"Detector '{self.name}' unavailable due to authentication/licence: {self._load_error}"
+                    )
+                else:
+                    logger.warning(f"Detector '{self.name}' unavailable: {self._load_error}")
 
     def available(self):
         self._load()
         if self._classifier is None:
             return False, self._load_error or "not loaded"
-        return True, "loaded NemoGuard JailbreakDetect (Snowflake embed + ONNX RF)"
+        rev_info = f"@{self.revision}" if self.revision else ""
+        return True, f"loaded NemoGuard JailbreakDetect (Snowflake embed{rev_info} + ONNX RF)"
 
     def score_batch(self, texts):
         """
@@ -820,6 +991,7 @@ def _build_registry():
         "protectai_injection": TransformerDetector(
             name="protectai_injection",
             model_id="protectai/deberta-v3-base-prompt-injection-v2",
+            revision="90c9989b1a342275dd0d1a95aad283c04e075671",
             positive_labels=["injection"],
             targets=(CLASS_INJECTION,),
             description="ProtectAI DeBERTa-v3 injection classifier (widely used baseline)",
@@ -827,6 +999,7 @@ def _build_registry():
         "deepset_injection": TransformerDetector(
             name="deepset_injection",
             model_id="deepset/deberta-v3-base-injection",
+            revision="80dda00d0b0d9a03917a7685e2ddbcd28e04dbb1",
             positive_labels=["injection"],
             targets=(CLASS_INJECTION,),
             trained_on=("deepset/prompt-injections",),
@@ -837,6 +1010,7 @@ def _build_registry():
         "jailbreak_classifier": TransformerDetector(
             name="jailbreak_classifier",
             model_id="jackhhao/jailbreak-classifier",
+            revision="771aa6f1391933e7cba0b21f0f17750c7a74a901",
             positive_labels=["jailbreak"],
             targets=(CLASS_JAILBREAK,),
             trained_on=("jackhhao/jailbreak-classification",),
@@ -845,6 +1019,7 @@ def _build_registry():
         "madhurjindal_jailbreak": TransformerDetector(
             name="madhurjindal_jailbreak",
             model_id="madhurjindal/Jailbreak-Detector",
+            revision="93883e180f4d6585a0afae703095ba4a9ebce888",
             positive_labels=["jailbreak"],
             targets=(CLASS_JAILBREAK,),
             description="DistilBERT jailbreak detector",
@@ -855,6 +1030,7 @@ def _build_registry():
         "toxic_bert": TransformerDetector(
             name="toxic_bert",
             model_id="unitary/toxic-bert",
+            revision="4d6c22e74ba2fdd26bc4f7238f50766b045a0d94",
             positive_labels=["toxic", "severe_toxic", "threat", "identity_hate", "obscene", "insult"],
             targets=(CLASS_HARMFUL,),
             multi_label=True,
@@ -874,6 +1050,7 @@ def _build_registry():
         "german_toxicity_eistakovskii": TransformerDetector(
             name="german_toxicity_eistakovskii",
             model_id="EIStakovskii/german_toxicity_classifier_plus_v2",
+            revision="1bcb7d11ffc9267111c7be1dad0d7ca2fbf73928",
             positive_labels=["toxic"],
             targets=(CLASS_HARMFUL,),
             description="German BERT toxicity classifier (dbmdz/bert-base-german-cased "
@@ -882,6 +1059,7 @@ def _build_registry():
         "german_toxicity_ankekat": TransformerDetector(
             name="german_toxicity_ankekat",
             model_id="ankekat1000/toxic-bert-german",
+            revision="1756ff144620cd0c06425c0ed49387fb23bf8153",
             positive_labels=["toxic"],
             targets=(CLASS_HARMFUL,),
             description="German BERT toxicity classifier (deepset/bert-base-german-cased "
@@ -897,6 +1075,7 @@ def _build_registry():
         "multilingual_head": EmbeddingHeadDetector(
             name="multilingual_head",
             artifact_path=os.path.join("models", "multilingual_head.json"),
+            revision="e8f8c211226b894fcb81acc59f3b34ba3efd5f42",
             targets=(CLASS_INJECTION, CLASS_HARMFUL),
             description="Multilingual sentence-embedding + logistic-regression head, "
                         "fitted on this project's own eval suite (scripts.train_"
@@ -910,13 +1089,16 @@ def _build_registry():
         # honestly on our own suite; Lakera and Azure are closed APIs. See the
         # class docstring for why the model-based rail is used rather than
         # NeMo's perplexity heuristics.
-        "nemoguard_jailbreak": NemoGuardJailbreakDetector(),
+        "nemoguard_jailbreak": NemoGuardJailbreakDetector(
+            revision="92d97331f1f4b6a366c1f161354b9f3390cc219f"
+        ),
 
         # --- Harmful content via safety taxonomy (GATED) ---
         # The intended fix for the class every other detector misses.
         "llama_guard_3_1b": LlamaGuardDetector(
             name="llama_guard_3_1b",
             model_id="meta-llama/Llama-Guard-3-1B",
+            revision="acf7aafa60f0410f8f42b1fa35e077d705892029",
             targets=(CLASS_HARMFUL, CLASS_JAILBREAK),
             dtype="bfloat16",
             min_free_gb=2.3,
@@ -928,6 +1110,7 @@ def _build_registry():
         "llama_guard_3_8b": LlamaGuardDetector(
             name="llama_guard_3_8b",
             model_id="meta-llama/Llama-Guard-3-8B",
+            revision="7327bd9f6efbbe6101dc6cc4736302b3cbb6e425",
             targets=(CLASS_HARMFUL, CLASS_JAILBREAK),
             dtype="bfloat16",
             min_free_gb=18.0,
@@ -939,6 +1122,7 @@ def _build_registry():
         "prompt_guard_2": TransformerDetector(
             name="prompt_guard_2",
             model_id="meta-llama/Llama-Prompt-Guard-2-86M",
+            revision="a8ded8e697ce7c355e395a0df51f94adb4a2fd27",
             positive_labels=["label_1", "malicious", "injection", "jailbreak"],
             targets=(CLASS_INJECTION, CLASS_JAILBREAK),
             description="Meta Prompt Guard 2 86M (GATED: needs HF auth + licence acceptance)",
@@ -946,6 +1130,7 @@ def _build_registry():
         "prompt_guard_1": TransformerDetector(
             name="prompt_guard_1",
             model_id="meta-llama/Prompt-Guard-86M",
+            revision="1209add6ca7d9c1d815171b8e5571587fe3e7b03",
             positive_labels=["injection", "jailbreak"],
             targets=(CLASS_INJECTION, CLASS_JAILBREAK),
             description="Meta Prompt Guard 86M (GATED: needs HF auth + licence acceptance)",

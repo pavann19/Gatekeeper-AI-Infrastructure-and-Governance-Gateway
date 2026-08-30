@@ -1,0 +1,76 @@
+{
+  "protectai_injection": {
+    "model_id": "protectai/deberta-v3-base-prompt-injection-v2",
+    "revision": "90c9989b1a342275dd0d1a95aad283c04e075671",
+    "filename": "model.safetensors",
+    "sha256": "6521cb8d0ac08148c81464899c424e6148fcc62befa371089fa4061d8b6e0424"
+  },
+  "deepset_injection": {
+    "model_id": "deepset/deberta-v3-base-injection",
+    "revision": "80dda00d0b0d9a03917a7685e2ddbcd28e04dbb1",
+    "filename": "model.safetensors",
+    "sha256": "16862b96671d118a79b8d3a1352a552913797f9fc3cc7db2e06a05002abfc084"
+  },
+  "jailbreak_classifier": {
+    "model_id": "jackhhao/jailbreak-classifier",
+    "revision": "771aa6f1391933e7cba0b21f0f17750c7a74a901",
+    "filename": "pytorch_model.bin",
+    "sha256": "450171758333f23800a7283e74f638d11f38a5b56420445ee2d0d2a6e35ee37e"
+  },
+  "madhurjindal_jailbreak": {
+    "model_id": "madhurjindal/Jailbreak-Detector",
+    "revision": "93883e180f4d6585a0afae703095ba4a9ebce888",
+    "filename": "model.safetensors",
+    "sha256": "93128aab09b60a6094daf7aded589ee95207917550887837c233cb8acd3d27b4"
+  },
+  "toxic_bert": {
+    "model_id": "unitary/toxic-bert",
+    "revision": "4d6c22e74ba2fdd26bc4f7238f50766b045a0d94",
+    "filename": "model.safetensors",
+    "sha256": "2c272885d24138df70bff1b3cd944a999bd6b41dad33209730aa8ba074f6ad09"
+  },
+  "german_toxicity_eistakovskii": {
+    "model_id": "EIStakovskii/german_toxicity_classifier_plus_v2",
+    "revision": "1bcb7d11ffc9267111c7be1dad0d7ca2fbf73928",
+    "filename": "model.safetensors",
+    "sha256": "1c2281fa4859b72b1f4b5406cd1cca4f6537b6256476a1b09bbba87b6549f188"
+  },
+  "german_toxicity_ankekat": {
+    "model_id": "ankekat1000/toxic-bert-german",
+    "revision": "1756ff144620cd0c06425c0ed49387fb23bf8153",
+    "filename": "pytorch_model.bin",
+    "sha256": "4e451792042d1276c72cfb18eb5485287bd59a12fc64b28067b470558d065f99"
+  },
+  "multilingual_head": {
+    "model_id": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    "revision": "e8f8c211226b894fcb81acc59f3b34ba3efd5f42",
+    "filename": "model.safetensors",
+    "sha256": "eaa086f0ffee582aeb45b36e34cdd1fe2d6de2bef61f8a559a1bbc9bd955917b"
+  },
+  "nemoguard_jailbreak": {
+    "model_id": "Snowflake/snowflake-arctic-embed-m-long",
+    "revision": "92d97331f1f4b6a366c1f161354b9f3390cc219f",
+    "filename": "model.safetensors",
+    "sha256": "f469f6e6946f80f12edfe41d06b844098928ab6fb33b09c59028bc7405f068f8"
+  },
+  "llama_guard_3_1b": {
+    "model_id": "meta-llama/Llama-Guard-3-1B",
+    "revision": "acf7aafa60f0410f8f42b1fa35e077d705892029",
+    "filename": "model.safetensors",
+    "sha256": "e010146ce3209c8e1485021cbea5462f3f04461be924a066b6c0d80085b17957"
+  },
+  "llama_guard_3_8b": {
+    "model_id": "meta-llama/Llama-Guard-3-8B",
+    "revision": "7327bd9f6efbbe6101dc6cc4736302b3cbb6e425"
+  },
+  "prompt_guard_2": {
+    "model_id": "meta-llama/Llama-Prompt-Guard-2-86M",
+    "revision": "a8ded8e697ce7c355e395a0df51f94adb4a2fd27",
+    "filename": "model.safetensors",
+    "sha256": "e72017dbbe89c1232dcbc4a74ce0c389db5b468c42afd05850347b2a8c5f6b09"
+  },
+  "prompt_guard_1": {
+    "model_id": "meta-llama/Prompt-Guard-86M",
+    "revision": "1209add6ca7d9c1d815171b8e5571587fe3e7b03"
+  }
+}

@@ -468,6 +468,9 @@ class Settings(BaseSettings):
     # Dependency Models
     SPACY_MODEL: str = "en_core_web_sm"
 
+    # Detector Model Integrity Verification
+    DETECTOR_VERIFY_HASHES: bool = False
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
@@ -493,3 +496,4 @@ SPACY_MODEL = settings.SPACY_MODEL
 POLICY_FILE = settings.POLICY_FILE
 POLICY_RULES_FILE = settings.POLICY_RULES_FILE
 POLICY_VERSIONS_DIR = settings.POLICY_VERSIONS_DIR
+DETECTOR_VERIFY_HASHES = settings.DETECTOR_VERIFY_HASHES
