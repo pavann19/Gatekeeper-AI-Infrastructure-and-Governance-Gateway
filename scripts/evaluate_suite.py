@@ -102,6 +102,7 @@ def _score_row_fusion(r, deps):
         return {**r, "symbolic": True, "threat_score": threat,
                 "meta_intent_score": meta, "fusion_available": False,
                 "fusion_score": None, "fusion_detail": "symbolic veto (fusion skipped)",
+                "detector_scores": {},
                 "score": 1.0}
 
     fusion = fused_threat_score(r["text"], anchor_score=threat)
@@ -114,10 +115,11 @@ def _score_row_fusion(r, deps):
             "fusion_available": bool(fusion.get("available")),
             "fusion_score": fusion.get("score"),
             "fusion_detail": fusion.get("detail"),
+            "detector_scores": fusion.get("detector_scores", {}),
             "score": score}
 
 
-def extract_signals(records, refresh=False, mode="deterministic", jobs=1):
+def extract_signals(records, refresh=False, mode="deterministic", jobs=1, refresh_only_features=False):
     """
     Scores every row and caches the result. `mode` selects the scorer:
     'deterministic' (anchors+meta+symbolic, one embedding per row) or 'fusion'
@@ -125,6 +127,60 @@ def extract_signals(records, refresh=False, mode="deterministic", jobs=1):
     the two never collide.
     """
     signals_file = _SIGNALS_FILE[mode]
+    if mode == "fusion" and refresh_only_features:
+        cached = {}
+        if os.path.exists(signals_file):
+            with open(signals_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    row = json.loads(line)
+                    cached[row["id"]] = row
+        det_signals_file = _SIGNALS_FILE["deterministic"]
+        if os.path.exists(det_signals_file):
+            with open(det_signals_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    row = json.loads(line)
+                    if row["id"] not in cached or not cached[row["id"]].get("threat_score"):
+                        cached[row["id"]] = {**cached.get(row["id"], {}), **row}
+        import core.fusion as fusion_mod
+        fusion_mod._load_policy()
+        tier = fusion_mod._policy.get("upgrade_tiers", [fusion_mod._policy])[0] if fusion_mod._policy else {}
+        feature_names = [feat for feat in tier.get("feature_order", []) if feat != "anchors"]
+        detector_caches = {}
+        for feat in feature_names:
+            p = os.path.join("_evidence", "detector_scores", f"{feat}.jsonl")
+            if os.path.exists(p):
+                with open(p, "r", encoding="utf-8") as df:
+                    detector_caches[feat] = {json.loads(line)["id"]: json.loads(line)["score"] for line in df}
+        updated = []
+        for r in records:
+            row = cached.get(r["id"], {**r})
+            if row.get("symbolic"):
+                row["detector_scores"] = {}
+                row["fusion_available"] = False
+                row["fusion_score"] = None
+                row["fusion_detail"] = "symbolic veto (fusion skipped)"
+                row["score"] = 1.0
+            else:
+                det_scores = {"anchors": row.get("threat_score", 0.0)}
+                for feat in feature_names:
+                    if feat in detector_caches and r["id"] in detector_caches[feat]:
+                        det_scores[feat] = detector_caches[feat][r["id"]]
+                row["detector_scores"] = det_scores
+                verdict = fusion_mod._select_per_class_verdict(det_scores, policy_tier=tier)
+                if verdict is not None:
+                    winner, class_results = verdict
+                    w = class_results[winner]
+                    row["fusion_available"] = True
+                    row["fusion_score"] = w["score"]
+                    row["fusion_detail"] = f"fusion applied (per-class, triggered by {winner}, tier={tier.get('tier_id', '?')})"
+                    row["score"] = w["score"]
+            updated.append(row)
+        with open(signals_file, "w", encoding="utf-8") as f:
+            for row in updated:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        print(f"Rehydrated detector_scores into {signals_file} ({len(updated)} rows)")
+        return updated
+
     if os.path.exists(signals_file) and not refresh:
         cached = {}
         with open(signals_file, "r", encoding="utf-8") as f:
@@ -213,6 +269,9 @@ def main():
     parser.add_argument("--fpr-budget", type=float, default=0.05)
     parser.add_argument("--bootstrap", type=int, default=2000)
     parser.add_argument("--refresh", action="store_true")
+    parser.add_argument("--refresh-only-features", action="store_true",
+                        help="fast path: rehydrate detector_scores from cached "
+                             "per-detector files without re-running model inference")
     parser.add_argument("--fusion", action="store_true",
                         help="score with the full fusion ensemble instead of "
                              "the deterministic floor (slow; ~0.5s/row)")
@@ -225,7 +284,10 @@ def main():
     report_file = _REPORT_FILE[mode]
 
     records = load_suite(limit=args.limit)
-    scored = extract_signals(records, refresh=args.refresh, mode=mode, jobs=args.jobs)
+    scored = extract_signals(
+        records, refresh=args.refresh, mode=mode, jobs=args.jobs,
+        refresh_only_features=args.refresh_only_features
+    )
 
     scores = [r["score"] for r in scored]
     labels = [r["label"] for r in scored]
