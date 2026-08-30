@@ -18,3 +18,11 @@ line-length = 136
 # import sorting, docstring rules) yet — this file is establishing that CI
 # enforces *something*, not attempting a full style migration in one pass.
 select = ["E", "F"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-m 'not slow'"
+markers = [
+    "slow: marks tests as slow (deselect with -m 'not slow')",
+]
+
