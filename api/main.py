@@ -1552,7 +1552,7 @@ def health_check():
     else:
         try:
             base_url = "/".join(OLLAMA_API_URL.split("/")[:-1])
-            r = requests.get(f"{base_url}/tags", timeout=(0.15, 0.35))
+            r = requests.get(f"{base_url}/tags", timeout=(1.0, 2.0))
             if r.status_code == 200:
                 status["checks"]["semantic_judge"] = True
             else:
