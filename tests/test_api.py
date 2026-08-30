@@ -125,3 +125,24 @@ def test_health_still_probes_when_breaker_is_closed():
 
     mock_get.assert_called_once()
     assert response.json()["checks"]["semantic_judge"] is True
+
+
+def test_health_check_fast_when_judge_unreachable():
+    """When the judge backend is unreachable (and breaker closed), /health must:
+    (a) return 200,
+    (b) report semantic_judge: False,
+    (c) complete well under 1 second without blocking on connection timeout.
+    """
+    import time
+    from core.circuit_breaker import ollama_judge_breaker
+    ollama_judge_breaker.reset()
+
+    t0 = time.perf_counter()
+    response = client.get("/health")
+    elapsed = time.perf_counter() - t0
+
+    assert response.status_code == 200
+    assert response.json()["checks"]["semantic_judge"] is False
+    assert response.json()["status"] == "degraded"
+    assert elapsed < 1.0, f"/health took {elapsed:.3f}s when judge was unreachable; must be < 1.0s"
+
