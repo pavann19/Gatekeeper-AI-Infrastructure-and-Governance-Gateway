@@ -224,6 +224,13 @@ class Settings(BaseSettings):
     # deployment that has explicitly accepted un-audited traffic.
     AUDIT_WRITE_FAILS_CLOSED: bool = True
 
+    # /health probes the judge backend at most once per this many seconds;
+    # in between it serves the last probe result. Stops a burst of health
+    # checks from each paying the full connect/read timeout when the backend
+    # is unreachable (the residual after the circuit-breaker short-circuit,
+    # which only helps once the breaker has actually opened).
+    HEALTH_JUDGE_PROBE_TTL_SECONDS: float = 10.0
+
     # --- Authentication ---
     # Capability is resolved from a verified API key, never from the request
     # body. See core/auth.py for the vulnerability this replaces.

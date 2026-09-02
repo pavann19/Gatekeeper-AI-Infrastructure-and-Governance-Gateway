@@ -7,8 +7,11 @@ import time
 import asyncio
 import functools
 import re
+import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+
+import requests
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
@@ -37,6 +40,33 @@ from core.token_quota import gateway_token_quota, extract_total_tokens, seconds_
 from core.config import settings, CAPABILITY_INTERNAL
 
 logger = get_logger("gatekeeper.api")
+
+# /health judge-probe result cache: (ok: bool | None, checked_at: float).
+# ok=None means "never probed". Guarded by _health_probe_lock.
+_health_probe_cache: tuple = (None, 0.0)
+_health_probe_lock = threading.Lock()
+
+
+def _probe_judge_backend(base_url: str) -> bool:
+    """True if the judge backend answered 200. Cached for
+    settings.HEALTH_JUDGE_PROBE_TTL_SECONDS so a burst of /health calls
+    does not each pay the connect/read timeout when it is unreachable."""
+    global _health_probe_cache
+    ttl = settings.HEALTH_JUDGE_PROBE_TTL_SECONDS
+    now = time.monotonic()
+    with _health_probe_lock:
+        ok, at = _health_probe_cache
+        if ok is not None and (now - at) < ttl:
+            return ok
+    result = False
+    try:
+        r = requests.get(f"{base_url}/tags", timeout=(1.0, 2.0))
+        result = r.status_code == 200
+    except Exception:
+        result = False
+    with _health_probe_lock:
+        _health_probe_cache = (result, time.monotonic())
+    return result
 
 
 def _write_audit_or_fail(audit_fn, *args, audit_request_id: str = "?", **kwargs):
@@ -1541,7 +1571,6 @@ def resolve_review_endpoint(review_id: str, req: ReviewResolveRequest, request: 
 @app.get("/health")
 def health_check():
     import os
-    import requests
     from core.config import POLICY_FILE, POLICY_RULES_FILE, OLLAMA_API_URL
     from core.privacy import NLP_MODEL
     from core.embeddings import _get_model
@@ -1603,14 +1632,10 @@ def health_check():
     if breaker_known_down:
         status["status"] = "degraded"
     else:
-        try:
-            base_url = "/".join(OLLAMA_API_URL.split("/")[:-1])
-            r = requests.get(f"{base_url}/tags", timeout=(1.0, 2.0))
-            if r.status_code == 200:
-                status["checks"]["semantic_judge"] = True
-            else:
-                status["status"] = "degraded"
-        except Exception:
+        base_url = "/".join(OLLAMA_API_URL.split("/")[:-1])
+        if _probe_judge_backend(base_url):
+            status["checks"]["semantic_judge"] = True
+        else:
             status["status"] = "degraded"
 
     return status

@@ -116,8 +116,10 @@ def test_health_check_does_not_flip_the_breaker_half_open():
 def test_health_still_probes_when_breaker_is_closed():
     """No cached negative signal yet -- /health should still make its
     existing real check rather than assuming healthy."""
+    import api.main as m
     from core.circuit_breaker import ollama_judge_breaker
     ollama_judge_breaker.reset()
+    m._health_probe_cache = (None, 0.0)  # no cached probe result -> a fresh probe runs
 
     with patch("requests.get") as mock_get:
         mock_get.return_value.status_code = 200
@@ -134,8 +136,10 @@ def test_health_check_fast_when_judge_unreachable():
     (c) complete promptly without blocking on long timeouts.
     """
     import time
+    import api.main as m
     from core.circuit_breaker import ollama_judge_breaker
     ollama_judge_breaker.reset()
+    m._health_probe_cache = (None, 0.0)  # force a real probe (which will fail -> False)
 
     t0 = time.perf_counter()
     response = client.get("/health")
@@ -145,4 +149,26 @@ def test_health_check_fast_when_judge_unreachable():
     assert response.json()["checks"]["semantic_judge"] is False
     assert response.json()["status"] == "degraded"
     assert elapsed < 3.0, f"/health took {elapsed:.3f}s when judge was unreachable; must be < 3.0s"
+
+
+def test_health_check_probe_result_is_cached():
+    """A burst of /health calls must not each pay the judge-probe timeout —
+    after the first probe, subsequent calls within the TTL reuse the result
+    and return in single-digit ms."""
+    import time
+    import api.main as m
+    from core.circuit_breaker import ollama_judge_breaker
+
+    ollama_judge_breaker.reset()
+    m._health_probe_cache = (None, 0.0)  # force a fresh probe on the first call
+
+    client.get("/health")  # first call: does the real (failing) probe + caches
+
+    t0 = time.perf_counter()
+    for _ in range(5):
+        r = client.get("/health")
+        assert r.status_code == 200
+        assert r.json()["checks"]["semantic_judge"] is False
+    elapsed = time.perf_counter() - t0
+    assert elapsed < 0.5, f"5 cached /health calls took {elapsed:.3f}s; probe was not cached"
 
