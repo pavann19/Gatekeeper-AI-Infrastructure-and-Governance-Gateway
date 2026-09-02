@@ -216,6 +216,14 @@ class Settings(BaseSettings):
     # container recreation.
     AUDIT_LOG_PATH: str = "audit.jsonl"
 
+    # When True (default), a request whose audit record cannot be persisted
+    # (disk full, permission error, ...) fails CLOSED with HTTP 503 rather
+    # than returning a decision that was never recorded. The audit trail is
+    # the compliance artefact — a governance verdict the system cannot prove
+    # it made is not a verdict it should serve. Set False only for a
+    # deployment that has explicitly accepted un-audited traffic.
+    AUDIT_WRITE_FAILS_CLOSED: bool = True
+
     # --- Authentication ---
     # Capability is resolved from a verified API key, never from the request
     # body. See core/auth.py for the vulnerability this replaces.

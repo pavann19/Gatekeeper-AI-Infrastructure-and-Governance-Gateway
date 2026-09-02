@@ -38,6 +38,46 @@ from core.config import settings, CAPABILITY_INTERNAL
 
 logger = get_logger("gatekeeper.api")
 
+
+def _write_audit_or_fail(audit_fn, *args, audit_request_id: str = "?", **kwargs):
+    """Persist a governance audit record, or fail the request CLOSED.
+
+    `audit_request_id` is for this helper's own log lines and is NOT
+    forwarded to `audit_fn`; pass the audit function's own `request_id`
+    (when it takes one) as a normal kwarg.
+
+    The audit trail is this system's compliance artefact. If a decision
+    cannot be recorded (disk full, permission error, ...), returning it as
+    a normal 200 response would put an unprovable verdict into circulation
+    — the exact failure mode a governance gateway must not have. So an
+    audit-write failure becomes an explicit 503, unless an operator has
+    opted out via AUDIT_WRITE_FAILS_CLOSED=false (logged loudly either way).
+    """
+    try:
+        audit_fn(*args, **kwargs)
+    except Exception as e:  # noqa: BLE001 — any failure to persist is in scope
+        if settings.AUDIT_WRITE_FAILS_CLOSED:
+            logger.critical(
+                "Audit write failed (%s: %s) — failing request CLOSED. request_id=%s",
+                type(e).__name__, e, audit_request_id,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "The governance decision could not be written to the audit "
+                    "trail and has therefore not been finalised. Do not treat "
+                    "this request as assessed. Retry once audit storage is "
+                    "available."
+                ),
+                headers={"Retry-After": "5"},
+            ) from e
+        logger.critical(
+            "Audit write failed (%s: %s) — AUDIT_WRITE_FAILS_CLOSED=false, "
+            "serving the decision anyway (un-audited). request_id=%s",
+            type(e).__name__, e, audit_request_id,
+        )
+
+
 app = FastAPI(
     title="Gatekeeper AI Governance API",
     description="Neuro-Symbolic AI Security Gateway",
@@ -549,17 +589,22 @@ async def assess_prompt(req: AssessRequest, request: Request, background_tasks: 
 
     # 4. Audit Logging — the FINAL combined decision, not the pre-output-check
     #    input decision, so a record never shows "ALLOW" for a request that
-    #    was actually blocked on its response.
-    log_event(principal.capability, clean_query, risk_level, decision, details)
+    #    was actually blocked on its response. Fails the request closed if the
+    #    record cannot be persisted (see _write_audit_or_fail).
+    _write_audit_or_fail(
+        log_event, principal.capability, clean_query, risk_level, decision, details,
+        audit_request_id=request.state.request_id,
+    )
 
     # 4b. A DISTINCT output audit event, in addition to the merged summary
     #     above (details["output_assessment"]) — see log_output_event's
     #     docstring for why an output decision needs its own record rather
     #     than living only nested inside the input's.
     if output_details is not None:
-        log_output_event(
-            principal.capability, req.response_text, output_decision,
+        _write_audit_or_fail(
+            log_output_event, principal.capability, req.response_text, output_decision,
             output_details, tenant=principal.tenant, request_id=request.state.request_id,
+            audit_request_id=request.state.request_id,
         )
 
     # 5. Metrics. After the audit write, deliberately: the audit record is the
@@ -651,10 +696,12 @@ async def assess_output_endpoint(req: AssessOutputRequest, request: Request):
 
     # 2. Audit Logging — previously MISSING entirely on this endpoint, so a
     #    BLOCK here (PII leak, secret, toxicity, hallucination) left zero
-    #    audit trail. See log_output_event's docstring.
-    log_output_event(
-        principal.capability, req.response_text, decision, details,
+    #    audit trail. See log_output_event's docstring. Fails closed if the
+    #    record cannot be persisted (see _write_audit_or_fail).
+    _write_audit_or_fail(
+        log_output_event, principal.capability, req.response_text, decision, details,
         tenant=principal.tenant, request_id=request.state.request_id,
+        audit_request_id=request.state.request_id,
     )
 
     process_time_ms = round((time.perf_counter() - request.state.start_time) * 1000, 2) if hasattr(request.state, "start_time") else 0.0
@@ -815,7 +862,10 @@ async def gateway_chat(req: GatewayChatRequest, request: Request, background_tas
         review_id = review.review_id
         details["review_id"] = review_id
 
-    log_event(principal.capability, clean_query, risk_level, decision, details)
+    _write_audit_or_fail(
+        log_event, principal.capability, clean_query, risk_level, decision, details,
+        audit_request_id=request.state.request_id,
+    )
 
     # BLOCK/REVIEW stop here — the provider is never called. Same reasoning
     # as /api/v1/assess skipping output assessment for these two: a prompt
@@ -934,8 +984,11 @@ async def gateway_chat(req: GatewayChatRequest, request: Request, background_tas
         final_decision = output_decision
 
     details["output_assessment"] = output_details
-    log_output_event(principal.capability, llm_response.content, output_decision, output_details,
-                     tenant=principal.tenant, request_id=request.state.request_id)
+    _write_audit_or_fail(
+        log_output_event, principal.capability, llm_response.content, output_decision,
+        output_details, tenant=principal.tenant, request_id=request.state.request_id,
+        audit_request_id=request.state.request_id,
+    )
     log_gateway_event(principal.capability, provider_name, llm_response.model, success=True,
                       latency_ms=latency_ms, decision=final_decision, usage=llm_response.usage,
                       tenant=principal.tenant, request_id=request.state.request_id)

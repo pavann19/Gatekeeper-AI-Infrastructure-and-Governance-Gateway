@@ -9,7 +9,7 @@ failing open (false ALLOW) or dropping the audit trail.
 from __future__ import annotations
 
 import unittest.mock as mock
-import pytest
+
 from fastapi.testclient import TestClient
 
 from api.main import app
@@ -198,40 +198,38 @@ def test_policy_rules_missing_or_malformed_fails_closed(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 5. Audit log path unwritable -> current 500 behavior & desired xfail test
+# 5. Audit log path unwritable -> the request fails CLOSED, never a silent 200
 # ---------------------------------------------------------------------------
-def test_audit_log_unwritable_current_behavior(monkeypatch):
-    """Safety Property: When the audit log destination cannot be written (e.g. disk
-    full or permission error), the system must NOT return a normal 200 ALLOW while
-    silently dropping the audit trail. Current behavior is an unhandled HTTP 500.
+def _raise_audit_error(*args, **kwargs):
+    raise OSError("[Errno 28] No space left on device: 'audit.jsonl'")
+
+
+def test_audit_log_unwritable_fails_closed_503(monkeypatch):
+    """Safety Property: when the audit record cannot be persisted (disk full,
+    permissions), the gateway must NOT return a normal 200 decision. It fails
+    CLOSED with an explicit 503 that names the audit failure, so a verdict the
+    system cannot prove it made never enters circulation.
     """
-    def raise_audit_error(*args, **kwargs):
-        raise OSError("[Errno 28] No space left on device: 'audit.jsonl'")
-
-    monkeypatch.setattr("api.main.log_event", raise_audit_error)
-
-    # Calling assess endpoint when audit fails raises/returns 500, never 200 ALLOW
-    try:
-        response = client.post("/api/v1/assess", json={"prompt": "Hello safe query"})
-        assert response.status_code == 500
-    except OSError:
-        # If TestClient lets the OSError bubble up directly
-        pass
-
-
-@pytest.mark.xfail(
-    reason="Desired behavior is an explicit fail-closed HTTP 503 or BLOCK with clear error message instead of unhandled 500"
-)
-def test_audit_log_unwritable_desired_behavior(monkeypatch):
-    """Safety Property (Target): When the audit log is unwritable, the gateway should
-    return an explicit fail-closed HTTP 503 (Service Unavailable) or structured BLOCK
-    indicating audit persistence failure, rather than an unhandled 500 error.
-    """
-    def raise_audit_error(*args, **kwargs):
-        raise OSError("[Errno 28] No space left on device: 'audit.jsonl'")
-
-    monkeypatch.setattr("api.main.log_event", raise_audit_error)
+    monkeypatch.setattr(settings, "AUDIT_WRITE_FAILS_CLOSED", True)
+    monkeypatch.setattr("api.main.log_event", _raise_audit_error)
 
     response = client.post("/api/v1/assess", json={"prompt": "Hello safe query"})
     assert response.status_code == 503
     assert "audit" in response.text.lower()
+    assert response.headers.get("Retry-After") == "5"
+
+
+def test_audit_log_unwritable_opt_out_serves_with_loud_log(monkeypatch, caplog):
+    """An operator that has explicitly accepted un-audited traffic
+    (AUDIT_WRITE_FAILS_CLOSED=false) still gets served, but the failure is
+    logged at CRITICAL — it is never silent.
+    """
+    import logging
+    monkeypatch.setattr(settings, "AUDIT_WRITE_FAILS_CLOSED", False)
+    monkeypatch.setattr("api.main.log_event", _raise_audit_error)
+
+    with caplog.at_level(logging.CRITICAL):
+        response = client.post("/api/v1/assess", json={"prompt": "Hello safe query"})
+
+    assert response.status_code == 200
+    assert any("audit write failed" in r.message.lower() for r in caplog.records)
