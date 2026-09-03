@@ -19,6 +19,7 @@ from core.threat_centroid import compute_centroid_similarity
 from core.vector_store import threat_store, educational_store
 from core.logger import get_logger
 from core.fusion import fused_threat_score
+from core.assess_result import AssessResult
 import time
 
 logger = get_logger(__name__)
@@ -738,31 +739,16 @@ def assess_risk(prompt: str, background_scheduler=None, raw_prompt: str = None) 
         # SAFETY: Never downgrade a HIGH-risk cached decision
         if cached_risk == "HIGH":
             logger.info("⚡ CACHE HIT (LOCKED HIGH) — cached HIGH cannot be downgraded.")
-            return "HIGH", {"semantic_score": cached_score, "source": "cache_locked_high",
-                            "educational_context": False, "domain_score": None,
-                            "topicality": "UNKNOWN",
-                            "symbolic_triggered": False, "judge_invoked": False,
-                            "meta_intent_score": None,
-                            "fusion_triggering_class": None, "fusion_class_scores": {}}
+            return AssessResult.cache_hit("HIGH", cached_score, locked_high=True).as_return()
         logger.info(f"⚡ CACHE HIT! Risk: {cached_risk}")
-        return cached_risk, {"semantic_score": cached_score, "source": "cache",
-                             "educational_context": False, "domain_score": None,
-                             "topicality": "UNKNOWN",
-                             "symbolic_triggered": False, "judge_invoked": False,
-                             "meta_intent_score": None,
-                             "fusion_triggering_class": None, "fusion_class_scores": {}}
+        return AssessResult.cache_hit(cached_risk, cached_score).as_return()
 
     # ---- STAGE 1: HARD BAN (SYMBOLIC VETO) ----
     triggered, detail = hard_ban_triggered(text_for_detectors)
     if triggered:
         # HARD RULE: Educational context NEVER overrides Symbolic Violations
         save_cache_entry(prompt, prompt_vec, "HIGH", 1.0, source="symbolic_rule")
-        return "HIGH", {"source": "symbolic_rule", "detail": detail, "semantic_score": 1.0,
-                        "educational_context": False, "domain_score": None,
-                        "topicality": "UNKNOWN",
-                        "symbolic_triggered": True, "judge_invoked": False,
-                        "meta_intent_score": None,
-                        "fusion_triggering_class": None, "fusion_class_scores": {}}
+        return AssessResult.symbolic(detail).as_return()
 
     # ---- STAGE 1.5: FAST PATH (cheap, escalate-only cascade) ----
     # See _fast_path_decision's docstring for why this is safe: it can only
@@ -774,12 +760,7 @@ def assess_risk(prompt: str, background_scheduler=None, raw_prompt: str = None) 
     if fast_decision is not None:
         risk, source = fast_decision
         save_cache_entry(prompt, prompt_vec, risk, 1.0, source=source)
-        return risk, {"source": source, "semantic_score": 1.0,
-                      "educational_context": False, "domain_score": None,
-                      "topicality": "UNKNOWN",
-                      "symbolic_triggered": False, "judge_invoked": False,
-                      "meta_intent_score": fast["meta_intent_score"],
-                      "fusion_triggering_class": None, "fusion_class_scores": {}}
+        return AssessResult.fast_path(risk, source, fast["meta_intent_score"]).as_return()
 
     # ---- STAGE 2: COLLECT SEMANTIC SIGNALS ----
     signals = collect_semantic_signals(text_for_detectors, prompt_vec, fast=fast)
@@ -841,27 +822,29 @@ def assess_risk(prompt: str, background_scheduler=None, raw_prompt: str = None) 
         reported_score = signals["threat_score"]
 
     save_cache_entry(prompt, prompt_vec, risk, reported_score, source=source)
-    return risk, {"semantic_score": reported_score, "source": source,
-                  "educational_context": signals["is_educational"],
-                  "domain_score": signals["domain_score"],
-                  "topicality": topicality,
-                  "symbolic_triggered": False, "judge_invoked": judge_invoked,
-                  "centroid_score": signals["centroid_score"],
-                  "fusion_available": signals.get("fusion_available"),
-                  "fusion_detail": signals.get("fusion_detail"),
-                  "fusion_detector_scores": signals.get("fusion_detector_scores"),
-                  "fusion_triggering_class": signals.get("fusion_triggering_class"),
-                  "fusion_class_scores": signals.get("fusion_class_scores", {}),
-                  "anchor_threat_score": signals["threat_score"],
-                  "meta_intent_score": signals["meta_intent_score"],
-                  # Per-stage timings measured in Stage 2 (collect_semantic_
-                  # signals). Only the deep path pays these, so only this
-                  # return carries them; the early-exit paths (cache hit,
-                  # symbolic veto, fast path) never ran those stages. Without
-                  # this passthrough the keys were computed and discarded,
-                  # leaving metrics.record_assessment's stage_duration_seconds
-                  # histogram permanently empty (STAGE_KEYS in core/metrics.py).
-                  "meta_intent_ms": signals.get("meta_intent_ms"),
-                  "faiss_threat_search_ms": signals.get("faiss_threat_search_ms"),
-                  "domain_alignment_ms": signals.get("domain_alignment_ms"),
-                  "fusion_ms": signals.get("fusion_ms")}
+    # Per-stage timings (meta_intent_ms / faiss_threat_search_ms /
+    # domain_alignment_ms / fusion_ms) are measured in Stage 2 and only the
+    # deep path pays them. AssessResult.deep_path makes every one a REQUIRED
+    # kwarg, so a future edit that forgets one is a TypeError here rather than
+    # a silently empty stage_duration_seconds histogram (STAGE_KEYS in
+    # core/metrics.py — the Aug "Finding C" regression).
+    return AssessResult.deep_path(
+        risk, source,
+        semantic_score=reported_score,
+        is_educational=signals["is_educational"],
+        domain_score=signals["domain_score"],
+        topicality=topicality,
+        judge_invoked=judge_invoked,
+        centroid_score=signals["centroid_score"],
+        fusion_available=signals.get("fusion_available"),
+        fusion_detail=signals.get("fusion_detail"),
+        fusion_detector_scores=signals.get("fusion_detector_scores"),
+        fusion_triggering_class=signals.get("fusion_triggering_class"),
+        fusion_class_scores=signals.get("fusion_class_scores", {}),
+        anchor_threat_score=signals["threat_score"],
+        meta_intent_score=signals["meta_intent_score"],
+        meta_intent_ms=signals.get("meta_intent_ms"),
+        faiss_threat_search_ms=signals.get("faiss_threat_search_ms"),
+        domain_alignment_ms=signals.get("domain_alignment_ms"),
+        fusion_ms=signals.get("fusion_ms"),
+    ).as_return()
