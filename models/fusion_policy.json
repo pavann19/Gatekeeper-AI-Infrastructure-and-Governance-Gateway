@@ -200,7 +200,7 @@
             0.6794455148255915
           ],
           "intercept": -2.9506617544722715,
-          "threshold_high": 0.5837765897580792,
+          "threshold_high": 0.58,
           "threshold_medium": 0.2508880281868449,
           "n_positive": 1268
         },
@@ -239,7 +239,7 @@
             0.6657548213438568
           ],
           "intercept": -5.962740212337024,
-          "threshold_high": 0.060763035235830674,
+          "threshold_high": 0.13,
           "threshold_medium": 0.017693995702321372,
           "n_positive": 692
         },
@@ -278,7 +278,7 @@
             1.7517225274884245
           ],
           "intercept": -2.1058145455616333,
-          "threshold_high": 0.5242626182164674,
+          "threshold_high": 0.48,
           "threshold_medium": 0.18544612817653217,
           "n_positive": 2504
         }
