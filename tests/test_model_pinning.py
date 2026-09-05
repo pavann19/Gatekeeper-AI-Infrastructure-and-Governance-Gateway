@@ -12,15 +12,23 @@ import pytest
 from core.config import settings
 from core.detectors import (
     AnchorDetector,
-    EmbeddingHeadDetector,
-    LlamaGuardDetector,
     ModelIntegrityError,
-    NemoGuardJailbreakDetector,
     TransformerDetector,
     _is_auth_error,
     _verify_detector_integrity,
     get_registry,
 )
+
+
+def _require_cached_weights(model_id, revision, filename="model.safetensors"):
+    """Skip in a lean env (CI): these exercise real on-disk weight resolution
+    and hashing, which needs huggingface_hub AND the weights already in the
+    local HF cache. CI installs neither (see requirements-ci.txt)."""
+    pytest.importorskip("huggingface_hub")
+    from huggingface_hub import try_to_load_from_cache
+    path = try_to_load_from_cache(model_id, filename, revision=revision)
+    if not path or not isinstance(path, str) or not os.path.exists(path):
+        pytest.skip(f"{model_id}@{revision} weights not in local HF cache")
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +86,8 @@ def test_verify_hashes_loud_error_on_sha256_mismatch(tmp_path, monkeypatch):
     the manifest, loading must raise a distinct, loud ModelIntegrityError — not a
     warning and not a silent available=False.
     """
+    _require_cached_weights("protectai/deberta-v3-base-prompt-injection-v2",
+                            "90c9989b1a342275dd0d1a95aad283c04e075671")
     monkeypatch.setattr(settings, "DETECTOR_VERIFY_HASHES", True)
 
     # Create a corrupted manifest with an invalid sha256
@@ -153,6 +163,10 @@ def test_verify_hashes_clean_on_correct_manifest(monkeypatch):
     """When DETECTOR_VERIFY_HASHES is True and the manifest matches, verification
     completes cleanly with no exceptions.
     """
+    _require_cached_weights("protectai/deberta-v3-base-prompt-injection-v2",
+                            "90c9989b1a342275dd0d1a95aad283c04e075671")
+    _require_cached_weights("unitary/toxic-bert",
+                            "4d6c22e74ba2fdd26bc4f7238f50766b045a0d94")
     monkeypatch.setattr(settings, "DETECTOR_VERIFY_HASHES", True)
 
     # Test verification against cached models
@@ -186,6 +200,7 @@ def test_auth_error_classifier_helper():
 
 
 def test_gated_model_auth_failure_logs_at_error_level(caplog):
+    pytest.importorskip("transformers")
     """When a gated model fails to load due to auth (e.g. 401 or GatedRepoError),
     it must log at ERROR level, clearly distinct from warnings or successful load logs.
     """
@@ -215,6 +230,7 @@ def test_gated_model_auth_failure_logs_at_error_level(caplog):
 
 
 def test_successful_load_logs_verified_and_loaded(caplog):
+    pytest.importorskip("transformers")
     """When a detector loads successfully, it logs 'verified and loaded' at INFO level."""
     detector = TransformerDetector(
         name="test_det",

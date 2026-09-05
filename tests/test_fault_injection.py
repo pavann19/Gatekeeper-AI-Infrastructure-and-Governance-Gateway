@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import unittest.mock as mock
 
+import pytest
+
 from fastapi.testclient import TestClient
 
 from api.main import app
@@ -68,6 +70,7 @@ def test_redis_unreachable_falls_back_to_local_and_assesses_safely():
 # 2. Judge backend unreachable -> fallback to toxic_bert, fail-closed if disabled
 # ---------------------------------------------------------------------------
 def test_judge_unreachable_fallback_and_fail_closed(monkeypatch):
+    pytest.importorskip("transformers")  # Case A exercises the real toxic_bert fallback
     """Safety Property: When the primary judge backend is unreachable, the system
     must fall back to the local toxic_bert inverter. If the fallback is also
     disabled or unavailable, governance decisions must fail CLOSED (BLOCK/REVIEW / HIGH),
@@ -204,7 +207,8 @@ def _raise_audit_error(*args, **kwargs):
     raise OSError("[Errno 28] No space left on device: 'audit.jsonl'")
 
 
-def test_audit_log_unwritable_fails_closed_503(monkeypatch):
+@mock.patch("api.main.assess_risk", return_value=("LOW", {"semantic_score": 0.1, "source": "mock"}))
+def test_audit_log_unwritable_fails_closed_503(_mock_assess, monkeypatch):
     """Safety Property: when the audit record cannot be persisted (disk full,
     permissions), the gateway must NOT return a normal 200 decision. It fails
     CLOSED with an explicit 503 that names the audit failure, so a verdict the
@@ -219,7 +223,8 @@ def test_audit_log_unwritable_fails_closed_503(monkeypatch):
     assert response.headers.get("Retry-After") == "5"
 
 
-def test_audit_log_unwritable_opt_out_serves_with_loud_log(monkeypatch, caplog):
+@mock.patch("api.main.assess_risk", return_value=("LOW", {"semantic_score": 0.1, "source": "mock"}))
+def test_audit_log_unwritable_opt_out_serves_with_loud_log(_mock_assess, monkeypatch, caplog):
     """An operator that has explicitly accepted un-audited traffic
     (AUDIT_WRITE_FAILS_CLOSED=false) still gets served, but the failure is
     logged at CRITICAL — it is never silent.
