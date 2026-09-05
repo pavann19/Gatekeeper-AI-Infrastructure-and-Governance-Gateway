@@ -41,6 +41,26 @@ if not logger.handlers:
 def get_logger(name="gatekeeper"):
     return logging.getLogger(name)
 
+
+def _mirror_to_sqlite(event_type, log_entry):
+    """Dual-write: also persist this audit record into the embedded
+    SQLite store. The JSONL write above stays AUTHORITATIVE — a mirror
+    failure here is logged CRITICAL and swallowed so it never fails the
+    request or trips AUDIT_WRITE_FAILS_CLOSED (which guards the JSONL write,
+    already done by the time this runs). See core/audit_store.py.
+    """
+    if not settings.AUDIT_SQLITE_ENABLED:
+        return
+    try:
+        from core import audit_store  # lazy: audit_store imports from this module
+        audit_store.write(event_type, log_entry)
+    except Exception as e:  # noqa: BLE001
+        logging.getLogger("gatekeeper").critical(
+            "SQLite audit mirror failed (%s: %s) — JSONL record is authoritative, "
+            "continuing. event_type=%s request_id=%s",
+            type(e).__name__, e, event_type, log_entry.get("request_id"),
+        )
+
 def log_event(capability, prompt, risk, decision, metadata=None):
     if metadata is None:
         metadata = {}
@@ -85,6 +105,7 @@ def log_event(capability, prompt, risk, decision, metadata=None):
     # Structured JSON log for Audit
     audit_logger = logging.getLogger("gatekeeper.audit")
     audit_logger.info("Governance Decision", extra=log_entry)
+    _mirror_to_sqlite("input_assessment", log_entry)
 
 
 def log_output_event(capability, response_text, decision, metadata=None, tenant="unset", request_id="unset"):
@@ -129,6 +150,7 @@ def log_output_event(capability, response_text, decision, metadata=None, tenant=
 
     audit_logger = logging.getLogger("gatekeeper.audit")
     audit_logger.info("Output Governance Decision", extra=log_entry)
+    _mirror_to_sqlite("output_assessment", log_entry)
 
 
 def log_gateway_event(capability, provider, model, success, latency_ms, decision,
@@ -171,6 +193,7 @@ def log_gateway_event(capability, provider, model, success, latency_ms, decision
 
     audit_logger = logging.getLogger("gatekeeper.audit")
     audit_logger.info("Gateway Call", extra=log_entry)
+    _mirror_to_sqlite("gateway_call", log_entry)
 
 
 def log_tool_event(capability, tool_name, decision, risk_level, reason,
@@ -225,3 +248,4 @@ def log_tool_event(capability, tool_name, decision, risk_level, reason,
 
     audit_logger = logging.getLogger("gatekeeper.audit")
     audit_logger.info("Tool Call", extra=log_entry)
+    _mirror_to_sqlite("tool_call", log_entry)

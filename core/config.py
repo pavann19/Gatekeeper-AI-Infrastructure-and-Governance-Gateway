@@ -224,6 +224,21 @@ class Settings(BaseSettings):
     # deployment that has explicitly accepted un-audited traffic.
     AUDIT_WRITE_FAILS_CLOSED: bool = True
 
+    # Embedded-SQLite mirror of the audit trail. Path to the SQLite
+    # file (stdlib sqlite3, no new service). Same mounted-volume guidance as
+    # AUDIT_LOG_PATH. When AUDIT_SQLITE_ENABLED is True (default), every
+    # log_*_event dual-writes into this DB in addition to the JSONL.
+    #
+    # FAIL-MODE: the JSONL write
+    # stays the AUTHORITATIVE persistence for now. A SQLite mirror-write
+    # failure is logged CRITICAL and swallowed — it does NOT fail the request
+    # and does NOT trip AUDIT_WRITE_FAILS_CLOSED, because the JSONL record
+    # (which that flag guards) still succeeded. Reads still come from the
+    # JSONL via core/activity.py; a later increment flips reads to SQLite and
+    # only then does a SQLite failure become request-fatal.
+    AUDIT_DB_PATH: str = "audit.db"
+    AUDIT_SQLITE_ENABLED: bool = True
+
     # /health probes the judge backend at most once per this many seconds;
     # in between it serves the last probe result. Stops a burst of health
     # checks from each paying the full connect/read timeout when the backend

@@ -19,6 +19,9 @@ ENV/
 
 # Local State, Caches, & Runtime Artifacts
 audit.jsonl
+audit.db
+audit.db-wal
+audit.db-shm
 semantic_cache.json
 semantic_cache_exact.json
 evaluation_results.txt
@@ -74,3 +77,8 @@ api_keys.json
 
 # Local tenant fixtures (e.g. from live pentest setup) -- not real deployment config
 tenants.json
+
+# Local editor / assistant config and runtime state — never public
+.claude/
+review_queue.json
+_evidence/suite_evaluation_fusion.json
