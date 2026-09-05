@@ -14,10 +14,8 @@
 > [`docs/ENGINEERING_ASSESSMENT.md`](docs/ENGINEERING_ASSESSMENT.md) and the
 > `_evidence/` directory — detector comparisons, fusion validation, and the
 > end-to-end benchmark all include bootstrap confidence intervals and are
-> re-runnable. An earlier version of this README cited a "98.4 RPS" load-test
-> result that was traced to hardcoded literals in a chart-generation script and
-> was never actually measured; it has been removed rather than replaced with a
-> guess. See §9.
+> re-runnable. Concurrent-throughput has not been benchmarked yet — see §9
+> and the roadmap (§23).
 
 Gatekeeper is a research prototype **AI Governance Platform** and **AI Security Gateway**. Sitting between end-users and Large Language Models (LLMs), Gatekeeper intercepts, sanitizes, and evaluates incoming prompts before they hit downstream inference endpoints. By fusing deterministic symbolic rules with semantic vector search (FAISS), it enforces corporate guardrails, privacy compliance (GDPR/HIPAA), and prompt-injection defense.
 
@@ -62,18 +60,9 @@ Gatekeeper utilizes a clean, decoupled microservices model to separate client co
 
 1.  **Gatekeeper Client UI (`ui/login/`, `ui/activity/`, `ui/review/`, `ui/trace/`, `ui/gateways/`, `ui/logs/`, `ui/benchmarks/`, `ui/policy/`, `ui/settings/`)**: Static pages served directly by `api/main.py` (mounted at `/ui/`, no separate container or build step) that talk to the real Gatekeeper API — sign-in, an activity feed and per-request trace over the real audit log, the human-review approval queue, and (INTERNAL capability) the model/tool gateway catalogues, raw logs, benchmark results, and a policy editor that validates before it ever deploys. This is the UI actually exercised by this project's own test suite and CI.
 
-    An EARLIER Streamlit prototype (`ui/web_app.py`, built by a
-    `docker-compose.yml` service called `gatekeeper-ui`) called Ollama
-    directly rather than the Gatekeeper API, so it never reached
-    `core/risk.py`'s pipeline at all (no fusion, cache, tenancy, or
-    policy enforcement) and referenced at least one endpoint
-    (`/api/v1/update`) removed early in this project's history. Removed
-    outright (Phase 8 hardening) rather than kept around to be
-    accidentally deployed as "the" Gatekeeper UI — full history is in
-    git if it's ever needed for reference. The real client UI above
-    ships for free inside the `gatekeeper-api` image/container, reachable
-    at `http://<gatekeeper-api host>:8000/ui/login/index.html`, no
-    separate service required.
+    The client UI ships inside the `gatekeeper-api` image/container,
+    reachable at `http://<gatekeeper-api host>:8000/ui/login/index.html` —
+    no separate service required.
 2.  **Gatekeeper API Gateway (`api/main.py`)**: An asynchronous FastAPI service that exposes assessment and configuration endpoints, processes payloads, and manages the execution flow.
 3.  **Neuro-Symbolic Engine (`core/`)**: The core evaluation system containing distinct detection components, including normalizers, classifiers, threat vectorizers, and local semantic judges.
 4.  **Vector Store (`core/vector_store.py`)**: Powered by Facebook AI Similarity Search (FAISS) for sub-millisecond similarity calculations against known threat anchors and educational safe harbors.
@@ -174,7 +163,7 @@ The core governance pipeline is orchestrated via a staged execution model in [co
 *   **Stage 4: Judge Arbitration**: For ambiguous requests, the prompt is forwarded to a local LLM judge (model configurable via `OLLAMA_MODEL`; default `mistral`, validated in evaluation with `llama3.2`) to determine context safety. If the model is unreachable, the system fails closed (Risk: `HIGH`) — this failure mode is itself covered by `docs/ENGINEERING_ASSESSMENT.md`'s methodology section, since a benchmark run against an unreachable judge silently measures judge uptime rather than detection quality.
 *   **Stage 5: Cache Save & Return**: The resolved risk level, metadata, and execution time are cached (keyed by exact prompt hash) and returned to the caller.
 
-**Real, measured performance** (not the single-detector, pre-fusion pipeline): on the `deepset/prompt-injections` benchmark with a live judge, wiring the fusion into this pipeline moved end-to-end recall from 30.0% to **63.6%** (F1 0.44 → 0.71), and fixing the cache's collision behavior brought warm-cache accuracy to exactly match cold-cache (previously a 30-point recall loss on cache hits). See §9.
+**Real, measured performance** (not the single-detector, pre-fusion pipeline): on the `deepset/prompt-injections` benchmark with a live judge, wiring the fusion into this pipeline moved end-to-end recall from 30.0% to **63.6%** (F1 0.44 → 0.71), and fixing the cache's collision behavior brought warm-cache accuracy to exactly match cold-cache. See §9.
 
 ---
 
@@ -195,19 +184,12 @@ The core governance pipeline is orchestrated via a staged execution model in [co
 
 ## 📊 9. Evaluation Results (measured, reproducible)
 
-**A note on how this section came to look the way it does.** An earlier version
-of this README cited a raw-throughput benchmark ("98.4 RPS", "P95 32.8ms")
-alongside a "load test terminal" screenshot. Both were traced to hardcoded
-literals in a chart-generation script (`scripts/capture_screenshots.py`) —
-including a synthetic HTML page styled to look like real terminal output — and
-neither number was ever actually measured against a running server. That
-section has been removed rather than replaced with a new guess. **No raw
-concurrent-throughput number exists for this system yet.** `benchmarks/run_load_test.py`
-is a real, runnable load-testing tool; running it and reporting the result
-honestly is on the roadmap (§23), not done.
+**Concurrent-throughput has not been benchmarked yet.**
+`benchmarks/run_load_test.py` is a runnable load-testing tool; publishing a
+P50/P95/P99 + error-rate result from it is on the roadmap (§23).
 
-What follows instead is what actually has been measured, with sources and
-confidence intervals, all reproducible from [`docs/ENGINEERING_ASSESSMENT.md`](docs/ENGINEERING_ASSESSMENT.md)
+Every figure below is measured, with sources and bootstrap confidence
+intervals, and reproducible from [`docs/ENGINEERING_ASSESSMENT.md`](docs/ENGINEERING_ASSESSMENT.md)
 and `_evidence/*.json`.
 
 ### Detector comparison (full 6,933-prompt suite, 7 sources, 5% FPR budget)
@@ -350,14 +332,10 @@ Agents** for real-time alerting and historical compliance reviews.
 
 The Gateway enforces data schemas using Pydantic, ensuring that invalid input structures are filtered out before reaching any downstream models.
 
-> **Security note.** An earlier version of this gateway accepted a client-supplied
-> `role` field on `AssessRequest` and trusted it directly for policy decisions —
-> since the `INTERNAL` tier maps `HIGH → ALLOW`, any caller could disable every
-> guardrail by sending `{"role": "INTERNAL"}`. That field has been **removed**
-> from the request schema (`extra="forbid"`, so a client still sending it gets
-> a `422`, not a silent no-op). Capability is now resolved **server-side** from
-> a verified API key. See [core/auth.py](core/auth.py) and
-> `tests/test_auth.py`'s regression test for the exact bypass this closed.
+> **Capability is resolved server-side.** The request schema accepts no
+> client-supplied role or capability field (`extra="forbid"` — an unknown field
+> returns `422`); a caller's capability tier is derived only from a verified
+> API key. See [core/auth.py](core/auth.py) and `tests/test_auth.py`.
 
 ```python
 # api/schemas.py
@@ -616,9 +594,8 @@ PYTHONPATH=. python tests/benchmark.py
 ```
 
 ### High-concurrency stress test
-A real, runnable async load-testing tool. **No result from this tool is
-reported anywhere in this README** — see §9 for why an earlier, fabricated
-number was removed rather than replaced with a new guess.
+A runnable async load-testing tool. No throughput result from it is published
+in this README yet (see §9).
 ```bash
 python -m benchmarks.run_load_test
 ```
@@ -671,7 +648,7 @@ gatekeeper/
 │   └── schemas.py                # Pydantic Schemas (no client-supplied role)
 ├── benchmarks/
 │   ├── evaluate_accuracy.py
-│   └── run_load_test.py          # Real load-test tool; no reported result yet (§9)
+│   └── run_load_test.py          # Load-test tool; no published result yet (§9)
 ├── core/
 │   ├── auth.py                   # API-key capability resolution (zero-trust default)
 │   ├── cache.py                  # Semantic cache: exact-hash tier + calibrated fuzzy match
@@ -764,11 +741,9 @@ jobs:
 
 `requirements-ci.txt` deliberately includes `torch` and `faiss-cpu` — several
 tests exercise the real FAISS index and real tensor/label-resolution logic
-against synthetic data rather than mocking those libraries away, since a
-faiss-free mock is exactly the kind of thing that could have hidden the cache
-collision bug fixed in this repo's history. Only `sentence-transformers` and
-real HuggingFace model downloads remain excluded, since those need network
-access and GB-scale weights.
+against synthetic data rather than mocking those libraries away. Only
+`sentence-transformers` and real HuggingFace model downloads remain excluded,
+since those need network access and GB-scale weights.
 
 ---
 
@@ -787,7 +762,7 @@ Gatekeeper aligns with the following security standards:
 **Identified from measurement, in priority order:**
 
 *   **Llama Guard as judge-arbitration arbiter**: Llama Guard lifts harmful-content detection to 60–63% offline (§9) but is too slow (17–27s/request on CPU) for the always-on fusion path. Wiring it in as the Stage-4 judge for the ~8–10% of traffic that reaches the ambiguous zone — rather than every request — is the identified next step and would make that offline number a live one.
-*   **A real load-test throughput number**: `benchmarks/run_load_test.py` is functional and unused for any claim in this README (§9). Running it and reporting the result, including P50/P95/P99 and error rate under realistic concurrency, replaces the fabricated figure this repo previously shipped.
+*   **A load-test throughput number**: run `benchmarks/run_load_test.py` and publish P50/P95/P99 and error rate under realistic concurrency.
 *   **Per-class fusion thresholds**: the live fusion currently uses one HIGH/MEDIUM threshold for all attack classes; harmful-content could get its own more sensitive threshold without loosening the injection/jailbreak operating point.
 
 **Longer-term / aspirational:**
