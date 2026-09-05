@@ -233,10 +233,15 @@ def _row_to_record(row: sqlite3.Row) -> dict[str, Any]:
         rec["usage"] = json.loads(raw) if raw else None
     if rec.get("event_type") == "legacy" and rec.get("raw_json"):
         base = json.loads(rec["raw_json"])
-        base.setdefault("event_type", "legacy")
+        base["event_type"] = base.get("event_type") or "legacy"
         base.setdefault("tenant", rec.get("tenant") or "unset")
+        base.setdefault("capability", "unset")
         return base
     rec.pop("raw_json", None)
+    # Parity with core.activity's JSONL reader.
+    rec["event_type"] = rec.get("event_type") or "legacy"
+    rec.setdefault("tenant", "unset")
+    rec.setdefault("capability", "unset")
     return rec
 
 

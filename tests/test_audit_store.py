@@ -168,3 +168,74 @@ def test_sqlite_disabled_is_a_noop(monkeypatch, tmp_path, db):
     lg.log_event("cap", "hello", "LOW", "ALLOW", {"request_id": "r0"})
     import os
     assert not os.path.exists(db)  # nothing written when disabled
+
+
+# --- reads served from SQLite --------------------------------------------
+
+@pytest.fixture
+def sqlite_read_mode(monkeypatch, tmp_path):
+    """log_event dual-writes to a tmp DB and core.activity reads from it."""
+    from core import logger as lg
+    from core import activity
+    db = str(tmp_path / "audit.db")
+    for mod in (lg.settings,):
+        monkeypatch.setattr(mod, "AUDIT_LOG_PATH", str(tmp_path / "audit.jsonl"))
+        monkeypatch.setattr(mod, "AUDIT_DB_PATH", db)
+        monkeypatch.setattr(mod, "AUDIT_SQLITE_ENABLED", True)
+        monkeypatch.setattr(mod, "AUDIT_READ_FROM_SQLITE", True)
+    monkeypatch.setattr(activity.settings, "AUDIT_DB_PATH", db)
+    monkeypatch.setattr(activity.settings, "AUDIT_READ_FROM_SQLITE", True)
+    monkeypatch.setattr(audit_store.settings, "AUDIT_DB_PATH", db)
+    return db
+
+
+def test_activity_feed_reads_from_sqlite_when_enabled(sqlite_read_mode):
+    from core import logger as lg
+    from core.activity import get_recent_activity, find_by_request_id
+
+    lg.log_event("cap-a", "hello world", "LOW", "ALLOW",
+                 {"request_id": "rid-1", "tenant": "acme", "semantic_score": 0.2})
+    lg.log_event("cap-a", "danger", "HIGH", "BLOCK",
+                 {"request_id": "rid-2", "tenant": "acme", "semantic_score": 0.9})
+
+    feed = get_recent_activity()  # no path -> SQLite path
+    ids = [e["request_id"] for e in feed["events"]]
+    assert ids == ["rid-2", "rid-1"]  # newest first
+    assert feed["scan_truncated"] is False
+    assert all("capability" in e for e in feed["events"])
+
+    trace = find_by_request_id("rid-2")
+    assert [e["event_type"] for e in trace["events"]] == ["input_assessment"]
+    assert trace["events"][0]["decision"] == "BLOCK"
+
+
+def test_activity_read_falls_back_to_jsonl_on_sqlite_error(sqlite_read_mode, monkeypatch):
+    from core import activity
+    from core.activity import get_recent_activity
+
+    # seed the JSONL trail directly (the module's file handler is bound at
+    # import; this test is about the read-path fallback, not the writer)
+    with open(activity.settings.AUDIT_LOG_PATH, "w", encoding="utf-8") as f:
+        f.write(json.dumps({"timestamp": "2026-09-03T12:00:00",
+                            "event_type": "input_assessment", "request_id": "rid-fb",
+                            "tenant": "acme", "capability": "cap", "decision": "ALLOW"}) + "\n")
+
+    def boom(*a, **k):
+        raise sqlite3.OperationalError("db gone")
+
+    monkeypatch.setattr("core.audit_store.recent", boom)
+
+    feed = get_recent_activity()  # SQLite errors -> JSONL scan still answers
+    assert [e["request_id"] for e in feed["events"]] == ["rid-fb"]
+
+
+def test_mirror_failure_is_request_fatal_when_sqlite_is_read_authority(
+        sqlite_read_mode, monkeypatch):
+    from core import logger as lg
+
+    def boom(*a, **k):
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(audit_store, "write", boom)
+    with pytest.raises(sqlite3.OperationalError):
+        lg.log_event("cap", "hello", "LOW", "ALLOW", {"request_id": "rid-x"})

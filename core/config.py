@@ -239,6 +239,16 @@ class Settings(BaseSettings):
     AUDIT_DB_PATH: str = "audit.db"
     AUDIT_SQLITE_ENABLED: bool = True
 
+    # When True, the activity feed / trace / raw-logs
+    # reads (core/activity.py) are served from the SQLite store instead of the
+    # JSONL reverse-tail scan, and a SQLite mirror-write failure becomes
+    # request-fatal (fails CLOSED via AUDIT_WRITE_FAILS_CLOSED) because the DB
+    # is now the authoritative read path. Default False: the capability ships
+    # tested and one flag away, but making SQLite the read authority is a
+    # deployment decision, not an automatic one. A read error still falls back
+    # to the JSONL scan so enabling this cannot black out the feed.
+    AUDIT_READ_FROM_SQLITE: bool = False
+
     # /health probes the judge backend at most once per this many seconds;
     # in between it serves the last probe result. Stops a burst of health
     # checks from each paying the full connect/read timeout when the backend

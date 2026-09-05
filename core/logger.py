@@ -55,6 +55,18 @@ def _mirror_to_sqlite(event_type, log_entry):
         from core import audit_store  # lazy: audit_store imports from this module
         audit_store.write(event_type, log_entry)
     except Exception as e:  # noqa: BLE001
+        # When reads are served from SQLite it is the authoritative store, so a
+        # mirror failure means the record is not durably persisted — let it
+        # propagate to api.main._write_audit_or_fail, which fails the request
+        # CLOSED. Otherwise the JSONL write (already done) is authoritative and
+        # this is a swallow-and-log.
+        if getattr(settings, "AUDIT_READ_FROM_SQLITE", False):
+            logging.getLogger("gatekeeper").critical(
+                "SQLite audit write failed (%s: %s) and SQLite is the read "
+                "authority — failing request CLOSED. event_type=%s request_id=%s",
+                type(e).__name__, e, event_type, log_entry.get("request_id"),
+            )
+            raise
         logging.getLogger("gatekeeper").critical(
             "SQLite audit mirror failed (%s: %s) — JSONL record is authoritative, "
             "continuing. event_type=%s request_id=%s",

@@ -35,6 +35,13 @@ import json
 import os
 
 from core.config import settings
+from core.logger import get_logger
+
+logger = get_logger(__name__)
+
+
+def _sqlite_reads_enabled() -> bool:
+    return getattr(settings, "AUDIT_READ_FROM_SQLITE", False)
 
 CHUNK_SIZE = 65536
 MAX_BYTES_SCANNED = 20_000_000  # 20MB -- bounds a filter that matches almost nothing
@@ -127,6 +134,18 @@ def get_recent_activity(limit=DEFAULT_LIMIT, tenant=None, event_types=None, path
     for all types (known and "legacy").
     """
     limit = max(1, min(int(limit), MAX_LIMIT))
+
+    # Serve from the SQLite store when it is the read authority.
+    # An explicit `path` still forces the JSONL scan (tests, ad-hoc file reads).
+    # A SQLite error falls back to the JSONL scan rather than blacking out.
+    if path is None and _sqlite_reads_enabled():
+        try:
+            from core import audit_store
+            return audit_store.recent(limit=limit, tenant=tenant, event_types=event_types)
+        except Exception as e:  # noqa: BLE001
+            logger.error("SQLite activity read failed (%s: %s); falling back to "
+                         "JSONL scan.", type(e).__name__, e)
+
     audit_path = path or settings.AUDIT_LOG_PATH
     event_type_filter = set(event_types) if event_types else None
 
@@ -203,6 +222,14 @@ def find_by_request_id(request_id, tenant=None, path=None):
     of the file," a real possibility for an old request_id on a large
     log, not an edge case to hide.
     """
+    if path is None and _sqlite_reads_enabled():
+        try:
+            from core import audit_store
+            return audit_store.by_request_id(request_id, tenant=tenant)
+        except Exception as e:  # noqa: BLE001
+            logger.error("SQLite trace read failed (%s: %s); falling back to "
+                         "JSONL scan.", type(e).__name__, e)
+
     audit_path = path or settings.AUDIT_LOG_PATH
     raw_lines, truncated, _exhausted = _tail_raw_lines(audit_path, needed=float("inf"))
 
