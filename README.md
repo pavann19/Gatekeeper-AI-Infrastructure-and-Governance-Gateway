@@ -8,7 +8,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.109.0-green.svg?style=flat-square)](https://fastapi.tiangolo.com)
 [![Docker](https://img.shields.io/badge/Docker-Ready-blue.svg?style=flat-square)](https://www.docker.com/)
 [![FAISS](https://img.shields.io/badge/VectorSearch-FAISS-red.svg?style=flat-square)](https://github.com/facebookresearch/faiss)
-[![Testing-Pytest](https://img.shields.io/badge/Testing-153_passing-yellow.svg?style=flat-square)](https://docs.pytest.org/)
+[![Testing-Pytest](https://img.shields.io/badge/Testing-1644_passing-brightgreen.svg?style=flat-square)](https://docs.pytest.org/)
 
 > **Evaluation status:** every number in this README is reproducible from
 > [`docs/ENGINEERING_ASSESSMENT.md`](docs/ENGINEERING_ASSESSMENT.md) and the
@@ -189,7 +189,7 @@ The core governance pipeline is orchestrated via a staged execution model in [co
 *   **Interface**: Streamlit (Dashboard UI, simulation interface)
 *   **Logging**: `python-json-logger` (Structured JSON log formats)
 *   **Containerization**: Docker & Docker Compose (Multi-container architecture)
-*   **Test Suite**: Pytest, 153 tests covering the auth bypass regression, fusion fail-closed-to-fallback contract, cache exact-match correctness, and detector wiring
+*   **Test Suite**: Pytest, 1,644 tests covering the auth bypass regression, fusion fail-closed-to-fallback contract, cache exact-match correctness, detector wiring, model-revision pinning, audit fail-closed behaviour, cross-instance circuit-breaker state, and a frozen decision-replay regression corpus
 
 ---
 
@@ -665,7 +665,7 @@ Here are the primary control layouts of the running application:
 
 ```
 gatekeeper/
-├── .github/workflows/ci.yml      # CI: pytest, 153 tests, torch/faiss-cpu included
+├── .github/workflows/ci.yml      # CI: pytest, 1,644 tests, torch/faiss-cpu included
 ├── api/
 │   ├── main.py                   # FastAPI Application Entry
 │   └── schemas.py                # Pydantic Schemas (no client-supplied role)
@@ -711,7 +711,7 @@ gatekeeper/
 │   ├── ensemble_analysis.py      # Out-of-fold fusion validation
 │   ├── manage_api_keys.py        # issue / list / revoke / verify
 │   └── train_fusion_policy.py    # Fits and persists models/fusion_policy.json
-├── tests/                        # 153 tests: auth bypass regression, fusion fail-closed
+├── tests/                        # 1,644 tests: auth bypass regression, fusion fail-closed
 │   └── ...                       #   contract, cache exact-match regression, detectors
 ├── ui/                            # Real client UI (login, activity, review, trace,
 │   └── ...                       #   gateways, logs, benchmarks, policy, settings) —
@@ -727,7 +727,7 @@ gatekeeper/
 
 ## 🤖 21. CI/CD & Testing
 
-Gatekeeper runs an automated workflow on every push and pull request using **GitHub Actions** (`.github/workflows/ci.yml`), currently green at 153 passing tests:
+Gatekeeper runs an automated workflow on every push and pull request using **GitHub Actions** (`.github/workflows/ci.yml`), currently green at 1,644 passing tests:
 
 ```yaml
 name: Gatekeeper CI Pipeline
