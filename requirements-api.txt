@@ -2,8 +2,10 @@
 # not the dev/UI/benchmark kitchen-sink in requirements.txt.
 #
 # WHY THIS FILE EXISTS: Dockerfile.api was installing the full
-# requirements.txt, which includes streamlit + altair + pydeck (the UI,
-# which has its OWN Dockerfile and never runs in this container), diagrams
+# requirements.txt, which used to include streamlit + altair + pydeck (the
+# Streamlit UI prototype, which had its OWN Dockerfile and never ran in this
+# container -- streamlit itself was later dropped from requirements.txt
+# entirely once that prototype was removed), diagrams
 # (a dev-only report-generation tool), nemoguardrails (registered in
 # core/detectors.py's detector registry for OFFLINE comparison scripts only
 # — confirmed NOT in core/fusion.py's LIVE_MODEL_DETECTORS, so the live API

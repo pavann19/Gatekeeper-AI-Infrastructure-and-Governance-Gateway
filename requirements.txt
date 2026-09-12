@@ -1,4 +1,9 @@
-streamlit>=1.30.0
+# streamlit was the dependency of a Streamlit dashboard prototype
+# (ui/web_app.py) removed in Phase 8 hardening -- no code in core/, api/, or
+# tests/ imports it. Dropped rather than version-bumped: pip-audit flags two
+# CVEs against it (incl. an unauthenticated SSRF on Windows hosts,
+# PYSEC-2026-2285), and removing a dead dependency closes both plus its
+# transitive tree, instead of just moving the floor forward.
 requests>=2.31.0
 sentence-transformers>=2.3.1
 numpy>=1.26.0,<2.0.0
@@ -11,7 +16,8 @@ PyYAML>=6.0
 fastapi>=0.109.0
 uvicorn>=0.27.0
 httpx>=0.26.0
-pytest>=8.0.0
+# >=9.0.3 closes PYSEC-2026-1845 (predictable /tmp/pytest-of-{user} dir name).
+pytest>=9.0.3
 pytest-cov>=4.1.0
 ruff>=0.6.0
 faiss-cpu>=1.7.4
