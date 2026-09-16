@@ -1,3 +1,4 @@
+import core.torch_threads  # noqa: F401  -- MUST run before any torch import; see that module's docstring
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
 import hashlib
 import json

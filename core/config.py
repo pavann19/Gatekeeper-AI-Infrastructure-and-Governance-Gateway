@@ -322,6 +322,22 @@ class Settings(BaseSettings):
     # then bounds.
     ASSESS_MAX_CONCURRENCY: int = 4
 
+    # G1 finding (docs/perf/01-baseline-analysis.md): torch was never
+    # explicitly threaded -- it defaulted to intra_op=6/inter_op=6 on this
+    # 12-core box. Each assessment already dispatches 8 detectors in
+    # parallel (core/fusion.py's own ThreadPoolExecutor); with
+    # ASSESS_MAX_CONCURRENCY concurrent assessments, that is up to
+    # ASSESS_MAX_CONCURRENCY * 8 threads each independently trying to claim
+    # 6 torch threads -- the exact oversubscription the comment above
+    # already predicted, now measured. Pinning each to 1 intra-op thread
+    # makes the OUTER thread pool (already correctly sized) the only source
+    # of parallelism, instead of two layers of parallelism fighting the
+    # same core count. Pure performance -- does not change any score or
+    # decision, so the existing decision-replay gate is the correctness
+    # guard (docs/perf/02-optimisations.md).
+    TORCH_INTRA_OP_THREADS: int = 1
+    TORCH_INTER_OP_THREADS: int = 1
+
     # Ceiling on how long a caller waits for an assessment, including time
     # spent queued for a worker. On expiry the request fails with 503 rather
     # than a fabricated verdict — see the rationale at the call site.
