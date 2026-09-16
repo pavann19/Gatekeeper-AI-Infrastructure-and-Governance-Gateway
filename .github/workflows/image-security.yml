@@ -1,0 +1,51 @@
+name: Container Image Security (build, Trivy, SBOM)
+
+# G3: builds the actual deployed artifact (Dockerfile.api) and scans it --
+# the existing "Dependency Vulnerability Audit" workflow (dependency-audit.yml)
+# checks the Python requirement files, which is a different surface: a
+# vulnerable OS package or an unpatched base image layer shows up here and
+# nowhere else. That workflow is unchanged and still runs.
+#
+# Runs entirely on GitHub's runners -- deliberately not something to build
+# and scan locally on a RAM-constrained dev machine (see docs/MAINTENANCE.md).
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-scan-sbom:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Build the deployed image
+      run: docker build -f Dockerfile.api -t gatekeeper-api:ci .
+
+    - name: Scan the image with Trivy
+      uses: aquasecurity/trivy-action@0.28.0
+      with:
+        image-ref: gatekeeper-api:ci
+        format: table
+        # Fails the job on HIGH/CRITICAL, matching the intent of the
+        # existing pip-audit gate -- a security scan that only ever
+        # produces a report nobody has to act on is not a gate.
+        severity: CRITICAL,HIGH
+        exit-code: '1'
+
+    - name: Generate SBOM with syft
+      uses: anchore/sbom-action@v0
+      with:
+        image: gatekeeper-api:ci
+        format: spdx-json
+        output-file: gatekeeper-api-sbom.spdx.json
+
+    - name: Upload SBOM artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: gatekeeper-api-sbom
+        path: gatekeeper-api-sbom.spdx.json
+        retention-days: 90
