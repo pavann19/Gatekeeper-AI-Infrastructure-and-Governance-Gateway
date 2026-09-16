@@ -61,7 +61,8 @@
   },
   "llama_guard_3_8b": {
     "model_id": "meta-llama/Llama-Guard-3-8B",
-    "revision": "7327bd9f6efbbe6101dc6cc4736302b3cbb6e425"
+    "revision": "7327bd9f6efbbe6101dc6cc4736302b3cbb6e425",
+    "_note": "sharded weights (model.safetensors.index.json + multiple shard files) -- the single filename+sha256 scheme this manifest uses elsewhere does not fit a sharded model without extending the schema to a list. Not in core.fusion.LIVE_MODEL_DETECTORS (offline-comparison use only), so left as a documented, lower-priority gap rather than rushing a schema change tonight."
   },
   "prompt_guard_2": {
     "model_id": "meta-llama/Llama-Prompt-Guard-2-86M",
@@ -71,6 +72,8 @@
   },
   "prompt_guard_1": {
     "model_id": "meta-llama/Prompt-Guard-86M",
-    "revision": "1209add6ca7d9c1d815171b8e5571587fe3e7b03"
+    "revision": "1209add6ca7d9c1d815171b8e5571587fe3e7b03",
+    "filename": "model.safetensors",
+    "sha256": "1771712866662626517f2d85057de2d7078389a4c1f0bc93e461bdc4fdae4bd5"
   }
 }
