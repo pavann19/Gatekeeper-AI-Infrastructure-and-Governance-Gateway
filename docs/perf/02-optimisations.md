@@ -37,13 +37,15 @@ inner torch threads) competing for the same 12 cores.
 a score, since it does not touch any arithmetic, only how many OS threads
 one forward pass is allowed to use internally. `tests/test_api.py`,
 `tests/test_config.py`, `tests/test_fast_path_cascade.py` (75 tests) pass
-unchanged with the pin active. **The `-m slow` decision-replay gate and a
-live before/after benchmark were NOT run tonight** — both need several
-minutes of RAM headroom this session's time budget did not have room for
-alongside everything else in G2-G6. Ship as a low-risk, well-justified
-change on unit-test evidence; **running the decision-replay gate and one
-concurrency=16 A/B comparison against this change is the first thing to do
-before calling it validated**, not assumed done.
+unchanged with the pin active. **Update, later the same night:** the full
+non-slow suite was also run after the G3/G4 changes landed on top of this
+— 1644 passed, 0 failed, no regression. **The `-m slow` decision-replay
+gate and a live before/after benchmark were still NOT run** — both need
+several minutes of RAM headroom this session's time budget did not have
+room for alongside everything else in G2-G6. Ship as a low-risk,
+well-justified change on unit-test evidence; **running the decision-replay
+gate and one concurrency=16 A/B comparison against this change is the
+first thing to do before calling it validated**, not assumed done.
 
 ## 2. Eager load at startup — already satisfied, verified
 
