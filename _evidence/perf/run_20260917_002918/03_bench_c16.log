@@ -1,0 +1,6 @@
+git_sha=e55452550ae2  dirty=True  cpu_count=12  ASSESS_MAX_CONCURRENCY=4
+judge backend reachable: False  (--judge-label='disabled_unreachable' is the run's own claim; this probe is the check)
+
+--- concurrency=16  warmup=5.0s  duration=30.0s ---
+  throughput=10.233 rps  error_rate=0.0  p50=1606.78ms  p95=2182.28ms  p99=2474.71ms  in_flight_peak=15.0
+  saved: _evidence\perf\e55452550ae2-16.json

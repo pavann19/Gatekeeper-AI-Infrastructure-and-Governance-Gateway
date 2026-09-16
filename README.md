@@ -184,9 +184,10 @@ The core governance pipeline is orchestrated via a staged execution model in [co
 
 ## 📊 9. Evaluation Results (measured, reproducible)
 
-**Concurrent-throughput has not been benchmarked yet.**
-`benchmarks/run_load_test.py` is a runnable load-testing tool; publishing a
-P50/P95/P99 + error-rate result from it is on the roadmap (§23).
+**Concurrent-throughput has not been published yet.**
+`benchmarks/load/assess_bench.py` is a runnable, closed-loop concurrency
+benchmark against a fixed hash-verified workload; a first baseline run and
+its stage-by-stage analysis are in `docs/perf/01-baseline-analysis.md`.
 
 Every figure below is measured, with sources and bootstrap confidence
 intervals, and reproducible from [`docs/ENGINEERING_ASSESSMENT.md`](docs/ENGINEERING_ASSESSMENT.md)
@@ -594,10 +595,10 @@ PYTHONPATH=. python tests/benchmark.py
 ```
 
 ### High-concurrency stress test
-A runnable async load-testing tool. No throughput result from it is published
-in this README yet (see §9).
+Closed-loop concurrency benchmark (fixed levels, fixed workload, warm-up
+discarded). See `docs/perf/01-baseline-analysis.md` for the first result.
 ```bash
-python -m benchmarks.run_load_test
+PYTHONPATH=. python benchmarks/load/assess_bench.py --api-key "$KEY"
 ```
 
 ---
@@ -648,7 +649,7 @@ gatekeeper/
 │   └── schemas.py                # Pydantic Schemas (no client-supplied role)
 ├── benchmarks/
 │   ├── evaluate_accuracy.py
-│   └── run_load_test.py          # Load-test tool; no published result yet (§9)
+│   └── load/assess_bench.py      # Closed-loop concurrency benchmark (§9, docs/perf/)
 ├── core/
 │   ├── auth.py                   # API-key capability resolution (zero-trust default)
 │   ├── cache.py                  # Semantic cache: exact-hash tier + calibrated fuzzy match
@@ -762,7 +763,7 @@ Gatekeeper aligns with the following security standards:
 **Identified from measurement, in priority order:**
 
 *   **Llama Guard as judge-arbitration arbiter**: Llama Guard lifts harmful-content detection to 60–63% offline (§9) but is too slow (17–27s/request on CPU) for the always-on fusion path. Wiring it in as the Stage-4 judge for the ~8–10% of traffic that reaches the ambiguous zone — rather than every request — is the identified next step and would make that offline number a live one.
-*   **A load-test throughput number**: run `benchmarks/run_load_test.py` and publish P50/P95/P99 and error rate under realistic concurrency.
+*   **A load-test throughput number**: `benchmarks/load/assess_bench.py` now publishes this — see `docs/perf/01-baseline-analysis.md` for the baseline and where p95 goes.
 *   **Per-class fusion thresholds**: the live fusion currently uses one HIGH/MEDIUM threshold for all attack classes; harmful-content could get its own more sensitive threshold without loosening the injection/jailbreak operating point.
 
 **Longer-term / aspirational:**

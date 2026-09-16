@@ -1,0 +1,63 @@
+[00:29:18] === perf baseline run started, output dir: _evidence/perf/run_20260917_002918 ===
+[00:29:18] git HEAD: e55452550ae2b16a2ab8dde1425f97a6a2699c1d dirty=true
+[00:29:18] --- Step 1/4: full pytest suite ---
+[00:29:19] RAM check for 'pytest suite': 4.74 GB free (need >= 3.0 GB)
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\_pytest\runner.py", line 137 in runtestprotocol
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\_pytest\runner.py", line 118 in pytest_runtest_protocol
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\pluggy\_callers.py", line 121 in _multicall
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\pluggy\_manager.py", line 120 in _hookexec
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\pluggy\_hooks.py", line 512 in __call__
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\_pytest\main.py", line 396 in pytest_runtestloop
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\pluggy\_callers.py", line 121 in _multicall
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\pluggy\_manager.py", line 120 in _hookexec
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\pluggy\_hooks.py", line 512 in __call__
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\_pytest\main.py", line 372 in _main
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\_pytest\main.py", line 318 in wrap_session
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\_pytest\main.py", line 365 in pytest_cmdline_main
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\pluggy\_callers.py", line 121 in _multicall
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\pluggy\_manager.py", line 120 in _hookexec
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\pluggy\_hooks.py", line 512 in __call__
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\_pytest\config\__init__.py", line 199 in main
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\_pytest\config\__init__.py", line 223 in console_main
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\pytest\__main__.py", line 9 in <module>
+  File "<frozen runpy>", line 88 in _run_code
+  File "<frozen runpy>", line 198 in _run_module_as_main
+[00:30:31] Step 1: FAIL -- see _evidence/perf/run_20260917_002918/01_pytest.log
+[00:30:31] --- Step 2/4: start API server ---
+[00:30:31] RAM check for 'server start': 4.12 GB free (need >= 3.0 GB)
+[00:30:32] bash job pid: 1585 (not necessarily py-spy's target -- see below), waiting up to 150s for /health ...
+[00:30:39] resolved real server pid (owns :8000): 1768
+{"status":"degraded","checks":{"policy_files":true,"spacy_model":true,"embedding_model":true,"semantic_judge":false}}
+[00:30:39] Step 2: PASS
+[00:30:39] --- Step 3/4: closed-loop benchmark (concurrency 1, 4, 16) ---
+[00:30:39] reusing benchmark API key from /d/Projects_Bucket/AI_Governance_Project/.bench_api_key
+[00:30:40] RAM check for 'benchmark concurrency=1': 3.68 GB free (need >= 1.0 GB)
+git_sha=e55452550ae2  dirty=True  cpu_count=12  ASSESS_MAX_CONCURRENCY=4
+judge backend reachable: False  (--judge-label='disabled_unreachable' is the run's own claim; this probe is the check)
+
+--- concurrency=1  warmup=5.0s  duration=30.0s ---
+  throughput=9.433 rps  error_rate=0.0  p50=83.75ms  p95=339.33ms  p99=359.48ms  in_flight_peak=0.0
+  saved: _evidence\perf\e55452550ae2-1.json
+[00:31:23] RAM check for 'benchmark concurrency=4': 3.60 GB free (need >= 1.0 GB)
+git_sha=e55452550ae2  dirty=True  cpu_count=12  ASSESS_MAX_CONCURRENCY=4
+judge backend reachable: False  (--judge-label='disabled_unreachable' is the run's own claim; this probe is the check)
+
+--- concurrency=4  warmup=5.0s  duration=30.0s ---
+  throughput=14.4 rps  error_rate=0.0  p50=237.45ms  p95=525.25ms  p99=577.03ms  in_flight_peak=3.0
+  saved: _evidence\perf\e55452550ae2-4.json
+[00:32:06] RAM check for 'benchmark concurrency=16': 4.25 GB free (need >= 1.0 GB)
+[00:32:06] RAM check for 'py-spy': 4.24 GB free (need >= 1.0 GB)
+[00:32:06] --- Step 4/4: py-spy record (40s, overlapping concurrency=16) ---
+git_sha=e55452550ae2  dirty=True  cpu_count=12  ASSESS_MAX_CONCURRENCY=4
+judge backend reachable: False  (--judge-label='disabled_unreachable' is the run's own claim; this probe is the check)
+
+--- concurrency=16  warmup=5.0s  duration=30.0s ---
+  throughput=10.233 rps  error_rate=0.0  p50=1606.78ms  p95=2182.28ms  p99=2474.71ms  in_flight_peak=15.0
+  saved: _evidence\perf\e55452550ae2-16.json
+py-spy> Sampling process 100 times a second for 40 seconds. Press Control-C to exit.
+
+py-spy> Wrote flamegraph data to '_evidence/perf/run_20260917_002918/e55452550ae2-c16-flamegraph.svg'. Samples: 13133 Errors: 0
+[00:32:49] Step 4: PASS -- _evidence/perf/run_20260917_002918/e55452550ae2-c16-flamegraph.svg
+[00:32:49] Step 3: PASS
+[00:32:50] === run finished. Review _evidence/perf/run_20260917_002918/00_summary.txt first, then the per-step .log files. ===
+[00:32:50] cleanup: stopping server pid 1768 (if still running)

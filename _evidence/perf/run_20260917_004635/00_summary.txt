@@ -1,0 +1,10 @@
+[00:46:35] === perf baseline run started, output dir: _evidence/perf/run_20260917_004635 ===
+[00:46:35] git HEAD: e55452550ae2b16a2ab8dde1425f97a6a2699c1d dirty=true
+[00:46:35] --- Step 1/4: full pytest suite ---
+[00:46:36] RAM check for 'pytest suite': 0.77 GB free (need >= 5.5 GB)
+[00:46:36] Step 1: SKIP (insufficient RAM)
+[00:46:36] --- Step 2/4: start API server ---
+[00:46:37] RAM check for 'server start': 0.77 GB free (need >= 3.0 GB)
+[00:46:37] Step 2: SKIP (insufficient RAM)
+[00:46:37] Step 3+4: SKIP (server not healthy)
+[00:46:37] === run finished. Review _evidence/perf/run_20260917_004635/00_summary.txt first, then the per-step .log files. ===

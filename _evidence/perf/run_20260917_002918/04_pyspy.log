@@ -1,0 +1,3 @@
+py-spy> Sampling process 100 times a second for 40 seconds. Press Control-C to exit.
+
+py-spy> Wrote flamegraph data to '_evidence/perf/run_20260917_002918/e55452550ae2-c16-flamegraph.svg'. Samples: 13133 Errors: 0

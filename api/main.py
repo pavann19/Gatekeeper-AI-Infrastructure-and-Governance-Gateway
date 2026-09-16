@@ -165,6 +165,24 @@ _assess_pool = ThreadPoolExecutor(
 )
 
 
+def _timed_on_worker(submit_ts, func, args):
+    """
+    Runs on the worker thread. Splits `assessments_in_flight`'s single
+    conflated number into two separately-actionable ones:
+    queue_wait_seconds (time this call sat waiting for a free worker, only
+    knowable once it actually starts) and assess_execution_seconds (the work
+    itself). The fix for a queueing problem (raise ASSESS_MAX_CONCURRENCY or
+    shed load) is not the fix for a slow-execution problem (speed up the
+    pipeline) — see docs/perf/01-baseline-analysis.md.
+    """
+    start = time.perf_counter()
+    metrics.queue_wait_seconds.observe(start - submit_ts)
+    try:
+        return func(*args)
+    finally:
+        metrics.assess_execution_seconds.observe(time.perf_counter() - start)
+
+
 async def _run_bounded(func, *args):
     """
     Runs a blocking assessment on the bounded pool, with a total deadline that
@@ -177,12 +195,15 @@ async def _run_bounded(func, *args):
     size above — a stuck assessment costs one of N workers and cannot multiply.
     """
     loop = asyncio.get_running_loop()
+    submit_ts = time.perf_counter()
     # Incremented around the whole call, queueing included: the useful
     # question is "how many callers are waiting on this pool", not "how many
     # threads are busy". The former shows saturation before the timeout does.
     metrics.assessments_in_flight.inc()
     try:
-        future = loop.run_in_executor(_assess_pool, functools.partial(func, *args))
+        future = loop.run_in_executor(
+            _assess_pool, functools.partial(_timed_on_worker, submit_ts, func, args)
+        )
         return await asyncio.wait_for(future, timeout=settings.ASSESS_TIMEOUT_SECONDS)
     finally:
         metrics.assessments_in_flight.dec()

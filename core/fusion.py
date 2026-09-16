@@ -270,8 +270,11 @@ def _score_one_detector(name, prompt):
     implementation produced, so audit records and existing tests that match
     on them keep working.
     """
+    import time as _time
+    from core import metrics
     from core.detectors import get_detector
 
+    t0 = _time.perf_counter()
     try:
         detector = get_detector(name)
         det_ok, det_detail = detector.available()
@@ -280,6 +283,14 @@ def _score_one_detector(name, prompt):
         return name, detector.score_batch([prompt])[0], None
     except Exception as e:
         return name, None, f"detector '{name}' raised {type(e).__name__}: {e}"
+    finally:
+        # Timed unconditionally, including the unavailable/error returns above
+        # -- an "unavailable" detector that takes 2s to say so (a hung auth
+        # check, say) is exactly the kind of latency this metric exists to
+        # surface, not a case to skip.
+        metrics.detector_duration_seconds.labels(detector=name).observe(
+            _time.perf_counter() - t0
+        )
 
 
 def _get_pool(n_workers):

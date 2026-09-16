@@ -1,0 +1,43 @@
+[00:46:55] === perf baseline run started, output dir: _evidence/perf/run_20260917_004655 ===
+[00:46:56] git HEAD: e55452550ae2b16a2ab8dde1425f97a6a2699c1d dirty=true
+[00:46:56] --- Step 1/4: full pytest suite ---
+[00:46:57] RAM check for 'pytest suite': 5.04 GB free (need >= 5.5 GB)
+[00:46:57] Step 1: SKIP (insufficient RAM)
+[00:46:57] --- Step 2/4: start API server ---
+[00:46:57] RAM check for 'server start': 5.04 GB free (need >= 3.0 GB)
+[00:46:57] bash job pid: 367 (not necessarily py-spy's target -- see below), waiting up to 150s for /health ...
+[00:48:11] resolved real server pid (owns :8000): 12396
+{"status":"degraded","checks":{"policy_files":true,"spacy_model":true,"embedding_model":true,"semantic_judge":false}}
+[00:48:11] Step 2: PASS
+[00:48:11] --- Step 3/4: closed-loop benchmark (concurrency 1, 4, 16) ---
+[00:48:11] reusing benchmark API key from /d/Projects_Bucket/AI_Governance_Project/.bench_api_key
+[00:48:12] RAM check for 'benchmark concurrency=1': 2.51 GB free (need >= 1.0 GB)
+git_sha=e55452550ae2  dirty=True  cpu_count=12  ASSESS_MAX_CONCURRENCY=4
+judge backend reachable: False  (--judge-label='disabled_unreachable' is the run's own claim; this probe is the check)
+
+--- concurrency=1  warmup=5.0s  duration=30.0s ---
+  throughput=11.067 rps  error_rate=0.0  p50=71.75ms  p95=333.64ms  p99=355.07ms  in_flight_peak=1.0
+  saved: _evidence\perf\e55452550ae2-1.json
+[00:48:56] RAM check for 'benchmark concurrency=4': 2.60 GB free (need >= 1.0 GB)
+git_sha=e55452550ae2  dirty=True  cpu_count=12  ASSESS_MAX_CONCURRENCY=4
+judge backend reachable: False  (--judge-label='disabled_unreachable' is the run's own claim; this probe is the check)
+
+--- concurrency=4  warmup=5.0s  duration=30.0s ---
+  throughput=13.633 rps  error_rate=0.0  p50=251.5ms  p95=548.84ms  p99=628.81ms  in_flight_peak=0.0
+  saved: _evidence\perf\e55452550ae2-4.json
+[00:49:39] RAM check for 'benchmark concurrency=16': 2.50 GB free (need >= 1.0 GB)
+[00:49:40] RAM check for 'py-spy': 2.49 GB free (need >= 1.0 GB)
+[00:49:40] --- Step 4/4: py-spy record (40s, overlapping concurrency=16) ---
+git_sha=e55452550ae2  dirty=True  cpu_count=12  ASSESS_MAX_CONCURRENCY=4
+judge backend reachable: False  (--judge-label='disabled_unreachable' is the run's own claim; this probe is the check)
+
+--- concurrency=16  warmup=5.0s  duration=30.0s ---
+  throughput=10.3 rps  error_rate=0.0  p50=1643.64ms  p95=2111.35ms  p99=2302.13ms  in_flight_peak=16.0
+  saved: _evidence\perf\e55452550ae2-16.json
+py-spy> Sampling process 100 times a second for 40 seconds. Press Control-C to exit.
+
+py-spy> Wrote flamegraph data to '_evidence/perf/run_20260917_004655/e55452550ae2-c16-flamegraph.svg'. Samples: 12644 Errors: 0
+[00:50:24] Step 4: PASS -- _evidence/perf/run_20260917_004655/e55452550ae2-c16-flamegraph.svg
+[00:50:24] Step 3: PASS
+[00:50:24] === run finished. Review _evidence/perf/run_20260917_004655/00_summary.txt first, then the per-step .log files. ===
+[00:50:24] cleanup: stopping server pid 12396 (if still running)

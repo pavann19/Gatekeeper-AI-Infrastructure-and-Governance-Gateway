@@ -732,8 +732,15 @@ def assess_risk(prompt: str, background_scheduler=None, raw_prompt: str = None) 
     _ensure_faiss_initialized()
 
     # ---- STAGE 0: CACHE CHECK ----
+    # Timed as one "cache_lookup" stage (embedding + the actual cache probe)
+    # rather than split further -- see docs/perf/01-baseline-analysis.md.
+    _t0 = time.perf_counter()
     prompt_vec = get_embedding(prompt)
     cached_risk, cached_score = lookup_cache(prompt, prompt_vec)
+    from core import metrics as _metrics
+    _metrics.stage_duration_seconds.labels(stage="cache_lookup").observe(
+        time.perf_counter() - _t0
+    )
     if cached_risk:
 
         # SAFETY: Never downgrade a HIGH-risk cached decision
@@ -744,7 +751,14 @@ def assess_risk(prompt: str, background_scheduler=None, raw_prompt: str = None) 
         return AssessResult.cache_hit(cached_risk, cached_score).as_return()
 
     # ---- STAGE 1: HARD BAN (SYMBOLIC VETO) ----
+    # Includes normalize_prompt, which hard_ban_triggered runs internally as
+    # its own first step -- not split into a separate stage, since it is one
+    # small preprocessing call with nothing else on that path to time against.
+    _t0 = time.perf_counter()
     triggered, detail = hard_ban_triggered(text_for_detectors)
+    _metrics.stage_duration_seconds.labels(stage="symbolic").observe(
+        time.perf_counter() - _t0
+    )
     if triggered:
         # HARD RULE: Educational context NEVER overrides Symbolic Violations
         save_cache_entry(prompt, prompt_vec, "HIGH", 1.0, source="symbolic_rule")
@@ -792,12 +806,21 @@ def assess_risk(prompt: str, background_scheduler=None, raw_prompt: str = None) 
                 signals["threat_score"], SEMANTIC_THRESHOLD_MEDIUM, SEMANTIC_THRESHOLD_HIGH
             )
 
+        # Timed as one "judge" stage covering whichever branch below actually
+        # runs in-request. The async path's llama_guard_async_confirmation
+        # call is deliberately EXCLUDED -- it runs on background_scheduler
+        # after the response is already sent, so it is not part of what a
+        # caller's p95 measures.
+        _t0 = time.perf_counter()
         if background_scheduler is not None:
             # ASYNC PATH (live API traffic): answer now with the fast Ollama
             # judge; verify with Llama Guard afterwards, without making the
             # caller wait for it. See llama_guard_async_confirmation for the
             # escalate-only correction this applies if the two disagree.
             risk, source = judge_arbitration(prompt, threat_present=threat_present)
+            _metrics.stage_duration_seconds.labels(stage="judge").observe(
+                time.perf_counter() - _t0
+            )
             background_scheduler(
                 llama_guard_async_confirmation, prompt, prompt_vec, risk, source
             )
@@ -810,6 +833,9 @@ def assess_risk(prompt: str, background_scheduler=None, raw_prompt: str = None) 
                 risk, source = llama_guard_result
             else:
                 risk, source = judge_arbitration(prompt, threat_present=threat_present)
+            _metrics.stage_duration_seconds.labels(stage="judge").observe(
+                time.perf_counter() - _t0
+            )
 
     # ---- STAGE 5: CACHE SAVE + RETURN ----
     # Report the score that actually drove the decision: the fused probability

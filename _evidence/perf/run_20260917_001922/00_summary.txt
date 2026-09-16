@@ -1,0 +1,54 @@
+[00:19:22] === perf baseline run started, output dir: _evidence/perf/run_20260917_001922 ===
+[00:19:22] git HEAD: e55452550ae2b16a2ab8dde1425f97a6a2699c1d dirty=true
+[00:19:22] --- Step 1/4: full pytest suite ---
+[00:19:23] RAM check for 'pytest suite': 3.19 GB free (need >= 3.5 GB)
+[00:19:23] Step 1: SKIP (insufficient RAM)
+[00:19:23] --- Step 2/4: start API server ---
+[00:19:23] RAM check for 'server start': 3.20 GB free (need >= 3.0 GB)
+[00:19:23] server pid: 1218, waiting up to 150s for /health ...
+{"status":"degraded","checks":{"policy_files":true,"spacy_model":true,"embedding_model":true,"semantic_judge":false}}
+[00:20:25] Step 2: PASS
+[00:20:25] --- Step 3/4: closed-loop benchmark (concurrency 1, 4, 16) ---
+
+====================================================================
+  API KEY ISSUED - copy it now, it will not be shown again
+====================================================================
+  key         : gk_NKqK2Nsvy4EGdCn5y61UMi7YxMJ3pQ-w-qVpdDUofIA
+  key_id      : load-test-20260917_001922
+  capability  : GENERAL
+  tenant      : benchmark
+====================================================================
+  Stored (hashed only) in api_keys.json
+  Use as:  Authorization: Bearer <key>
+[00:20:26] issued new benchmark API key, saved to /d/Projects_Bucket/AI_Governance_Project/.bench_api_key (gitignored -- do not commit)
+[00:20:27] RAM check for 'benchmark concurrency=1': 4.02 GB free (need >= 1.0 GB)
+git_sha=e55452550ae2  dirty=True  cpu_count=12  ASSESS_MAX_CONCURRENCY=4
+judge backend reachable: False  (--judge-label='disabled_unreachable' is the run's own claim; this probe is the check)
+
+--- concurrency=1  warmup=5.0s  duration=30.0s ---
+  throughput=11.333 rps  error_rate=0.0  p50=69.94ms  p95=332.08ms  p99=345.35ms  in_flight_peak=1.0
+  saved: _evidence\perf\e55452550ae2-1.json
+[00:21:10] RAM check for 'benchmark concurrency=4': 1.80 GB free (need >= 1.0 GB)
+git_sha=e55452550ae2  dirty=True  cpu_count=12  ASSESS_MAX_CONCURRENCY=4
+judge backend reachable: False  (--judge-label='disabled_unreachable' is the run's own claim; this probe is the check)
+
+--- concurrency=4  warmup=5.0s  duration=30.0s ---
+  throughput=14.1 rps  error_rate=0.0  p50=243.84ms  p95=534.04ms  p99=625.25ms  in_flight_peak=2.0
+  saved: _evidence\perf\e55452550ae2-4.json
+[00:21:53] RAM check for 'benchmark concurrency=16': 4.23 GB free (need >= 1.0 GB)
+[00:21:54] RAM check for 'py-spy': 4.22 GB free (need >= 1.0 GB)
+[00:21:54] --- Step 4/4: py-spy record (40s, overlapping concurrency=16) ---
+git_sha=e55452550ae2  dirty=True  cpu_count=12  ASSESS_MAX_CONCURRENCY=4
+judge backend reachable: False  (--judge-label='disabled_unreachable' is the run's own claim; this probe is the check)
+
+--- concurrency=16  warmup=5.0s  duration=30.0s ---
+  throughput=12.233 rps  error_rate=0.0  p50=1185.72ms  p95=4235.93ms  p99=8465.49ms  in_flight_peak=16.0
+  saved: _evidence\perf\e55452550ae2-16.json
+Error: Failed to open process - check if it is running.
+
+Caused by:
+    0: The parameter is incorrect. (os error 87)
+    1: The parameter is incorrect. (os error 87)
+[00:22:37] Step 3: PASS
+[00:22:37] === run finished. Review _evidence/perf/run_20260917_001922/00_summary.txt first, then the per-step .log files. ===
+[00:22:37] cleanup: stopping server pid 1218

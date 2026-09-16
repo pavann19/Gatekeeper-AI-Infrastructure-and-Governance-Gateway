@@ -1,0 +1,76 @@
+........................................................................ [  4%]
+........................................................................ [  8%]
+........................................................................ [ 13%]
+........................................................................ [ 17%]
+........................................................................ [ 21%]
+...........................Windows fatal exception: access violation
+
+Thread 0x00001c48 (most recent call first):
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 363 in wait
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 659 in wait
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 1340 in run
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 1041 in _bootstrap_inner
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 1012 in _bootstrap
+
+Thread 0x00003320 (most recent call first):
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 363 in wait
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 659 in wait
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\tqdm\_monitor.py", line 69 in run
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 1041 in _bootstrap_inner
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 1012 in _bootstrap
+
+Thread 0x00002198 (most recent call first):
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\thread.py", line 90 in _worker
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 992 in run
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 1041 in _bootstrap_inner
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 1012 in _bootstrap
+
+Current thread 0x00000c5c (most recent call first):
+  File "C:\Users\Gannoju Pavan\AppData\Roaming\Python\Python313\site-packages\torch\storage.py", line 469 in __getitem__
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\transformers\modeling_utils.py", line 748 in _load_state_dict_into_meta_model
+  File "C:\Users\Gannoju Pavan\AppData\Roaming\Python\Python313\site-packages\torch\utils\_contextlib.py", line 116 in decorate_context
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\transformers\modeling_utils.py", line 843 in load_shard_file
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\transformers\modeling_utils.py", line 5468 in _load_pretrained_model
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\transformers\modeling_utils.py", line 5048 in from_pretrained
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\transformers\modeling_utils.py", line 277 in _wrapper
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\transformers\models\auto\auto_factory.py", line 604 in from_pretrained
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\sentence_transformers\models\Transformer.py", line 197 in _load_model
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\sentence_transformers\models\Transformer.py", line 89 in __init__
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\sentence_transformers\models\Transformer.py", line 366 in load
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\sentence_transformers\SentenceTransformer.py", line 2305 in _load_sbert_model
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\sentence_transformers\SentenceTransformer.py", line 327 in __init__
+  File "D:\Projects_Bucket\AI_Governance_Project\core\embeddings.py", line 12 in _get_model
+  File "D:\Projects_Bucket\AI_Governance_Project\core\embeddings.py", line 17 in get_embedding
+  File "D:\Projects_Bucket\AI_Governance_Project\tests\test_embeddings.py", line 239 in test_real_model_handles_empty_string_without_error
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\_pytest\python.py", line 166 in pytest_pyfunc_call
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\pluggy\_callers.py", line 121 in _multicall
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\pluggy\_manager.py", line 120 in _hookexec
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\pluggy\_hooks.py", line 512 in __call__
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\_pytest\python.py", line 1720 in runtest
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\_pytest\runner.py", line 179 in pytest_runtest_call
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\pluggy\_callers.py", line 121 in _multicall
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\pluggy\_manager.py", line 120 in _hookexec
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\pluggy\_hooks.py", line 512 in __call__
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\_pytest\runner.py", line 245 in <lambda>
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\_pytest\runner.py", line 353 in from_call
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\_pytest\runner.py", line 244 in call_and_report
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\_pytest\runner.py", line 137 in runtestprotocol
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\_pytest\runner.py", line 118 in pytest_runtest_protocol
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\pluggy\_callers.py", line 121 in _multicall
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\pluggy\_manager.py", line 120 in _hookexec
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\pluggy\_hooks.py", line 512 in __call__
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\_pytest\main.py", line 396 in pytest_runtestloop
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\pluggy\_callers.py", line 121 in _multicall
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\pluggy\_manager.py", line 120 in _hookexec
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\pluggy\_hooks.py", line 512 in __call__
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\_pytest\main.py", line 372 in _main
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\_pytest\main.py", line 318 in wrap_session
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\_pytest\main.py", line 365 in pytest_cmdline_main
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\pluggy\_callers.py", line 121 in _multicall
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\pluggy\_manager.py", line 120 in _hookexec
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\pluggy\_hooks.py", line 512 in __call__
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\_pytest\config\__init__.py", line 199 in main
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\_pytest\config\__init__.py", line 223 in console_main
+  File "C:\Users\Gannoju Pavan\AppData\Local\Programs\Python\Python313\Lib\site-packages\pytest\__main__.py", line 9 in <module>
+  File "<frozen runpy>", line 88 in _run_code
+  File "<frozen runpy>", line 198 in _run_module_as_main

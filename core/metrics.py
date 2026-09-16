@@ -181,6 +181,49 @@ judge_invocations_total = Counter(
     "Ambiguous-zone arbitrations that actually reached a judge backend.",
 )
 
+# --- Load-test baseline instrumentation (docs/perf/01-baseline-analysis.md) --
+# `assessments_in_flight` above conflates two different waits: time queued
+# behind ASSESS_MAX_CONCURRENCY and time actually executing. Under load these
+# have opposite fixes (queueing -> raise concurrency or shed load; execution
+# -> make the pipeline faster), so a single gauge cannot tell you which one is
+# happening. api.main._run_bounded records both ends of the same call here.
+queue_wait_seconds = Histogram(
+    "gatekeeper_assess_queue_wait_seconds",
+    "Time an assessment spent waiting for a free worker in the bounded pool, "
+    "before it started executing.",
+    buckets=_LATENCY_BUCKETS,
+)
+
+assess_execution_seconds = Histogram(
+    "gatekeeper_assess_execution_seconds",
+    "Time an assessment spent actually running on a worker, once one was "
+    "free -- excludes queue wait.",
+    buckets=_LATENCY_BUCKETS,
+)
+
+# stage_duration_seconds above only ever received the four keys
+# collect_semantic_signals writes into `details` (meta_intent, faiss_
+# threat_search, domain_alignment, fusion) -- cache lookup, the symbolic
+# veto, and judge arbitration were never recorded because they are not part
+# of that dict at all (they run before or outside collect_semantic_signals,
+# on paths that return early). Recorded directly at the call site instead of
+# being threaded through AssessResult, since these are operational timings,
+# not decision-record fields -- adding them to AssessResult's per-context
+# wire shape would be a compliance-record change, not an observability one.
+# Reuses the same "stage" label and bucket scheme as stage_duration_seconds
+# rather than three more histograms, since these are exactly the same kind
+# of measurement.
+EARLY_STAGE_KEYS = ("cache_lookup", "symbolic", "judge")
+
+detector_duration_seconds = Histogram(
+    "gatekeeper_detector_duration_seconds",
+    "Per-detector inference latency inside the fusion ensemble. Detector "
+    "names are a small, fixed registry (core/detectors.py), not caller "
+    "input, so this label is bounded the same way `source` is.",
+    ["detector"],
+    buckets=_LATENCY_BUCKETS,
+)
+
 # --- Phase 5 (Real LLM Gateway): the proxied call, kept separate from the
 # assessment metrics above -- a slow or failing external provider is a
 # different failure mode than a slow local assessment, and conflating them
