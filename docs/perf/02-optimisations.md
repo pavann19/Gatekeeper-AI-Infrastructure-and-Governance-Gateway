@@ -76,6 +76,40 @@ already fails closed on an unreachable/timed-out backend (verified by
 `tests/test_fault_injection.py::test_judge_unreachable_fallback_and_fail_closed`,
 green tonight). No change needed.
 
+## 4a. Decision: is the thread-pin fix alone enough, or is more needed?
+
+Made after the live benchmark above, not before it — this is the point
+of running #1-4 first rather than deciding on architecture from theory.
+
+**The thread-pin fix is a real, substantial win, and it does not close
+the case.** Two things are both true from the numbers in the Results
+section:
+
+- **It worked as predicted.** c=4/c=16 throughput up 38%/56%, p50/p95
+  down 37-40% at c=16 — exactly where the G1 finding said oversubscribed
+  torch threads were costing the most, under concurrent load.
+- **It did not fix the tail, and did not close the scaling gap.**
+  c=16 p99 is flat (2,410ms vs ~2,302-2,475ms baseline — no improvement).
+  c=16 throughput (16.03 rps) is still far below a naive 4x-of-c=4
+  prediction (~63 rps). `ASSESS_MAX_CONCURRENCY=4` capping concurrent
+  work explains part of that gap by design, but not all of it — the
+  original flamegraph finding (82% of CPU in `_score_one_detector`, one
+  serialized forward pass per detector per request) is still true; the
+  thread-pin fix changed how many OS threads compete for a core, not how
+  much per-request CPU work each request still does.
+
+**Conclusion: micro-batching and ONNX are still worth doing, and neither
+is more urgent tonight than it was in §4/§5 below.** The thread-pin fix
+picked the safe, purely-scheduling win off the table first, per the
+brief's own "one change per commit, cheapest/safest first" instinct. What's
+left (per-detector forward-pass cost itself) needs the two options
+already identified — batching or ONNX — and both still carry the same
+correctness-verification cost (decision-replay gate, RAM-heavy export)
+that made them the right things to defer tonight rather than the right
+things to skip permanently. Their status below is unchanged, now with the
+live numbers to back up that they're still worth scheduling, not that
+they were unnecessary all along.
+
 ## 4. Micro-batching detectors — rejected for tonight
 
 **Finding cited:** §2's cold-cache flamegraph, 82% of CPU in
