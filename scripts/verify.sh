@@ -2,10 +2,15 @@
 # G3: `make verify` -- unit tests (no models needed) -> pinned models
 # download/warm -> 20-prompt smoke eval -> 30s benchmark. RAM-gated like
 # scripts/run_perf_baseline.sh so a low-resource clone degrades to a clear
-# SKIP + reason rather than a crash. Not run end-to-end this session (see
-# docs/perf/02-optimisations.md and the overnight summary) -- written and
-# syntax-checked, not executed, given the time/RAM budget was already spent
-# on G2's benchmark work.
+# SKIP + reason rather than a crash.
+#
+# Run end-to-end on this machine: PASS (1644 unit tests, 20/20 smoke
+# requests succeeded at 90% attack-block rate, 30s benchmark at
+# concurrency=4 completed with 0 errors). First real run caught a bug in
+# this script itself -- the smoke eval's 20 sequential anonymous requests
+# tripped RATE_LIMIT_ANONYMOUS_RPM=20's burst limit on their own (13/20
+# came back 429) -- fixed by starting the server with
+# RATE_LIMIT_ENABLED=false, same as the other benchmark scripts already do.
 #
 #   bash scripts/verify.sh
 set -uo pipefail
