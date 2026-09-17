@@ -47,7 +47,14 @@ fi
 
 echo "[verify] --- start server (downloads + warms every pinned model on first run) ---"
 if [ "$STATUS" = "0" ] && require_gb 3.5 "server start / model download"; then
-    PYTHONPATH=. python -m uvicorn api.main:app --host 127.0.0.1 --port 8000 > /tmp/verify_server.log 2>&1 &
+    # RATE_LIMIT_ENABLED=false: the smoke eval below fires 20 sequential
+    # anonymous requests, well within a real client's use but enough to
+    # trip RATE_LIMIT_ANONYMOUS_RPM=20's burst behavior on its own (first
+    # real run of this script: 13/20 requests got 429'd). This is an
+    # internal correctness check, not a rate-limiter test -- deliberately
+    # bypassed the same way scripts/run_perf_baseline.sh and
+    # benchmarks/load/assess_bench.py's own reproduce instructions do.
+    RATE_LIMIT_ENABLED=false PYTHONPATH=. python -m uvicorn api.main:app --host 127.0.0.1 --port 8000 > /tmp/verify_server.log 2>&1 &
     BASH_PID=$!
     UP=0
     for i in $(seq 1 100); do  # model download on a cold cache can take a while
