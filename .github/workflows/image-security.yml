@@ -35,6 +35,14 @@ jobs:
         # produces a report nobody has to act on is not a gate.
         severity: CRITICAL,HIGH
         exit-code: '1'
+        # First real run found CVEs in util-linux/perl/ncurses with no
+        # "Fixed Version" yet (Debian trixie hasn't shipped a patch) --
+        # without this, the gate would fail permanently on issues nobody
+        # can act on, which is exactly the kind of gate that gets ignored
+        # or disabled. ignore-unfixed keeps it failing on anything we can
+        # actually do something about (like the two Python CVEs this same
+        # run found, fixed in the same commit as this line).
+        ignore-unfixed: true
 
     - name: Generate SBOM with syft
       uses: anchore/sbom-action@v0

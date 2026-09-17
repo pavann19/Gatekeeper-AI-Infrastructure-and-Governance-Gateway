@@ -35,6 +35,12 @@ COPY requirements-api.txt .
 # dependencies, became unresolvable). --extra-index-url adds the CPU wheel
 # index alongside PyPI, so pip still finds everything else there while
 # preferring the CPU build of torch itself.
+# Bumps the base image's bundled pip/setuptools/wheel before anything else
+# installs -- the stock python:3.10-slim ships wheel 0.45.1 (CVE-2026-24049,
+# arbitrary code execution via a malicious wheel file) and pulls in
+# jaraco.context 5.3.0 (CVE-2026-23949, path traversal via a malicious tar
+# archive) as setuptools metadata. Caught by the image-security CI job.
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 RUN pip install --no-cache-dir torch --extra-index-url https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir -r requirements-api.txt
 
