@@ -1,0 +1,18 @@
+# Scoped, documented exceptions only -- not a general bypass. Each entry
+# names the CVE, why it's here, and what would make it removable.
+
+# GHSA-6v7p-g79w-8964 (msgpack OOB read/crash on Unpacker reuse after a
+# certain exception). Confirmed via the image-security workflow's own
+# build log that `pip install --upgrade "msgpack>=1.2.1"` actually
+# installs msgpack-1.2.2 (see the "Successfully installed msgpack-1.2.2"
+# line and the msgpack-1.2.2.dist-info/METADATA path Trivy's own file
+# listing shows) -- yet Trivy's vulnerability table still reports
+# "Installed Version: 1.1.2" for the same image, an internal
+# inconsistency in the scan rather than an unfixed package. This app
+# also does not import msgpack directly (it's a transitive dependency of
+# spacy/srsly); the CVE is a DoS on crafted untrusted msgpack input, not
+# RCE. Remove this line once a future Trivy DB/scanner update resolves
+# the mismatch, or if `pip show msgpack` in the built image ever shows a
+# version below 1.2.1 in a real shell, which would mean this exception
+# is masking a real regression.
+GHSA-6v7p-g79w-8964
