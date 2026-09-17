@@ -48,15 +48,15 @@ RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 RUN pip install --no-cache-dir torch --extra-index-url https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir -r requirements-api.txt
 
-# Transitive deps that land at a CVE-affected version regardless of the
-# pip/setuptools/wheel bump above (something in requirements-api.txt's
-# tree re-pins them lower) -- forced up explicitly, caught by the same
-# image-security CI job. msgpack: GHSA-6v7p-g79w-8964 (OOB read on
-# Unpacker reuse). setuptools: CVE-2025-47273 (path traversal in
-# PackageIndex).
-RUN pip install --no-cache-dir --upgrade "msgpack>=1.2.1" "setuptools>=78.1.1"
+RUN pip install --no-cache-dir --upgrade "setuptools>=78.1.1"
 
 RUN python -m spacy download en_core_web_sm
+
+# msgpack fix has to run AFTER spacy download, not before: the model
+# wheel depends on spacy, which reinstalls srsly, which re-pins msgpack
+# down to <1.2 -- an upgrade placed earlier in the image got silently
+# undone by this step. GHSA-6v7p-g79w-8964 (OOB read on Unpacker reuse).
+RUN pip install --no-cache-dir --upgrade "msgpack>=1.2.1"
 
 COPY . .
 
