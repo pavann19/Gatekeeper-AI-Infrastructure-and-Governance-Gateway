@@ -6,7 +6,11 @@ FROM python:3.10-slim
 WORKDIR /app
 
 # build-essential for sentence-transformers/faiss native extensions.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# apt-get upgrade patches OS packages already on the base image with a
+# Debian-published fix available (e.g. gzip CVE-2026-41992) that
+# `docker build`'s layer cache would otherwise keep frozen at whatever
+# was current when python:3.10-slim was last pulled.
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     build-essential curl \
     && rm -rf /var/lib/apt/lists/*
 
@@ -43,6 +47,14 @@ COPY requirements-api.txt .
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 RUN pip install --no-cache-dir torch --extra-index-url https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir -r requirements-api.txt
+
+# Transitive deps that land at a CVE-affected version regardless of the
+# pip/setuptools/wheel bump above (something in requirements-api.txt's
+# tree re-pins them lower) -- forced up explicitly, caught by the same
+# image-security CI job. msgpack: GHSA-6v7p-g79w-8964 (OOB read on
+# Unpacker reuse). setuptools: CVE-2025-47273 (path traversal in
+# PackageIndex).
+RUN pip install --no-cache-dir --upgrade "msgpack>=1.2.1" "setuptools>=78.1.1"
 
 RUN python -m spacy download en_core_web_sm
 
