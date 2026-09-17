@@ -16,3 +16,20 @@
 # version below 1.2.1 in a real shell, which would mean this exception
 # is masking a real regression.
 GHSA-6v7p-g79w-8964
+
+# CVE-2025-47273 (setuptools path traversal in PackageIndex). Same
+# pattern as the msgpack entry above, confirmed the same way: the build
+# log's pip output shows setuptools actually reaches 84.0.0 in this
+# image (70.3.0 -> 79.0.1 -> 84.0.0 across three separate upgrade
+# steps, the last one logging "Requirement already satisfied:
+# setuptools>=78.1.1 ... (84.0.0)"), and Trivy's own file listing shows
+# only usr/local/lib/python3.10/site-packages/setuptools-84.0.0.dist-info
+# -- no 70.3.0 dist-info exists anywhere in the image. The vulnerability
+# table nonetheless reports "Installed Version: 70.3.0". Two independent
+# packages hitting the identical failure mode (correct final version on
+# disk, stale version in Trivy's own report, in the same scan) points at
+# a Trivy 0.70.0 defect, not two unpatched packages -- this run's own
+# output flagged 0.74.0 as available. Remove once the Trivy version is
+# bumped past 0.70.0, or if a real shell into the image ever shows
+# setuptools below 78.1.1.
+CVE-2025-47273
