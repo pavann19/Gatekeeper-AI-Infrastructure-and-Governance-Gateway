@@ -4,13 +4,13 @@
 # scripts/run_perf_baseline.sh so a low-resource clone degrades to a clear
 # SKIP + reason rather than a crash.
 #
-# Run end-to-end on this machine: PASS (1644 unit tests, 20/20 smoke
-# requests succeeded at 90% attack-block rate, 30s benchmark at
-# concurrency=4 completed with 0 errors). First real run caught a bug in
-# this script itself -- the smoke eval's 20 sequential anonymous requests
-# tripped RATE_LIMIT_ANONYMOUS_RPM=20's burst limit on their own (13/20
-# came back 429) -- fixed by starting the server with
-# RATE_LIMIT_ENABLED=false, same as the other benchmark scripts already do.
+# Ran this end-to-end on this machine and it passed: 1644 unit tests,
+# 20/20 smoke requests with a 90% attack-block rate, 30s benchmark at
+# concurrency=4 with 0 errors. The first attempt found a real bug in the
+# script though -- the smoke eval fires 20 sequential anonymous requests,
+# which was enough on its own to trip RATE_LIMIT_ANONYMOUS_RPM=20's burst
+# limit (13/20 came back 429). Fixed by starting the server with
+# RATE_LIMIT_ENABLED=false, same as the other benchmark scripts do.
 #
 #   bash scripts/verify.sh
 set -uo pipefail
@@ -52,13 +52,13 @@ fi
 
 echo "[verify] --- start server (downloads + warms every pinned model on first run) ---"
 if [ "$STATUS" = "0" ] && require_gb 3.5 "server start / model download"; then
-    # RATE_LIMIT_ENABLED=false: the smoke eval below fires 20 sequential
-    # anonymous requests, well within a real client's use but enough to
-    # trip RATE_LIMIT_ANONYMOUS_RPM=20's burst behavior on its own (first
-    # real run of this script: 13/20 requests got 429'd). This is an
-    # internal correctness check, not a rate-limiter test -- deliberately
-    # bypassed the same way scripts/run_perf_baseline.sh and
-    # benchmarks/load/assess_bench.py's own reproduce instructions do.
+    # RATE_LIMIT_ENABLED=false because the smoke eval below fires 20
+    # sequential anonymous requests, which is enough on its own to trip
+    # RATE_LIMIT_ANONYMOUS_RPM=20's burst limit (13/20 got 429'd on the
+    # first real run of this script). This is checking pipeline
+    # correctness, not the rate limiter, so bypassing it here is fine --
+    # same thing run_perf_baseline.sh and assess_bench.py's own reproduce
+    # instructions already do.
     RATE_LIMIT_ENABLED=false PYTHONPATH=. python -m uvicorn api.main:app --host 127.0.0.1 --port 8000 > /tmp/verify_server.log 2>&1 &
     BASH_PID=$!
     UP=0
