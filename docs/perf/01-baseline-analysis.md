@@ -30,16 +30,25 @@ investigation (see §6) at ~1-2 GB free; runs B and C, at 4+ GB free, land
 in the same 2.1-2.5 s p95 range independently. Treat B/C as the
 representative concurrency-16 numbers and A as evidence of how much a
 contended host can inflate a benchmark, not as the system's true tail.
-**All three still show throughput at concurrency 16 lower than a
-properly-scaled 4x-of-concurrency-4 would predict** (concurrency 4 → ~14
-rps; 4x that is 56 rps; concurrency 16 delivers ~10 rps) — the qualitative
-finding is stable even though the absolute tail latency isn't.
+**All three still show throughput at concurrency 16 far below a
+properly-scaled 4x-of-concurrency-4 would predict** (concurrency 4 →
+11.40 rps; 4x that is ~46 rps; concurrency 16 delivers ~10.2-10.3 rps in
+the representative runs) — the qualitative finding is stable even though
+the absolute tail latency isn't.
 
-**Throughput at concurrency 16 is *lower* than at concurrency 1.** This is
-the single most important number in this document — more concurrent
-callers made the service slower in aggregate, not faster, and it happened
-by design, not by accident. The rest of this document explains why and
-locates it precisely.
+**Throughput plateaus after concurrency 4 — it does not regress below
+concurrency 1.** This is the single most important number in this
+document, and the previous version of this paragraph had it backwards:
+it cited run A's 4.67 rps at concurrency 16 as if that were the
+representative number, when §1's own note two paragraphs up says A is
+the contended outlier. The representative runs (B/C, 4+ GB free) show
+throughput going 8.77 rps (c=1) → 11.40 rps (c=4) → ~10.2-10.3 rps
+(c=16) — a real plateau (and a slight *decline* from the c=4 peak, not
+from c=1), consistent with `ASSESS_MAX_CONCURRENCY=4` capping how much
+work actually runs in parallel regardless of how many callers are
+waiting. More concurrent callers stop buying more throughput past 4, not
+"go slower than 1 caller alone." The rest of this document explains why
+and locates it precisely.
 
 ## 2. Where the time goes (flamegraph, concurrency 16, 40 s / 13,918 samples)
 

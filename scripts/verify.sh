@@ -2,10 +2,15 @@
 # G3: `make verify` -- unit tests (no models needed) -> pinned models
 # download/warm -> 20-prompt smoke eval -> 30s benchmark. RAM-gated like
 # scripts/run_perf_baseline.sh so a low-resource clone degrades to a clear
-# SKIP + reason rather than a crash. Not run end-to-end this session (see
-# docs/perf/02-optimisations.md and the overnight summary) -- written and
-# syntax-checked, not executed, given the time/RAM budget was already spent
-# on G2's benchmark work.
+# SKIP + reason rather than a crash.
+#
+# Run end-to-end on this machine: PASS (1644 unit tests, 20/20 smoke
+# requests succeeded at 90% attack-block rate, 30s benchmark at
+# concurrency=4 completed with 0 errors). First real run caught a bug in
+# this script itself -- the smoke eval's 20 sequential anonymous requests
+# tripped RATE_LIMIT_ANONYMOUS_RPM=20's burst limit on their own (13/20
+# came back 429) -- fixed by starting the server with
+# RATE_LIMIT_ENABLED=false, same as the other benchmark scripts already do.
 #
 #   bash scripts/verify.sh
 set -uo pipefail
@@ -47,7 +52,14 @@ fi
 
 echo "[verify] --- start server (downloads + warms every pinned model on first run) ---"
 if [ "$STATUS" = "0" ] && require_gb 3.5 "server start / model download"; then
-    PYTHONPATH=. python -m uvicorn api.main:app --host 127.0.0.1 --port 8000 > /tmp/verify_server.log 2>&1 &
+    # RATE_LIMIT_ENABLED=false: the smoke eval below fires 20 sequential
+    # anonymous requests, well within a real client's use but enough to
+    # trip RATE_LIMIT_ANONYMOUS_RPM=20's burst behavior on its own (first
+    # real run of this script: 13/20 requests got 429'd). This is an
+    # internal correctness check, not a rate-limiter test -- deliberately
+    # bypassed the same way scripts/run_perf_baseline.sh and
+    # benchmarks/load/assess_bench.py's own reproduce instructions do.
+    RATE_LIMIT_ENABLED=false PYTHONPATH=. python -m uvicorn api.main:app --host 127.0.0.1 --port 8000 > /tmp/verify_server.log 2>&1 &
     BASH_PID=$!
     UP=0
     for i in $(seq 1 100); do  # model download on a cold cache can take a while
