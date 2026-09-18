@@ -33,18 +33,18 @@ process start — both new config fields
 parallelism instead of two layers of parallelism (outer thread pool x
 inner torch threads) competing for the same 12 cores.
 
-**Correctness guard:** this is a pure scheduling change — it cannot alter
-a score, since it does not touch any arithmetic, only how many OS threads
-one forward pass is allowed to use internally. `tests/test_api.py`,
-`tests/test_config.py`, `tests/test_fast_path_cascade.py` (75 tests) pass
-unchanged with the pin active. The full non-slow suite was also run after
-the G3/G4 changes landed on top of this — 1644 passed, 0 failed, no
-regression. **Live before/after benchmark: now run, see §Results below.**
-The `-m slow` decision-replay gate still has NOT been run — it needs a
-real corpus pass through the live decision path, which is a separate
-piece of validation from a scheduling-only performance number, and is
-still the next thing to do before treating this as fully validated on
-the correctness side (the performance side is now measured).
+**Correctness guard:** this is a pure scheduling change, it can't alter a
+score since it doesn't touch any arithmetic, only how many OS threads one
+forward pass is allowed to use internally. `tests/test_api.py`,
+`tests/test_config.py`, `tests/test_fast_path_cascade.py` (75 tests total)
+pass unchanged with the pin active, and the full non-slow suite was run
+again after the G3/G4 changes landed on top of this — 1644 passed, 0
+failed, no regression. The live before/after benchmark has now been run
+too, see the results section below. Still outstanding: the `-m slow`
+decision-replay gate, which needs a real corpus pass through the live
+decision path. That's a different kind of validation than a scheduling
+benchmark and is the next thing to do before calling this fully
+validated on the correctness side — the performance side is covered now.
 
 ## 2. Eager load at startup — already satisfied, verified
 
@@ -76,39 +76,34 @@ already fails closed on an unreachable/timed-out backend (verified by
 `tests/test_fault_injection.py::test_judge_unreachable_fallback_and_fail_closed`,
 green tonight). No change needed.
 
-## 4a. Decision: is the thread-pin fix alone enough, or is more needed?
+## 4a. Is the thread-pin fix alone enough, or is more needed?
 
-Made after the live benchmark above, not before it — this is the point
-of running #1-4 first rather than deciding on architecture from theory.
+Answering this after the live benchmark, not before it — that's kind of
+the whole point of running #1-4 first instead of deciding on
+architecture from theory.
 
-**The thread-pin fix is a real, substantial win, and it does not close
-the case.** Two things are both true from the numbers in the Results
-section:
+Short answer: it's a real win, but it doesn't close the case. It worked
+about as predicted — c=4/c=16 throughput up 38%/56%, p50/p95 down
+37-40% at c=16, right where the G1 finding said oversubscribed torch
+threads were costing the most under concurrent load. But it didn't touch
+the tail: c=16 p99 is flat at 2,410ms vs ~2,302-2,475ms in the baseline,
+basically no change. And c=16 throughput (16.03 rps) is still well below
+what a naive 4x-of-c=4 scale-up would predict (~63 rps).
+`ASSESS_MAX_CONCURRENCY=4` capping parallel work explains part of that
+gap by design, but not all of it — the original flamegraph finding (82%
+of CPU in `_score_one_detector`, one serialized forward pass per
+detector per request) is still true. The thread pin changed how many OS
+threads are fighting over a core, not how much CPU work each request
+still does.
 
-- **It worked as predicted.** c=4/c=16 throughput up 38%/56%, p50/p95
-  down 37-40% at c=16 — exactly where the G1 finding said oversubscribed
-  torch threads were costing the most, under concurrent load.
-- **It did not fix the tail, and did not close the scaling gap.**
-  c=16 p99 is flat (2,410ms vs ~2,302-2,475ms baseline — no improvement).
-  c=16 throughput (16.03 rps) is still far below a naive 4x-of-c=4
-  prediction (~63 rps). `ASSESS_MAX_CONCURRENCY=4` capping concurrent
-  work explains part of that gap by design, but not all of it — the
-  original flamegraph finding (82% of CPU in `_score_one_detector`, one
-  serialized forward pass per detector per request) is still true; the
-  thread-pin fix changed how many OS threads compete for a core, not how
-  much per-request CPU work each request still does.
-
-**Conclusion: micro-batching and ONNX are still worth doing, and neither
-is more urgent tonight than it was in §4/§5 below.** The thread-pin fix
-picked the safe, purely-scheduling win off the table first, per the
-brief's own "one change per commit, cheapest/safest first" instinct. What's
-left (per-detector forward-pass cost itself) needs the two options
-already identified — batching or ONNX — and both still carry the same
-correctness-verification cost (decision-replay gate, RAM-heavy export)
-that made them the right things to defer tonight rather than the right
-things to skip permanently. Their status below is unchanged, now with the
-live numbers to back up that they're still worth scheduling, not that
-they were unnecessary all along.
+So: micro-batching and ONNX are still worth doing, and neither is any
+more or less urgent than it was in §4/§5 below. The thread pin was the
+safe, purely-scheduling win, worth taking first. What's left — the
+per-detector forward-pass cost itself — needs one of the two options
+already on the table, and both still carry the same verification cost
+(decision-replay gate, RAM-heavy export) that made sense to defer
+tonight rather than rush. Their status is unchanged below, just backed
+by a live number now instead of an assumption.
 
 ## 4. Micro-batching detectors — rejected for tonight
 
@@ -163,34 +158,32 @@ parked pending a host with real RAM headroom.
 Raw JSON: `_evidence/perf/b59b57417e41-{1,4,16}.json` alongside the
 baseline's `_evidence/perf/e55452550ae2-{1,4,16}.json`.
 
-**Read honestly, not just favorably:**
-- **c=4 and c=16 throughput improved substantially (+38%, +56%) and
-  latency improved at p50/p95 (-37% to -40%)** — this is a real,
-  measured win where the fix's own theory said it should show up: under
-  concurrent load, where torch's unpinned threads were actually
-  oversubscribing the box.
-- **c=16 p99 did not improve (2,410ms vs ~2,302-2,475ms baseline,
-  essentially flat)** — the fix helped the median and the shoulder of the
-  distribution, not the tail. Worth knowing before claiming a blanket
-  latency win.
-- **c=1 throughput went down, not up** (7.35 vs 8.77 rps, -16%). At
-  concurrency 1 there's no oversubscription for pinning to fix — the
-  most likely explanation is single-request noise (this is a single data
-  point per level, not a distribution) rather than the pin adding
-  overhead, but it's reported as measured rather than explained away.
-- **Methodology differences from the original baseline capture, stated
-  for anyone reproducing this:** this run used `--allow-anonymous` with
-  `RATE_LIMIT_ENABLED=false` (anonymous requests otherwise hit
-  `RATE_LIMIT_ANONYMOUS_RPM=20` almost immediately at these concurrency
-  levels — the first attempt at this run hit a 99.88% error rate from
-  429s before this was caught) where the original baseline used an
-  authenticated API key; both bypass rate limiting, so this shouldn't
-  change the pipeline-latency numbers being measured, but it's a
-  different code path (auth) than the original run took. Also: this run
-  started from a **freshly cleared** `semantic_cache.json` /
-  `semantic_cache_exact.json` (deleted before restart) specifically to
-  avoid the cache-warmth confound `01-baseline-analysis.md` §2a
-  documented — the baseline's own starting cache state was not
-  independently verified, so residual warmth there (if any) would bias
-  the baseline's numbers toward looking slower-improving than they
-  really are, not the other way around.
+A few things worth calling out instead of just quoting the win:
+
+c=4 and c=16 throughput improved a lot (+38%, +56%) and latency dropped
+at p50/p95 (-37% to -40%) — that's a real, measured improvement right
+where the theory said it should land, under concurrent load where
+torch's unpinned threads were actually oversubscribing the box. But c=16
+p99 didn't move (2,410ms vs ~2,302-2,475ms baseline, basically flat) —
+the fix helped the median and the shoulder of the distribution, not the
+tail, and that's worth knowing before calling this a blanket latency
+win. c=1 throughput actually went down a bit (7.35 vs 8.77 rps, about
+-16%), which makes sense since there's no oversubscription at
+concurrency 1 for the pin to fix — most likely this is just noise from a
+single data point rather than the pin adding overhead, but it's reported
+as-is rather than explained away.
+
+Two methodology notes for anyone trying to reproduce this: this run used
+`--allow-anonymous` with `RATE_LIMIT_ENABLED=false` (anonymous requests
+otherwise hit `RATE_LIMIT_ANONYMOUS_RPM=20` almost immediately at these
+concurrency levels — the first attempt actually hit a 99.88% error rate
+from 429s before that got caught), where the original baseline run used
+an authenticated API key instead. Both bypass rate limiting so it
+shouldn't affect the latency numbers, but it is a different auth path
+than the original run took. Also, this run started from a freshly
+cleared `semantic_cache.json` / `semantic_cache_exact.json` — deleted on
+purpose before the restart to avoid the cache-warmth issue
+`01-baseline-analysis.md` §2a already flagged. The baseline's starting
+cache state was never independently checked, so if it had any residual
+warmth, that would make the baseline look slower than it should, not the
+other way around.
