@@ -23,32 +23,34 @@ Raw data: `_evidence/perf/e55452550ae2-{1,4,16}.json`,
 | C (`run_20260917_004655`) | 16 | 309 | 10.30 | 1,644 ms | 2,111 ms | 2,302 ms | 16 |
 
 `ASSESS_MAX_CONCURRENCY=4` (default, unchanged across all runs). Every
-request across every run and every level returned 200 — 0 errors, 0
-timeouts. **Run A's p95/p99 (19.8 s / 22.7 s) is the outlier of the three,
-not the norm** — that run shared the machine with a concurrent crash
-investigation (see §6) at ~1-2 GB free; runs B and C, at 4+ GB free, land
-in the same 2.1-2.5 s p95 range independently. Treat B/C as the
-representative concurrency-16 numbers and A as evidence of how much a
-contended host can inflate a benchmark, not as the system's true tail.
-**All three still show throughput at concurrency 16 far below a
-properly-scaled 4x-of-concurrency-4 would predict** (concurrency 4 →
-11.40 rps; 4x that is ~46 rps; concurrency 16 delivers ~10.2-10.3 rps in
-the representative runs) — the qualitative finding is stable even though
-the absolute tail latency isn't.
+request across every run and every level returned 200 — no errors, no
+timeouts anywhere.
 
-**Throughput plateaus after concurrency 4 — it does not regress below
-concurrency 1.** This is the single most important number in this
-document, and the previous version of this paragraph had it backwards:
-it cited run A's 4.67 rps at concurrency 16 as if that were the
-representative number, when §1's own note two paragraphs up says A is
-the contended outlier. The representative runs (B/C, 4+ GB free) show
-throughput going 8.77 rps (c=1) → 11.40 rps (c=4) → ~10.2-10.3 rps
-(c=16) — a real plateau (and a slight *decline* from the c=4 peak, not
-from c=1), consistent with `ASSESS_MAX_CONCURRENCY=4` capping how much
-work actually runs in parallel regardless of how many callers are
-waiting. More concurrent callers stop buying more throughput past 4, not
-"go slower than 1 caller alone." The rest of this document explains why
-and locates it precisely.
+Run A's p95/p99 (19.8s / 22.7s) is the odd one out, not the norm. That
+run happened to share the machine with a crash investigation going on at
+the same time (see §6), so free RAM was down around 1-2GB. Runs B and C
+were captured later with 4GB+ free and land independently in the same
+2.1-2.5s p95 range, which is why they're treated as the representative
+concurrency-16 numbers here, and A as more a demonstration of how badly
+a contended host can skew a benchmark than as a real tail latency. Worth
+noting: even B and C are well below what a clean 4x-of-concurrency-4
+scale-up would predict (concurrency 4 gets ~11.4 rps, so 4x that would be
+~46 rps; concurrency 16 only delivers ~10.2-10.3 rps). That gap is real
+and stable across all three runs regardless of how noisy the tail
+latency got.
+
+One correction to a mistake in an earlier version of this section:
+throughput plateaus after concurrency 4, it does not drop below
+concurrency 1. The previous write-up used run A's 4.67 rps at
+concurrency 16 as if it were the typical number, which contradicts the
+note two paragraphs up flagging A as the contended outlier. Going by B
+and C instead, throughput moves 8.77 rps (c=1) → 11.40 rps (c=4) →
+~10.2-10.3 rps (c=16) — it plateaus, and dips slightly from the c=4 peak,
+not from c=1. That's consistent with `ASSESS_MAX_CONCURRENCY=4` capping
+how much work actually runs in parallel no matter how many callers are
+waiting: more concurrent callers stop buying extra throughput past 4,
+they don't make things slower than a single caller. The rest of this
+document is about why, and where exactly that ceiling comes from.
 
 ## 2. Where the time goes (flamegraph, concurrency 16, 40 s / 13,918 samples)
 
