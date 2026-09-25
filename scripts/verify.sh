@@ -4,13 +4,11 @@
 # scripts/run_perf_baseline.sh so a low-resource clone degrades to a clear
 # SKIP + reason rather than a crash.
 #
-# Ran this end-to-end on this machine and it passed: 1644 unit tests,
-# 20/20 smoke requests with a 90% attack-block rate, 30s benchmark at
-# concurrency=4 with 0 errors. The first attempt found a real bug in the
-# script though -- the smoke eval fires 20 sequential anonymous requests,
-# which was enough on its own to trip RATE_LIMIT_ANONYMOUS_RPM=20's burst
-# limit (13/20 came back 429). Fixed by starting the server with
-# RATE_LIMIT_ENABLED=false, same as the other benchmark scripts do.
+# The first real run found that an anonymous smoke/benchmark burst tripped
+# RATE_LIMIT_ANONYMOUS_RPM. Verification now provisions a real benchmark
+# identity, sends its Authorization header, and raises only the authenticated
+# ceiling for the run. Rate limiting stays enabled and anonymous behavior is
+# unchanged.
 #
 #   bash scripts/verify.sh
 set -uo pipefail
@@ -30,6 +28,7 @@ require_gb() {
 }
 
 SERVER_PID=""
+KEY=""
 cleanup() {
     if [ -n "$SERVER_PID" ]; then
         powershell -NoProfile -Command "Stop-Process -Id $SERVER_PID -Force -ErrorAction SilentlyContinue" >/dev/null 2>&1
@@ -52,14 +51,29 @@ fi
 
 echo "[verify] --- start server (downloads + warms every pinned model on first run) ---"
 if [ "$STATUS" = "0" ] && require_gb 3.5 "server start / model download"; then
-    # RATE_LIMIT_ENABLED=false because the smoke eval below fires 20
-    # sequential anonymous requests, which is enough on its own to trip
-    # RATE_LIMIT_ANONYMOUS_RPM=20's burst limit (13/20 got 429'd on the
-    # first real run of this script). This is checking pipeline
-    # correctness, not the rate limiter, so bypassing it here is fine --
-    # same thing run_perf_baseline.sh and assess_bench.py's own reproduce
-    # instructions already do.
-    RATE_LIMIT_ENABLED=false PYTHONPATH=. python -m uvicorn api.main:app --host 127.0.0.1 --port 8000 > /tmp/verify_server.log 2>&1 &
+    # Exercise the authenticated request path instead of disabling rate
+    # limiting. The deliberately high authenticated ceiling keeps this
+    # pipeline benchmark from turning into a limiter benchmark while the
+    # Authorization header and identity resolution remain real.
+    KEY_FILE="$REPO/.bench_api_key"
+    if [ -f "$KEY_FILE" ]; then
+        KEY="$(cat "$KEY_FILE")"
+        if ! PYTHONPATH=. python scripts/manage_api_keys.py verify --key "$KEY" >/dev/null 2>&1; then
+            KEY=""
+        fi
+    fi
+    if [ -z "$KEY" ]; then
+        ISSUE_OUT="$(PYTHONPATH=. python scripts/manage_api_keys.py issue \
+            --capability GENERAL --tenant benchmark \
+            --key-id "verify-benchmark-$(date +%s)" 2>&1)"
+        KEY="$(echo "$ISSUE_OUT" | sed -n 's/.*key[[:space:]]*:[[:space:]]*\(gk_[A-Za-z0-9_-]*\).*/\1/p' | head -1)"
+        [ -n "$KEY" ] && echo "$KEY" > "$KEY_FILE"
+    fi
+    if [ -z "$KEY" ]; then
+        echo "[verify] FAIL: could not obtain benchmark API key"
+        exit 1
+    fi
+    RATE_LIMIT_AUTHENTICATED_RPM=1000000 PYTHONPATH=. python -m uvicorn api.main:app --host 127.0.0.1 --port 8000 > /tmp/verify_server.log 2>&1 &
     BASH_PID=$!
     UP=0
     for i in $(seq 1 100); do  # model download on a cold cache can take a while
@@ -77,7 +91,7 @@ if [ "$STATUS" = "0" ] && require_gb 3.5 "server start / model download"; then
         echo "[verify] server healthy (pid $SERVER_PID)"
 
         echo "[verify] --- 20-prompt smoke eval ---"
-        if ! PYTHONPATH=. python scripts/smoke_eval.py --base-url http://127.0.0.1:8000 --n 20; then
+        if ! PYTHONPATH=. python scripts/smoke_eval.py --base-url http://127.0.0.1:8000 --api-key "$KEY" --n 20; then
             echo "[verify] FAIL: smoke eval"
             STATUS=1
         fi
@@ -85,7 +99,7 @@ if [ "$STATUS" = "0" ] && require_gb 3.5 "server start / model download"; then
         if require_gb 1.0 "30s benchmark"; then
             echo "[verify] --- 30s benchmark (concurrency=4) ---"
             PYTHONPATH=. python benchmarks/load/assess_bench.py \
-                --allow-anonymous --concurrency 4 --duration 30 --warmup 5 \
+                --api-key "$KEY" --concurrency 4 --duration 30 --warmup 5 \
                 --judge-label unspecified || { echo "[verify] FAIL: benchmark"; STATUS=1; }
         else
             echo "[verify] SKIP: benchmark (insufficient RAM)"

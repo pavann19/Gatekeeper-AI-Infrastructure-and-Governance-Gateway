@@ -187,6 +187,34 @@ def _parse_prom_counter_total(text: str, name: str) -> float:
     return total
 
 
+def _parse_prom_sample(text: str, name: str, labels: dict[str, str]) -> float | None:
+    """Return one exact Prometheus sample without confusing sibling series."""
+    required = [f'{key}="{value}"' for key, value in labels.items()]
+    for line in text.splitlines():
+        if line.startswith("#") or not line.startswith(name + "{"):
+            continue
+        series, _, raw_value = line.rpartition(" ")
+        if all(label in series for label in required):
+            try:
+                return float(raw_value)
+            except ValueError:
+                return None
+    return None
+
+
+def _judge_histogram_snapshot(text: str | None) -> tuple[float, float] | None:
+    if not text:
+        return None
+    labels = {"stage": "judge"}
+    count = _parse_prom_sample(
+        text, "gatekeeper_stage_duration_seconds_count", labels
+    )
+    total = _parse_prom_sample(
+        text, "gatekeeper_stage_duration_seconds_sum", labels
+    )
+    return (count, total) if count is not None and total is not None else None
+
+
 # ---------------------------------------------------------------------------
 # Load generation -- closed loop
 # ---------------------------------------------------------------------------
@@ -263,7 +291,14 @@ async def run_one_concurrency(
                     judge_after = j
                 await asyncio.sleep(metrics_interval)
 
+        async def measured_window_start():
+            await asyncio.sleep(warmup)
+            return _judge_histogram_snapshot(
+                await scrape_metrics(client, base_url, headers)
+            )
+
         poller = asyncio.create_task(poll_metrics())
+        judge_start_task = asyncio.create_task(measured_window_start())
         workers = [
             asyncio.create_task(
                 _worker(w, client, base_url, headers, workload, deadline, warmup_until, result, lock)
@@ -272,6 +307,10 @@ async def run_one_concurrency(
         ]
         await asyncio.gather(*workers)
         await poller
+        judge_start = await judge_start_task
+        judge_end = _judge_histogram_snapshot(
+            await scrape_metrics(client, base_url, headers)
+        )
 
     lat = sorted(result.latencies_ms)
     n_2xx = sum(1 for s in result.statuses if 200 <= s < 300)
@@ -285,6 +324,20 @@ async def run_one_concurrency(
     judge_delta = None
     if judge_before is not None and judge_after is not None:
         judge_delta = max(0.0, judge_after - judge_before)
+
+    judge_latency = {
+        "count": None,
+        "mean_ms": None,
+        "note": "No judge-stage histogram was available from /metrics.",
+    }
+    if judge_start is not None and judge_end is not None:
+        count = max(0.0, judge_end[0] - judge_start[0])
+        total_seconds = max(0.0, judge_end[1] - judge_start[1])
+        judge_latency = {
+            "count": int(count),
+            "mean_ms": round(total_seconds * 1000.0 / count, 2) if count else None,
+            "note": "Mean of judge stages completed during the measured window; separate from end-to-end request latency.",
+        }
 
     return {
         "concurrency": concurrency,
@@ -307,6 +360,7 @@ async def run_one_concurrency(
         },
         "assessments_in_flight_peak": in_flight_peak,
         "judge_invocations_during_measured_window_approx": judge_delta,
+        "judge_path_latency_ms": judge_latency,
     }
 
 
@@ -367,6 +421,7 @@ async def main_async(args) -> None:
               f"p50={result['latency_ms']['p50']}ms  "
               f"p95={result['latency_ms']['p95']}ms  "
               f"p99={result['latency_ms']['p99']}ms  "
+              f"judge_mean={result['judge_path_latency_ms']['mean_ms']}ms  "
               f"in_flight_peak={result['assessments_in_flight_peak']}")
 
         out_path = os.path.join(
