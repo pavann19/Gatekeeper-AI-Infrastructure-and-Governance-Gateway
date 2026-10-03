@@ -98,7 +98,7 @@ threshold" from "insufficient signal," and here it proved the latter.
 
 ### Cause 1 — the threat anchors encode the wrong threat class
 
-`policies.json` contains 7 threat anchors, all describing **harmful content**:
+`policies/threat_anchors.json` contains 7 threat anchors, all describing **harmful content**:
 bombs, anthrax, malware, hate speech, credit-card theft. The evaluation dataset
 contains **prompt injections**: instruction override and task hijacking. These
 are different threat taxonomies. Asking "how similar is this to *manufacture
@@ -124,7 +124,7 @@ reason — hence 3 detections out of 203.
 
 ### CONFIRMED IN-PIPELINE (2026-07-23)
 
-The injection anchor class was added to `policies.json` (restructured into
+The injection anchor class was added to `policies/threat_anchors.json` (restructured into
 `threat_anchor_classes` so the taxonomy is explicit) and calibration was re-run
 end-to-end through the real pipeline:
 
@@ -159,7 +159,7 @@ Two conclusions, both firm:
 
 1. **Adding eight injection-class anchors lifts AUC by +0.104 and recall@5%FPR by
    +14 points.** The architecture was never the bottleneck — the threat model
-   was. This is a one-file change to `policies.json`.
+   was. This is a one-file change to `policies/threat_anchors.json`.
 2. **Adding German anchors makes it *worse* (0.750 → 0.639).** Benign mean score
    jumps 0.155 → 0.279 while separation shrinks. This is direct evidence that
    `all-mpnet-base-v2` does not represent German semantics: the German anchors
@@ -169,7 +169,7 @@ Two conclusions, both firm:
 
 ### Actions
 
-1. **Expand `policies.json` with an injection/instruction-override anchor class.**
+1. **Expand `policies/threat_anchors.json` with an injection/instruction-override anchor class.**
    Highest return per unit effort in the entire codebase: +0.104 AUC for eight
    sentences.
 2. **Swap to a multilingual embedding model** if multilingual traffic is in
@@ -1684,7 +1684,7 @@ This is the most serious finding in the repository after §1, and it is the kind
 
 ### 3.2 No multi-tenancy — **critical for MVP**
 
-Every policy file path is a module-level constant (`POLICY_FILE = "policies.json"`). Threat anchors, domain corpus, symbolic rules, and thresholds are global process state loaded at import. Two customers cannot have different policies in one deployment.
+Every policy file path is a module-level constant (`POLICY_FILE = "policies/threat_anchors.json"`). Threat anchors, domain corpus, symbolic rules, and thresholds are global process state loaded at import. Two customers cannot have different policies in one deployment.
 
 **Fix:** introduce a `Tenant` concept — `tenant_id` resolved from the API key, policies loaded per-tenant into an LRU-cached registry, thresholds overridable per-tenant. This is the single largest architectural change on the list and the one that most distinguishes "project" from "product."
 
@@ -2510,7 +2510,7 @@ not just the anchor layer §1b already covered.
 
 ### Finding 1 — the anchor layer modeled 2 of 3 attack classes
 
-`policies.json`'s `threat_anchor_classes` had `harmful_content` and
+`policies/threat_anchors.json`'s `threat_anchor_classes` had `harmful_content` and
 `prompt_injection` only. No `jailbreak` anchor class existed, despite
 jailbreak being 692/1,925 (36%) of attacks in the eval suite and already
 having its own per-class fusion policy (`models/fusion_policy.json`'s
@@ -2579,7 +2579,7 @@ now means what it says.
 - `tests/test_threat_taxonomy.py` (8 new tests): the split reports the
   correct, distinct detail string per pattern kind; the two symbolic
   pattern lists are disjoint (guards against someone reverting the split
-  by re-merging them); `policies.json` has all three anchor classes,
+  by re-merging them); `policies/threat_anchors.json` has all three anchor classes,
   each non-empty; the new `jailbreak` anchor class is genuinely distinct
   content, not a copy of `prompt_injection`'s.
 - Full suite: 373 passed, unchanged from before this pass (the fusion
@@ -2680,7 +2680,7 @@ a pure, correct `educational_store` similarity check.
 
 ### A second, adjacent dead-data finding — noted, not acted on
 
-`policies.json`'s `safe_anchors` (10 items, loaded into a module-level
+`policies/threat_anchors.json`'s `safe_anchors` (10 items, loaded into a module-level
 `EDUCATIONAL_ANCHORS` variable via `load_policies()`) is never actually
 passed to `educational_store.add_texts()` — a *second*, separate
 hardcoded list (`EDUCATIONAL_CONTEXT_ANCHORS`, 6 items) populates the
@@ -2733,7 +2733,7 @@ scoped pass rather than folded into this one.
 
 ### What this does not close
 
-The second dead-anchor-list finding (`policies.json`'s unused
+The second dead-anchor-list finding (`policies/threat_anchors.json`'s unused
 `safe_anchors`/`EDUCATIONAL_ANCHORS`) remains open, deliberately. Remaining
 Phase 1 items: separating `risk` from `topicality` in practice, threshold
 recalibration, full benchmark rerun (blocked on Ollama/judge availability
@@ -3508,7 +3508,7 @@ missed (FN) — nothing broader, no benign prompt classification changed
 at all (FPR bit-for-bit identical).
 
 **Most likely cause:** the fusion policy retrain in §1y (adding the
-`jailbreak` anchor class to `policies.json` and retraining
+`jailbreak` anchor class to `policies/threat_anchors.json` and retraining
 `models/fusion_policy.json` against the new anchor-score distribution).
 That retrain was already validated out-of-fold on the full 6,933-row
 suite (`scripts/analyze_multilingual_fusion.py`, §1x/§1y) and showed NO
@@ -3567,9 +3567,9 @@ changing. Not touched.
 - Two independent full 546-prompt benchmark runs, bit-for-bit identical
   Operational metrics, confirming reproducibility despite different
   judge-infrastructure conditions.
-- `_evidence/benchmark_results_run1_noisy.json` /
-  `benchmark_rows_run1_noisy.csv` (first run, 13 judge failures) and
-  `benchmark_results_run2_clean.json` / `benchmark_rows_run2_clean.csv`
+- First run: 13 judge failures. Second run: clean. Raw local artifacts were
+  removed from the public repository; keep only summarized evidence in
+  `docs/BENCHMARK_SUMMARY.md`
   (second run, 15 judge failures) both preserved.
 - Full test suite: 391 passed, unaffected by the `OLLAMA_MODEL` fix once
   the one dependent test was corrected.

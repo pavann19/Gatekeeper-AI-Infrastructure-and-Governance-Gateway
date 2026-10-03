@@ -10,7 +10,7 @@ from core.logger import get_logger
 
 logger = get_logger(__name__)
 
-POLICY_FILE = "policies.json"
+POLICY_FILE = "policies/threat_anchors.json"
 
 # Lazy state
 _threat_centroid_cache = None
@@ -18,7 +18,7 @@ _threat_centroid_initialized = False
 
 
 def load_threat_anchors():
-    """Load threat anchor strings from policies.json."""
+    """Load threat anchor strings from policies/threat_anchors.json."""
     if not os.path.exists(POLICY_FILE):
         logger.warning(f"{POLICY_FILE} not found. Threat centroid disabled.")
         return []

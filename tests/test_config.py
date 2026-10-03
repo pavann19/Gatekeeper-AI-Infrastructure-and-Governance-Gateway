@@ -73,7 +73,7 @@ def test_llm_provider_defaults_are_empty_not_missing(monkeypatch):
 
 def test_file_path_defaults():
     s = make_settings()
-    assert s.POLICY_FILE == "policies.json"
+    assert s.POLICY_FILE == "policies/threat_anchors.json"
     assert s.POLICY_RULES_FILE == "policy_rules.json"
     assert s.POLICY_VERSIONS_DIR == "policy_versions"
     assert s.EVIDENCE_DIR == "_evidence"

@@ -50,14 +50,20 @@ eval + short benchmark against a live instance (see [`scripts/verify.sh`](script
 
 ## Benchmark results
 
-Baseline stage-level analysis (queue wait vs. detector-forward vs. embedding
-time, closed-loop concurrency 1/4/16) is in
-[`docs/perf/01-baseline-analysis.md`](docs/perf/01-baseline-analysis.md), raw
-JSON under `_evidence/perf/`. One optimization shipped so far — pinning
-torch's thread pool per worker instead of leaving it at its unpinned default
-(each of 8 detectors otherwise independently claims a multi-thread pool,
-oversubscribing a 12-core box under concurrent load) — tracked with what was
-and wasn't re-verified in [`docs/perf/02-optimisations.md`](docs/perf/02-optimisations.md).
+Public benchmark summaries are kept in
+[`docs/BENCHMARK_SUMMARY.md`](docs/BENCHMARK_SUMMARY.md) and the deeper
+performance notes under [`docs/perf/`](docs/perf/). Raw run artifacts
+(`_evidence/`, CSV rows, logs, JSONL, and flamegraphs) are local/private by
+default and are not part of the public repository.
+
+## Policy files
+
+The live decision policy is [`policy_rules.json`](policy_rules.json).
+[`policy_rules.yaml`](policy_rules.yaml) is the same schema as a commented
+operator example for Policy-as-Code workflows. Threat taxonomy anchors are
+separate data, not the live policy file, and live under
+[`policies/threat_anchors.json`](policies/threat_anchors.json). See
+[`docs/POLICY_FILES.md`](docs/POLICY_FILES.md) for the exact split.
 
 ## Security model
 

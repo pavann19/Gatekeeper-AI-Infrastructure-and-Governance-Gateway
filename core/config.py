@@ -19,7 +19,8 @@ class Settings(BaseSettings):
     #   holdout     : recall 25.86%  precision 88.24%  FPR 1.89%
     #   ROC AUC     : 0.745 (deterministic signals, judge excluded)
     #
-    # Evidence: _evidence/calibration_report.json, _evidence/roc_curve.png
+    # Public summary: docs/BENCHMARK_SUMMARY.md. Raw calibration evidence is
+    # local/private under _evidence/ and is not committed to the public repo.
     # Re-run calibration after ANY change to the anchors or the encoder.
     #
     # Recall is low because the encoder is English-only while the evaluation set
@@ -184,7 +185,7 @@ class Settings(BaseSettings):
     ANTHROPIC_VERSION: str = "2023-06-01"
 
     # File Paths
-    POLICY_FILE: str = "policies.json"
+    POLICY_FILE: str = "policies/threat_anchors.json"
     POLICY_RULES_FILE: str = "policy_rules.json"
 
     # Where core/policy_versioning.py stores snapshots taken before each
@@ -195,10 +196,10 @@ class Settings(BaseSettings):
     # the one an operator would want to roll back to.
     POLICY_VERSIONS_DIR: str = "policy_versions"
 
-    # Where real benchmark run results (accuracy/latency/confusion-matrix
-    # JSON reports produced by this project's own benchmark scripts) live,
-    # for the Developer UI's Benchmarks view (Phase 7). Read-only from the
-    # API's side -- nothing in this codebase writes here at request time.
+    # Where local/private benchmark run results live for the Developer UI's
+    # Benchmarks view (Phase 7). Read-only from the API's side -- nothing in
+    # this codebase writes here at request time. The public repo keeps summaries
+    # in docs/ rather than committing raw _evidence artifacts.
     EVIDENCE_DIR: str = "_evidence"
 
     # core/review_queue.py's storage (Phase 4: Human Review). A single

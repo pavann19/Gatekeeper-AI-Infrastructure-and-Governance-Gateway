@@ -1387,11 +1387,11 @@ def raw_logs(request: Request, limit: int = 100, event_type: str = None):
 @app.get("/api/v1/benchmarks")
 def benchmarks(request: Request):
     """
-    Developer UI's Benchmarks view: this project's own real benchmark run
+    Developer UI's Benchmarks view: this project's local/private benchmark run
     results (`core.benchmarks.list_benchmark_runs`, reading
-    `_evidence/benchmark_results_*.json` off disk) -- the exact reports
-    this project's benchmark scripts produce and commit as evidence, not
-    a re-derived or re-run summary.
+    `_evidence/benchmark_results_*.json` off disk) -- the exact reports this
+    project's benchmark scripts produce locally, not a re-derived or re-run
+    summary.
 
     INTERNAL capability required, same bar as the other Developer UI
     endpoints -- these numbers describe the deployment's own detection

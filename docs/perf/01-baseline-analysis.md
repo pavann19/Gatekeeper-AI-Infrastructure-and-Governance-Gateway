@@ -8,8 +8,9 @@ treat every absolute number here as this-machine-specific and every
 **relative** comparison (1 vs 4 vs 16, stage vs stage) as the portable
 finding.
 
-Raw data: `_evidence/perf/e55452550ae2-{1,4,16}.json`,
-`_evidence/perf/e55452550ae2-c16-flamegraph.svg`. Reproduce with
+Public summary: [`docs/BENCHMARK_SUMMARY.md`](../BENCHMARK_SUMMARY.md).
+Raw JSON and flamegraphs were local evidence captures under `_evidence/perf/`
+and are not committed to the public repository. Reproduce with
 `PYTHONPATH=. python benchmarks/load/assess_bench.py --api-key "$KEY"`.
 
 ## 1. Headline numbers

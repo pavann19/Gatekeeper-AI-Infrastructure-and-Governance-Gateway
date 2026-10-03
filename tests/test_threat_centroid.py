@@ -3,7 +3,8 @@ Tests for core/threat_centroid.py — centroid-based malicious intent
 detection used by core.risk.compute_centroid_similarity (via
 `signals["centroid_score"]`).
 
-The module lazily loads threat anchors from policies.json (cwd-relative),
+The module lazily loads threat anchors from policies/threat_anchors.json
+(cwd-relative),
 builds a centroid by averaging their embeddings (core.embeddings.
 get_embedding), then scores new prompts by cosine similarity to that
 centroid. Embeddings and cosine_similarity are monkeypatched with tiny
@@ -16,6 +17,7 @@ that state before running so tests don't leak into each other.
 """
 import json
 import logging
+import os
 
 import pytest
 
@@ -25,8 +27,8 @@ import core.threat_centroid as tc
 @pytest.fixture(autouse=True)
 def reset_centroid_cache(monkeypatch, tmp_path):
     """Reset lazy-init globals and run each test in an isolated cwd so
-    POLICY_FILE ("policies.json", read relative to cwd) doesn't touch the
-    real project policies.json."""
+    POLICY_FILE ("policies/threat_anchors.json", read relative to cwd)
+    doesn't touch the real project policies/threat_anchors.json."""
     tc._threat_centroid_cache = None
     tc._threat_centroid_initialized = False
     monkeypatch.chdir(tmp_path)
@@ -41,7 +43,8 @@ def _write_policies(classes=None, flat_anchors=None):
         data["threat_anchor_classes"] = classes
     if flat_anchors is not None:
         data["threat_anchors"] = flat_anchors
-    with open("policies.json", "w") as f:
+    os.makedirs("policies", exist_ok=True)
+    with open(os.path.join("policies", "threat_anchors.json"), "w") as f:
         json.dump(data, f)
 
 
@@ -106,7 +109,8 @@ def test_load_anchors_logs_count_on_success(caplog):
 
 def test_load_anchors_corrupt_json_returns_empty_and_warns(caplog):
     caplog.set_level(logging.WARNING)
-    with open("policies.json", "w") as f:
+    os.makedirs("policies", exist_ok=True)
+    with open(os.path.join("policies", "threat_anchors.json"), "w") as f:
         f.write("{ not valid json")
     anchors = tc.load_threat_anchors()
     assert anchors == []
@@ -193,7 +197,7 @@ def test_centroid_cache_persists_even_if_policy_file_changes_after_init(monkeypa
     first = tc._get_malicious_centroid()
     assert first == pytest.approx([1.0, 0.0])
 
-    # Rewrite policies.json — the cached centroid must not change because
+    # Rewrite policies/threat_anchors.json -- the cached centroid must not change because
     # initialization already happened (lazy-once semantics).
     _write_policies(classes={"c": ["a totally different anchor"]})
     second = tc._get_malicious_centroid()
@@ -210,7 +214,7 @@ def test_missing_policy_file_yields_none_centroid_without_raising(caplog):
 # --- compute_centroid_similarity --------------------------------------------
 
 def test_similarity_returns_zero_when_centroid_unavailable():
-    # No policies.json in this cwd -> anchors empty -> centroid None.
+    # No policies/threat_anchors.json in this cwd -> anchors empty -> centroid None.
     assert tc.compute_centroid_similarity([1.0, 2.0, 3.0]) == 0.0
 
 

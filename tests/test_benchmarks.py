@@ -1,9 +1,8 @@
 """
-Tests for core/benchmarks.py -- reads this project's real benchmark
-result files. Uses tmp_path for synthetic cases (missing dir, corrupt
-file, sorting) and the project's ACTUAL tracked `_evidence/` directory
-for one end-to-end sanity check that the real files parse and match the
-shape this module assumes.
+Tests for core/benchmarks.py -- reads local benchmark result files. Uses
+tmp_path for synthetic cases (missing dir, corrupt file, sorting, and
+realistic public-summary-shaped content) so the public repo no longer depends
+on tracked raw `_evidence/` artifacts.
 """
 import json
 import os
@@ -68,14 +67,19 @@ def test_non_object_json_is_an_error(tmp_path):
     assert len(result["errors"]) == 1
 
 
-def test_real_tracked_evidence_files_parse_and_match_the_expected_shape():
-    """Sanity check against this project's ACTUAL committed benchmark
-    evidence -- if these files' shape ever drifts from what the UI
-    assumes (config/dataset/cold/warm), this test is the trip wire."""
-    result = list_benchmark_runs()
-    real_run_names = {r["_filename"] for r in result["runs"]}
-    assert "benchmark_results_run1_noisy.json" in real_run_names
-    assert "benchmark_results_run2_clean.json" in real_run_names
-    for run in result["runs"]:
-        assert "config" in run
-        assert "dataset" in run
+def test_realistic_public_summary_shape_parses(tmp_path):
+    """Trip wire for the shape the UI assumes without committing raw evidence."""
+    content = {
+        "config": {"domain_guardrail_mode": "off"},
+        "dataset": {"name": "deepset/prompt-injections", "n": 546},
+        "cold": {"metrics_operational": {"accuracy": 0.807}},
+        "warm": {"metrics_operational": {"accuracy": 0.807}},
+    }
+    (tmp_path / "benchmark_results_public_shape.json").write_text(
+        json.dumps(content), encoding="utf-8"
+    )
+    result = list_benchmark_runs(directory=str(tmp_path))
+    assert result["errors"] == []
+    assert result["runs"][0]["dataset"]["n"] == 546
+    assert "cold" in result["runs"][0]
+    assert "warm" in result["runs"][0]

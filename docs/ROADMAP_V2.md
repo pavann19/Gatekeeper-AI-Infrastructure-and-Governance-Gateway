@@ -91,7 +91,7 @@ Original estimate: ~20–30h
       deployment needs it more than the now-94%+-recall injection case.
 - [x] Clean threat taxonomy — done 2026-08-14, see
       `docs/ENGINEERING_ASSESSMENT.md` §1y. Two fixes: (1) added a
-      `jailbreak` anchor class to `policies.json` — anchor layer previously
+      `jailbreak` anchor class to `policies/threat_anchors.json` — anchor layer previously
       modeled only harmful_content/prompt_injection despite jailbreak
       being 36% of attacks; measured out-of-fold before keeping (no
       regression, jailbreak recall@5%FPR 74.7%→80.6%), fusion policy
@@ -124,7 +124,7 @@ Original estimate: ~20–30h
       in the eval suite flip, all 4 benign, zero attacks affected, no HIGH
       decision reachable by the fix at all. 7 new tests, 386 passed
       (up from 381). A second, adjacent dead-anchor-list finding
-      (`policies.json`'s unused `safe_anchors`) was noted but NOT acted
+      (`policies/threat_anchors.json`'s unused `safe_anchors`) was noted but NOT acted
       on — flagged for a future dedicated pass, not folded in here.
 - [x] Recalibrate thresholds — done 2026-08-16, see
       `docs/ENGINEERING_ASSESSMENT.md` §2b. Already substantially

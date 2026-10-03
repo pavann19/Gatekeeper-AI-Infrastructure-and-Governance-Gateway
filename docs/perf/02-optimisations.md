@@ -155,8 +155,9 @@ parked pending a host with real RAM headroom.
 | Baseline p50 / p95 / p99 | 79 / 348 / 368 ms | 309 / 621 / 708 ms | ~1,607-1,644 / ~2,111-2,182 / ~2,302-2,475 ms |
 | With thread-pin p50 / p95 / p99 | 108 / 377 / 387 ms | 196 / 509 / 626 ms | 973 / 1,336 / 2,410 ms |
 
-Raw JSON: `_evidence/perf/b59b57417e41-{1,4,16}.json` alongside the
-baseline's `_evidence/perf/e55452550ae2-{1,4,16}.json`.
+Raw JSON for this comparison was captured locally under `_evidence/perf/`;
+the public repository keeps the summarized result in
+[`docs/BENCHMARK_SUMMARY.md`](../BENCHMARK_SUMMARY.md).
 
 A few things worth calling out instead of just quoting the win:
 

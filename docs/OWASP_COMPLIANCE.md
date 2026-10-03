@@ -52,7 +52,7 @@ and an LLM-facing gateway:
 
 ## Performance SLO benchmark
 
-Real load test (`scripts/load_test.py`) against a real running instance — real concurrent HTTP connections, not estimated or simulated figures. Raw data: `_evidence/perf_slo_benchmark.json`.
+Real load test (`scripts/load_test.py`) against a real running instance — real concurrent HTTP connections, not estimated or simulated figures. Public summaries live in `docs/BENCHMARK_SUMMARY.md`; raw `_evidence/` captures stay local/private.
 
 | Endpoint | Concurrency | Requests | Throughput | p50 | p95 | p99 |
 |---|---|---|---|---|---|---|

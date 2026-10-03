@@ -4,7 +4,7 @@ Tests for the threat taxonomy cleanup (docs/ROADMAP_V2.md Phase 1 —
 
 Two independent fixes, tested separately:
 
-1. `policies.json`'s anchor layer previously modeled only 2 of the 3 attack
+1. `policies/threat_anchors.json`'s anchor layer previously modeled only 2 of the 3 attack
    classes (harmful_content, prompt_injection) — no jailbreak anchors
    existed at all, despite jailbreak being 36% of attacks in the eval
    suite and having its own per-class fusion policy. A `jailbreak` class
@@ -68,8 +68,8 @@ def test_symbolic_rules_file_has_no_leftover_unlabelled_jailbreak_bucket():
 # Fix 1: the anchor layer now models all three attack classes
 # ---------------------------------------------------------------------------
 
-def test_policies_json_has_all_three_threat_anchor_classes():
-    with open("policies.json", encoding="utf-8") as f:
+def test_threat_anchor_file_has_all_three_threat_anchor_classes():
+    with open(os.path.join("policies", "threat_anchors.json"), encoding="utf-8") as f:
         data = json.load(f)
     classes = data["threat_anchor_classes"]
     for cls in ("harmful_content", "prompt_injection", "jailbreak"):
@@ -80,7 +80,7 @@ def test_policies_json_has_all_three_threat_anchor_classes():
 def test_jailbreak_anchor_class_is_not_a_duplicate_of_prompt_injection():
     """Sanity check that the new class carries genuinely distinct content,
     not a copy-paste of the prompt_injection anchors under a new key."""
-    with open("policies.json", encoding="utf-8") as f:
+    with open(os.path.join("policies", "threat_anchors.json"), encoding="utf-8") as f:
         data = json.load(f)
     classes = data["threat_anchor_classes"]
     assert set(classes["jailbreak"]).isdisjoint(set(classes["prompt_injection"]))

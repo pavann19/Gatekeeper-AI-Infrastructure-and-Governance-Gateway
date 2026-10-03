@@ -2,7 +2,7 @@
 Additional edge-case coverage for core/benchmarks.py, complementing
 tests/test_benchmarks.py. Focuses on: realistic multi-file discovery
 against a tmp_path fixture shaped like this project's real
-_evidence/benchmark_results_*.json files, mixed valid/malformed
+local `_evidence/benchmark_results_*.json` files, mixed valid/malformed
 listings, and the defensive non-dict trip wire from the loader's own
 side (as opposed to the API-response-shape side already covered
 elsewhere).
@@ -12,8 +12,8 @@ import os
 
 from core.benchmarks import list_benchmark_runs
 
-# Trimmed but structurally realistic shape, modeled directly on the real
-# tracked file _evidence/benchmark_results_run1_noisy.json.
+# Trimmed but structurally realistic shape, modeled on the public benchmark
+# summary without requiring raw evidence to be tracked.
 REALISTIC_RUN = {
     "valid": True,
     "invalid_reason": None,

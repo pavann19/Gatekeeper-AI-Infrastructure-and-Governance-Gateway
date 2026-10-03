@@ -1,22 +1,22 @@
 """
-Read access over this project's own benchmark result files (Phase 7,
+Read access over this project's local/private benchmark result files (Phase 7,
 Developer UI: "Benchmarks") -- surfaces the SAME accuracy/latency/
-confusion-matrix JSON reports this project's own benchmark scripts
-produce and commit as evidence (`_evidence/benchmark_results_*.json`),
-not a re-run or a re-derived summary. If a number shown here looks wrong,
-the fix is in whatever benchmark script produced the underlying file, not
-in this module -- this module only reads and lists.
+confusion-matrix JSON reports this project's own benchmark scripts produce in
+`_evidence/benchmark_results_*.json`, not a re-run or a re-derived summary. If
+a number shown here looks wrong, the fix is in whatever benchmark script
+produced the underlying file, not in this module -- this module only reads and
+lists.
 
 WHY ONLY THE `benchmark_results_*.json` SHAPE
 --------------------------------------------------------------
-`_evidence/` holds several genuinely different report types (calibration
-curves, detector comparisons, ensemble analyses, ...) accumulated across
-this project's history. Only `benchmark_results_*.json` files share one
+`_evidence/` may hold several genuinely different local report types
+(calibration curves, detector comparisons, ensemble analyses, ...) accumulated
+across this project's history. Only `benchmark_results_*.json` files share one
 consistent shape (`config`/`dataset`/`cold`/`warm` with matching metrics
 underneath both) that a single UI can render meaningfully without
-per-report-type special-casing. Other report types are real evidence too,
-just not surfaced by THIS view yet -- narrower scope now, not a claim
-that the others don't matter.
+per-report-type special-casing. Other report types can be real evidence too,
+just not surfaced by THIS view yet -- narrower scope now, not a claim that the
+others don't matter.
 """
 from __future__ import annotations
 

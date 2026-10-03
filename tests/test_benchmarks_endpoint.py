@@ -32,10 +32,11 @@ def test_requires_internal_capability(key_store):
     assert response.status_code == 403
 
 
-def test_returns_real_evidence_files_for_internal(key_store):
+def test_returns_benchmark_catalog_for_internal_even_when_public_checkout_has_no_raw_evidence(key_store):
     key = key_store(capability="INTERNAL")
     response = client.get("/api/v1/benchmarks", headers={"Authorization": f"Bearer {key}"})
     assert response.status_code == 200
     body = response.json()
-    names = {r["_filename"] for r in body["runs"]}
-    assert "benchmark_results_run2_clean.json" in names
+    assert sorted(body.keys()) == ["errors", "runs"]
+    assert isinstance(body["runs"], list)
+    assert isinstance(body["errors"], list)
