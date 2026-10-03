@@ -63,6 +63,13 @@ RUN pip install --no-cache-dir --upgrade "msgpack>=1.2.1" "setuptools>=78.1.1" "
 
 COPY . .
 
+# pip is only a build-time package manager in this image. Keeping it in the
+# runtime filesystem also keeps pip's vendored dependency bundle; Trivy flagged
+# pip/_vendor/vendor.txt carrying urllib3==2.7.0 even though the app runtime
+# imports urllib3 2.8.0. Remove pip after all install steps so the deployed
+# image contains only runtime dependencies.
+RUN python -m pip uninstall -y pip && rm -f /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.10
+
 # Phase 8 hardening: run as a non-root user instead of the previous
 # default (root) -- standard container hardening, so a vulnerability in
 # any dependency or in this app's own code can't write outside what this
