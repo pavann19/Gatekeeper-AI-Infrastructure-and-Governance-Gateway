@@ -57,8 +57,9 @@ RUN python -m spacy download en_core_web_sm
 # image got silently undone by this step, confirmed by two separate
 # rounds of the image-security CI job catching the reverted versions.
 # msgpack: GHSA-6v7p-g79w-8964 (OOB read on Unpacker reuse). setuptools:
-# CVE-2025-47273 (path traversal in PackageIndex).
-RUN pip install --no-cache-dir --upgrade "msgpack>=1.2.1" "setuptools>=78.1.1"
+# CVE-2025-47273 (path traversal in PackageIndex). urllib3: CVE-2026-97687
+# and CVE-2026-97689, both fixed in 2.8.0.
+RUN pip install --no-cache-dir --upgrade "msgpack>=1.2.1" "setuptools>=78.1.1" "urllib3>=2.8.0"
 
 COPY . .
 
