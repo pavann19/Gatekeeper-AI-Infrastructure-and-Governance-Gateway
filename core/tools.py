@@ -72,7 +72,7 @@ VALID_CAPABILITIES = ("GENERAL", "ELEVATED", "INTERNAL")
 # deliberately wrote it that way.
 CAPABILITY_RANK = {"GENERAL": 0, "ELEVATED": 1, "INTERNAL": 2}
 
-_JSON_SCHEMA_TYPES = {
+_JSON_SCHEMA_TYPES: dict[str, type | tuple[type, ...]] = {
     "string": str,
     "number": (int, float),
     "integer": int,
@@ -150,7 +150,7 @@ def validate_arguments(spec: ToolSpec, arguments: Dict[str, Any]) -> Tuple[bool,
 
     for key, value in arguments.items():
         if key not in props:
-            return False, f"unknown argument: {key!r}"
+            return False, "unknown argument: supplied field is not declared by the tool schema"
 
         expected_type = props[key].get("type")
         # bool is a subclass of int in Python -- checked BEFORE the
@@ -342,7 +342,7 @@ class ToolRegistry:
 
 
 def execute_tool(capability: str, name: str, arguments: Dict[str, Any],
-                 registry: "ToolRegistry" = None,
+                 registry: ToolRegistry | None = None,
                  tenant: str = "unset", request_id: str = "unset") -> Dict[str, Any]:
     """
     The full call path: look up the tool, decide (access + validation +
@@ -384,9 +384,11 @@ def execute_tool(capability: str, name: str, arguments: Dict[str, Any],
     reg = registry if registry is not None else _registry
     try:
         spec = reg.get(name)
-    except KeyError as e:
-        detail = str(e)
-        log_tool_event(capability, name, "BLOCK", risk_level=None, reason=detail,
+    except KeyError:
+        import hashlib
+        detail = "unknown tool"
+        audit_name = "unknown:" + hashlib.sha256(name.encode()).hexdigest()
+        log_tool_event(capability, audit_name, "BLOCK", risk_level=None, reason=detail,
                        arguments=arguments, tenant=tenant, request_id=request_id)
         return {"decision": "BLOCK", "reason": detail, "tool": name, "risk_level": None}
 
@@ -404,17 +406,21 @@ def execute_tool(capability: str, name: str, arguments: Dict[str, Any],
                        arguments=arguments, tenant=tenant, request_id=request_id)
         return {"decision": "BLOCK", "reason": detail, "tool": name, "risk_level": spec.risk_level}
 
+    log_tool_event(capability, name, "ALLOW", risk_level=spec.risk_level,
+                   reason=result["reason"], arguments=arguments, phase="execution_intent",
+                   tenant=tenant, request_id=request_id)
+
     try:
         output = handler(**arguments)
     except Exception as e:
-        error = f"{type(e).__name__}: {e}"
+        error = f"{type(e).__name__}: tool execution failed"
         log_tool_event(capability, name, "ALLOW", risk_level=spec.risk_level,
                        reason=result["reason"], arguments=arguments, success=False,
-                       error=error, tenant=tenant, request_id=request_id)
+                       error=error, phase="execution_failed", tenant=tenant, request_id=request_id)
         return {**result, "error": error}
 
     log_tool_event(capability, name, "ALLOW", risk_level=spec.risk_level,
-                   reason=result["reason"], arguments=arguments, success=True,
+                   reason=result["reason"], arguments=arguments, success=True, phase="execution_completed",
                    tenant=tenant, request_id=request_id)
 
     return {**result, "output": output}

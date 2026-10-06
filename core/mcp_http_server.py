@@ -22,15 +22,19 @@ Implements the Model Context Protocol (MCP) 2024-11-05 SSE transport specificati
 """
 from __future__ import annotations
 
+import hashlib
+from dataclasses import dataclass
+
 import asyncio
 import json
 import time
 import uuid
-from typing import Any, Dict, Optional
+from typing import Dict, Optional
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from core.admission import require_admission
 from core.auth import auth_required, resolve_principal
 from core.config import settings
 from core.logger import get_logger
@@ -57,6 +61,27 @@ MAX_PAYLOAD_BYTES = 100 * 1024
 MAX_SESSION_LIFETIME_SECONDS = 600
 
 
+MAX_SESSIONS = 128
+MAX_SESSION_QUEUE = 32
+MAX_PENDING_DISPATCHES = 8
+
+
+@dataclass
+class MCPSession:
+    identity: str
+    queue: asyncio.Queue
+    pending: int = 0
+
+
+def _session_identity(request, principal):
+    authorization = request.headers.get("Authorization", "").split()
+    credential = (authorization[1] if len(authorization) == 2 and authorization[0].lower() == "bearer"
+                  else request.headers.get("X-API-Key", "").strip())
+    material = (credential, principal.tenant, principal.key_id, principal.capability,
+                principal.authenticated, None if principal.authenticated else _client_address(request))
+    return hashlib.sha256(repr(material).encode()).hexdigest()
+
+
 def _client_address(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
@@ -64,10 +89,12 @@ def _client_address(request: Request) -> str:
 def create_mcp_app(registry: Optional[ToolRegistry] = None) -> FastAPI:
     """Creates a FastAPI application configured for MCP HTTP/SSE transport."""
     app = FastAPI(title="Gatekeeper MCP Server", version="1.0.0")
-    tool_registry = registry or get_tool_registry()
+    tool_registry = registry if registry is not None else get_tool_registry()
 
     # Active SSE sessions: session_id -> asyncio.Queue for server-to-client events
-    sessions: Dict[str, asyncio.Queue] = {}
+    sessions: Dict[str, MCPSession] = {}
+    dispatches: set[asyncio.Task] = set()
+    workers = asyncio.Semaphore(4)
     app.state.sessions = sessions
 
     @app.get("/health")
@@ -81,9 +108,12 @@ def create_mcp_app(registry: Optional[ToolRegistry] = None) -> FastAPI:
         Sends an initial `endpoint` event containing the relative URI to post messages to,
         then streams all JSON-RPC responses enqueued for this session.
         """
+        principal = _admit(request)
+        if len(sessions) >= MAX_SESSIONS:
+            raise HTTPException(503, "MCP session capacity exhausted")
         session_id = str(uuid.uuid4())
-        queue: asyncio.Queue = asyncio.Queue()
-        sessions[session_id] = queue
+        queue: asyncio.Queue = asyncio.Queue(maxsize=MAX_SESSION_QUEUE)
+        sessions[session_id] = MCPSession(_session_identity(request, principal), queue)
         session_started_at = time.monotonic()
 
         async def event_generator():
@@ -169,7 +199,11 @@ def create_mcp_app(registry: Optional[ToolRegistry] = None) -> FastAPI:
         return it as-is, never re-wrap it, so the JSON-RPC envelope above
         reaches the client unmodified.
         """
-        raw_body = await request.body()
+        raw_body = bytearray()
+        async for chunk in request.stream():
+            if len(raw_body) + len(chunk) > MAX_PAYLOAD_BYTES:
+                return None, _jsonrpc_error(413, -32000, "Request payload exceeds maximum size")
+            raw_body.extend(chunk)
         if len(raw_body) > MAX_PAYLOAD_BYTES:
             return None, _jsonrpc_error(
                 413, -32000, f"Request payload exceeds maximum size of {MAX_PAYLOAD_BYTES} bytes."
@@ -187,27 +221,15 @@ def create_mcp_app(registry: Optional[ToolRegistry] = None) -> FastAPI:
 
         return body, None
 
-    async def _dispatch_rpc(request: Request, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def _admit(request: Request):
         # 1. Resolve authentication from Authorization header or X-API-Key
         auth_header = request.headers.get("Authorization")
         if not auth_header and request.headers.get("X-API-Key"):
             auth_header = f"Bearer {request.headers.get('X-API-Key')}"
 
         principal = resolve_principal(authorization=auth_header)
-        if auth_required() and not principal.authenticated:
-            raise HTTPException(
-                status_code=401,
-                detail="Authentication required. Present a valid API key.",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-
-        # 2. Check tenant suspension
         tenant_config = resolve_tenant(principal.tenant)
-        if tenant_config.suspended:
-            raise HTTPException(
-                status_code=403,
-                detail=f"Tenant '{principal.tenant}' is suspended.",
-            )
+        require_admission(principal, tenant_config, require_auth=auth_required())
 
         # 3. Check rate limits
         if settings.RATE_LIMIT_ENABLED:
@@ -230,14 +252,30 @@ def create_mcp_app(registry: Optional[ToolRegistry] = None) -> FastAPI:
                     headers=headers,
                 )
 
-        # 4. Dispatch via standard core.mcp_server logic
-        response = handle_request(
-            msg=body,
-            capability=principal.capability,
-            registry=tool_registry,
-            tenant=principal.tenant,
-        )
-        return response
+        return principal
+
+    async def _dispatch_rpc(principal, body):
+        if len(dispatches) >= MAX_PENDING_DISPATCHES:
+            raise HTTPException(503, "MCP worker capacity exhausted")
+
+        async def run():
+            async with workers:
+                return await asyncio.to_thread(handle_request, msg=body,
+                    capability=principal.capability, registry=tool_registry, tenant=principal.tenant)
+
+        task = asyncio.create_task(run())
+        dispatches.add(task)
+        def completed(task):
+            dispatches.discard(task)
+            if not task.cancelled():
+                task.exception()
+        task.add_done_callback(completed)
+        try:
+            return await asyncio.wait_for(asyncio.shield(task), timeout=15)
+        except asyncio.TimeoutError:
+            raise HTTPException(503, "MCP execution deadline exceeded") from None
+        except Exception:
+            raise HTTPException(503, "MCP execution failed") from None
 
     @app.post("/mcp/messages")
     async def mcp_messages(request: Request, sessionId: Optional[str] = Query(None)):
@@ -248,25 +286,32 @@ def create_mcp_app(registry: Optional[ToolRegistry] = None) -> FastAPI:
         - If sessionId is provided but unknown/expired: returns HTTP 404.
         - If sessionId is omitted: returns the JSON-RPC response directly (HTTP 200).
         """
+        principal = _admit(request)
         body, error_response = await _read_and_validate_body(request)
         if error_response is not None:
             return error_response
 
         if sessionId is not None:
-            queue = sessions.get(sessionId)
-            if queue is None:
+            session = sessions.get(sessionId)
+            if session is None or session.identity != _session_identity(request, principal):
                 raise HTTPException(
                     status_code=404,
                     detail=f"SSE session {sessionId!r} not found or expired.",
                 )
 
-            response = await _dispatch_rpc(request, body)
-            if response is not None:
-                await queue.put(response)
+            if session.queue.qsize() + session.pending >= MAX_SESSION_QUEUE:
+                raise HTTPException(503, "MCP response queue exhausted")
+            session.pending += 1
+            try:
+                response = await _dispatch_rpc(principal, body)
+                if response is not None:
+                    session.queue.put_nowait(response)
+            finally:
+                session.pending -= 1
             return JSONResponse(status_code=202, content={"status": "accepted"})
 
         # Direct stateless fallback if sessionId is omitted
-        response = await _dispatch_rpc(request, body)
+        response = await _dispatch_rpc(principal, body)
         if response is None:
             return JSONResponse(status_code=202, content={})
         return JSONResponse(status_code=200, content=response)
@@ -274,10 +319,11 @@ def create_mcp_app(registry: Optional[ToolRegistry] = None) -> FastAPI:
     @app.post("/mcp/jsonrpc")
     async def mcp_jsonrpc(request: Request):
         """Direct stateless JSON-RPC POST endpoint."""
+        principal = _admit(request)
         body, error_response = await _read_and_validate_body(request)
         if error_response is not None:
             return error_response
-        response = await _dispatch_rpc(request, body)
+        response = await _dispatch_rpc(principal, body)
         if response is None:
             return JSONResponse(status_code=202, content={})
         return JSONResponse(status_code=200, content=response)

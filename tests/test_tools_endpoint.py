@@ -129,7 +129,8 @@ def test_unknown_tool_blocks_cleanly():
     assert response.status_code == 200
     body = response.json()
     assert body["decision"] == "BLOCK"
-    assert "does.not.exist" in body["reason"]
+    assert "unknown tool" in body["reason"]
+    assert "does.not.exist" not in body["reason"]
 
 
 # --- risk-based approval: HIGH risk enqueues a REAL review -------------------

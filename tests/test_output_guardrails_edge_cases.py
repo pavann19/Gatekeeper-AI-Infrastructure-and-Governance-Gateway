@@ -209,6 +209,7 @@ def test_assess_output_details_shape_is_stable_on_clean_pass():
         assert details["source"] == "clean_pass"
         assert set(details.keys()) == {
             "secrets_detected", "system_prompt_leak_detected", "pii_leakage",
+            "toxicity_assessed", "toxicity_status",
             "toxicity_detected", "hallucination_detected", "source", "clean_response",
         }
 
@@ -254,5 +255,5 @@ def test_assess_output_toxicity_safe_verdict_string_is_case_sensitive():
     with patch("core.output_guardrails.output_judge", return_value="dangerous"), \
          patch("core.output_guardrails.check_semantic_grounding", return_value=True):
         decision, details = assess_output("some response")
-        assert decision == "ALLOW"
+        assert decision == "BLOCK"
         assert details["toxicity_detected"] is False

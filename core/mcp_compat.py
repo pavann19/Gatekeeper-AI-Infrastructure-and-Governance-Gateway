@@ -64,7 +64,7 @@ def tool_spec_to_mcp(spec: ToolSpec) -> Dict[str, Any]:
     }
 
 
-def list_mcp_tools(registry: ToolRegistry = None) -> List[Dict[str, Any]]:
+def list_mcp_tools(registry: ToolRegistry | None = None) -> List[Dict[str, Any]]:
     """The MCP `tools/list` response body: every registered tool's MCP
     descriptor, in registration order."""
     reg = registry if registry is not None else get_tool_registry()
@@ -72,7 +72,7 @@ def list_mcp_tools(registry: ToolRegistry = None) -> List[Dict[str, Any]]:
 
 
 def handle_mcp_tool_call(capability: str, name: str, arguments: Dict[str, Any],
-                         registry: ToolRegistry = None,
+                         registry: ToolRegistry | None = None,
                          tenant: str = "unset", request_id: str = "unset") -> Dict[str, Any]:
     """
     The MCP `tools/call` response body for one call — routes through

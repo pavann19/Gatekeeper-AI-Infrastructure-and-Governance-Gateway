@@ -130,7 +130,8 @@ def test_invalid_arguments_become_is_error_true(registry):
 def test_unknown_tool_becomes_is_error_true(registry):
     result = handle_mcp_tool_call("INTERNAL", "does_not_exist", {}, registry=registry)
     assert result["isError"] is True
-    assert "does_not_exist" in result["content"][0]["text"]
+    assert "unknown tool" in result["content"][0]["text"]
+    assert "does_not_exist" not in result["content"][0]["text"]
 
 
 def test_handler_exception_becomes_is_error_true_distinct_from_denial():
@@ -152,7 +153,8 @@ def test_successful_call_is_still_audited(registry):
     from unittest.mock import patch
     with patch("core.logger.log_tool_event") as mock_log:
         handle_mcp_tool_call("GENERAL", "demo.echo", {"text": "hi"}, registry=registry)
-    mock_log.assert_called_once()
+    assert mock_log.call_count == 2
+    assert [call.kwargs["phase"] for call in mock_log.call_args_list] == ["execution_intent", "execution_completed"]
 
 
 def test_tenant_and_request_id_flow_through(registry):

@@ -276,7 +276,15 @@ class TransformerDetector(Detector):
                 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
                 logger.info(f"Loading detector '{self.name}' ({self.model_id}@{self.revision})...")
-                self._tokenizer = AutoTokenizer.from_pretrained(self.model_id, revision=self.revision)
+                # This checkpoint declares bert-base-uncased but omits
+                # do_lower_case from tokenizer_config. Runtime defaults changed
+                # in Transformers 5; retain the checkpoint's uncased vocabulary.
+                tokenizer_options = {}
+                if self.model_id == "unitary/toxic-bert":
+                    tokenizer_options["do_lower_case"] = True
+                self._tokenizer = AutoTokenizer.from_pretrained(
+                    self.model_id, revision=self.revision, **tokenizer_options,
+                )
                 model = AutoModelForSequenceClassification.from_pretrained(self.model_id, revision=self.revision)
                 model.eval()
                 self._model = model

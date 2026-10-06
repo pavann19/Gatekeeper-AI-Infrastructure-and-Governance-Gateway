@@ -1,3 +1,4 @@
+from functools import partial
 import core.torch_threads  # noqa: F401  -- MUST run before any torch import; see that module's docstring
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
 import hashlib
@@ -32,6 +33,7 @@ from core.rate_limit import assess_rate_limiter, bucket_parameters
 from core.tenancy import resolve_tenant
 from core.risk import assess_risk
 from core.cache import flush_cache
+from core.admission import require_admission, owns_tenant_record
 from core.logger import get_logger, log_event, log_output_event, log_gateway_event
 from core.policy import get_default_action, load_policy_file, policy_decision, resolve_policy_set, validate_policy_file
 from core.review_queue import enqueue_review, get_review, list_pending_reviews, resolve_review
@@ -70,6 +72,13 @@ def _probe_judge_backend(base_url: str) -> bool:
     return result
 
 
+def _redact_or_fail(text, tenant_config):
+    try:
+        return redact_pii(text, tenant_config=tenant_config)
+    except Exception:
+        raise HTTPException(503, "Configured privacy assessment is unavailable") from None
+
+
 def _write_audit_or_fail(audit_fn, *args, audit_request_id: str = "?", **kwargs):
     """Persist a governance audit record, or fail the request CLOSED.
 
@@ -86,27 +95,10 @@ def _write_audit_or_fail(audit_fn, *args, audit_request_id: str = "?", **kwargs)
     """
     try:
         audit_fn(*args, **kwargs)
-    except Exception as e:  # noqa: BLE001 — any failure to persist is in scope
-        if settings.AUDIT_WRITE_FAILS_CLOSED:
-            logger.critical(
-                "Audit write failed (%s: %s) — failing request CLOSED. request_id=%s",
-                type(e).__name__, e, audit_request_id,
-            )
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    "The governance decision could not be written to the audit "
-                    "trail and has therefore not been finalised. Do not treat "
-                    "this request as assessed. Retry once audit storage is "
-                    "available."
-                ),
-                headers={"Retry-After": "5"},
-            ) from e
-        logger.critical(
-            "Audit write failed (%s: %s) — AUDIT_WRITE_FAILS_CLOSED=false, "
-            "serving the decision anyway (un-audited). request_id=%s",
-            type(e).__name__, e, audit_request_id,
-        )
+    except Exception as exc:
+        logger.critical("Authoritative audit persistence failed. request_id=%s", audit_request_id)
+        raise HTTPException(503, "Authoritative audit persistence failed; decision unavailable",
+                            headers={"Retry-After": "5"}) from exc
 
 
 app = FastAPI(
@@ -358,8 +350,7 @@ def _reject_suspended_and_rate_limit(principal, request: Request) -> None:
     of throttling.
     """
     tenant_config = resolve_tenant(principal.tenant)
-    if tenant_config.suspended:
-        raise HTTPException(status_code=403, detail=f"Tenant '{principal.tenant}' is suspended.")
+    require_admission(principal, tenant_config)
     _enforce_rate_limit(principal, request, tenant_config)
 
 
@@ -527,7 +518,7 @@ async def assess_prompt(req: AssessRequest, request: Request, background_tasks: 
     )
 
     # 1. Privacy Layer
-    clean_query, redacted_info = redact_pii(req.prompt, tenant_config=tenant_config)
+    clean_query, redacted_info = _redact_or_fail(req.prompt, tenant_config)
     redacted_items = redacted_info.get("items", [])
 
     # 2. Risk Assessment (Neuro-Symbolic) - offloaded to thread to avoid blocking event loop.
@@ -539,7 +530,7 @@ async def assess_prompt(req: AssessRequest, request: Request, background_tasks: 
     #    multi-second tail latency to this response.
     try:
         risk_level, details = await _run_bounded(
-            assess_risk, clean_query, background_tasks.add_task, req.prompt
+            assess_risk, clean_query, background_tasks.add_task, req.prompt, principal.tenant
         )
     except asyncio.TimeoutError:
         # 503, NOT a fabricated BLOCK verdict. A timeout is an availability
@@ -856,8 +847,7 @@ async def gateway_chat(req: GatewayChatRequest, request: Request, background_tas
             headers={"WWW-Authenticate": "Bearer"},
         )
     tenant_config = resolve_tenant(principal.tenant)
-    if tenant_config.suspended:
-        raise HTTPException(status_code=403, detail=f"Tenant '{principal.tenant}' is suspended.")
+    require_admission(principal, tenant_config)
     _enforce_rate_limit(principal, request, tenant_config)
 
     # 0b. TOKEN QUOTA (Phase 5: token accounting) — checked before the
@@ -886,9 +876,9 @@ async def gateway_chat(req: GatewayChatRequest, request: Request, background_tas
     #    architectural difference from a sidecar: Gatekeeper decides
     #    whether the provider is called at all, not just whether to trust
     #    a response the caller already obtained.
-    clean_query, redacted_info = redact_pii(req.prompt, tenant_config=tenant_config)
+    clean_query, redacted_info = _redact_or_fail(req.prompt, tenant_config)
     try:
-        risk_level, details = await _run_bounded(assess_risk, clean_query, background_tasks.add_task, req.prompt)
+        risk_level, details = await _run_bounded(assess_risk, clean_query, background_tasks.add_task, req.prompt, principal.tenant)
     except asyncio.TimeoutError:
         metrics.assessment_timeouts_total.labels(endpoint="/api/v1/gateway/chat (input)").inc()
         raise HTTPException(
@@ -954,9 +944,9 @@ async def gateway_chat(req: GatewayChatRequest, request: Request, background_tas
     messages.append({"role": "user", "content": clean_query})
 
     llm_response = None
-    used_provider_name = None
-    last_error_status = None
-    last_error_detail = None
+    used_provider_name: str = provider_name
+    last_error_status: int = 503
+    last_error_detail: str = "The LLM provider did not return a response."
 
     for attempt_index, attempt_name in enumerate(attempt_names):
         is_primary = attempt_index == 0
@@ -982,7 +972,7 @@ async def gateway_chat(req: GatewayChatRequest, request: Request, background_tas
             break
         except asyncio.TimeoutError:
             latency_ms = round((time.perf_counter() - call_start) * 1000, 2)
-            log_gateway_event(principal.capability, attempt_name, attempt_model, success=False,
+            _write_audit_or_fail(log_gateway_event, principal.capability, attempt_name, attempt_model, success=False,
                               latency_ms=latency_ms, decision="BLOCK", error="timeout",
                               tenant=principal.tenant, request_id=request.state.request_id)
             if settings.METRICS_ENABLED:
@@ -992,7 +982,7 @@ async def gateway_chat(req: GatewayChatRequest, request: Request, background_tas
                                  f"{settings.GATEWAY_TIMEOUT_SECONDS:g}s.")
         except LLMProviderError as e:
             latency_ms = round((time.perf_counter() - call_start) * 1000, 2)
-            log_gateway_event(principal.capability, attempt_name, attempt_model, success=False,
+            _write_audit_or_fail(log_gateway_event, principal.capability, attempt_name, attempt_model, success=False,
                               latency_ms=latency_ms, decision="BLOCK", error=str(e),
                               tenant=principal.tenant, request_id=request.state.request_id)
             if settings.METRICS_ENABLED:
@@ -1041,7 +1031,7 @@ async def gateway_chat(req: GatewayChatRequest, request: Request, background_tas
         output_details, tenant=principal.tenant, request_id=request.state.request_id,
         audit_request_id=request.state.request_id,
     )
-    log_gateway_event(principal.capability, provider_name, llm_response.model, success=True,
+    _write_audit_or_fail(log_gateway_event, principal.capability, provider_name, llm_response.model, success=True,
                       latency_ms=latency_ms, decision=final_decision, usage=llm_response.usage,
                       tenant=principal.tenant, request_id=request.state.request_id)
     if settings.METRICS_ENABLED:
@@ -1096,14 +1086,15 @@ async def tools_call(req: ToolCallRequest, request: Request):
             headers={"WWW-Authenticate": "Bearer"},
         )
     tenant_config = resolve_tenant(principal.tenant)
-    if tenant_config.suspended:
-        raise HTTPException(status_code=403, detail=f"Tenant '{principal.tenant}' is suspended.")
+    require_admission(principal, tenant_config)
     _enforce_rate_limit(principal, request, tenant_config)
 
-    result = execute_tool(
-        principal.capability, req.name, req.arguments,
-        tenant=principal.tenant, request_id=request.state.request_id,
-    )
+    try:
+        result = await _run_bounded(partial(execute_tool,
+            principal.capability, req.name, req.arguments,
+            tenant=principal.tenant, request_id=request.state.request_id))
+    except Exception:
+        raise HTTPException(503, "Tool execution or audit persistence failed") from None
 
     review_id = None
     if result["decision"] == "REVIEW":
@@ -1185,7 +1176,7 @@ def whoami(request: Request):
 # --- Client UI settings: privacy & protection (Phase 7) ---
 
 @app.get("/api/v1/settings/privacy")
-def privacy_settings(request: Request, tenant: str = None):
+def privacy_settings(request: Request, tenant: str | None = None):
     """
     What PII protection is actually applied to requests -- the REAL running
     configuration from core/privacy.py (`REGEX_PATTERNS`' category names,
@@ -1282,7 +1273,7 @@ def protection_settings(request: Request):
 
 # --- Activity feed (Phase 7) ---
 
-def _resolve_activity_tenant_scope(principal, request: Request) -> str:
+def _resolve_activity_tenant_scope(principal, request: Request) -> str | None:
     """
     Shared by every audit-log-reading endpoint (activity feed, trace,
     logs): every caller defaults to their OWN tenant; only INTERNAL may
@@ -1297,7 +1288,7 @@ def _resolve_activity_tenant_scope(principal, request: Request) -> str:
 
 
 @app.get("/api/v1/activity")
-def activity_feed(request: Request, limit: int = 50, event_type: str = None):
+def activity_feed(request: Request, limit: int = 50, event_type: str | None = None):
     """
     Recent audit-log events for the client UI's activity feed. Reads the
     same audit.jsonl every governance decision is already written to
@@ -1361,7 +1352,7 @@ def activity_trace(request_id: str, request: Request):
 
 
 @app.get("/api/v1/logs")
-def raw_logs(request: Request, limit: int = 100, event_type: str = None):
+def raw_logs(request: Request, limit: int = 100, event_type: str | None = None):
     """
     The same audit log the activity feed reads, but for developers/
     operators: cross-tenant by default (every tenant at once) and a
@@ -1522,7 +1513,7 @@ def get_review_status(review_id: str, request: Request):
     on authentication, not on capability (unlike the two endpoints below).
     """
     principal = resolve_principal(authorization=request.headers.get("Authorization"))
-    if auth_required() and not principal.authenticated:
+    if not principal.authenticated:
         raise HTTPException(
             status_code=401,
             detail="Authentication required. Present a valid API key as "
@@ -1532,8 +1523,8 @@ def get_review_status(review_id: str, request: Request):
     _reject_suspended_and_rate_limit(principal, request)
 
     review = get_review(review_id)
-    if review is None:
-        raise HTTPException(status_code=404, detail=f"No such review: {review_id}")
+    if review is None or not owns_tenant_record(principal, review):
+        raise HTTPException(status_code=404, detail="Review not found")
     return ReviewStatusResponse(**review)
 
 

@@ -70,5 +70,5 @@ def list_benchmark_runs(directory=None) -> dict:
         runs.append((mtime, run))
 
     runs.sort(key=lambda pair: pair[0], reverse=True)
-    runs = [run for _mtime, run in runs]
-    return {"runs": runs, "errors": errors}
+    ordered_runs = [run for _mtime, run in runs]
+    return {"runs": ordered_runs, "errors": errors}

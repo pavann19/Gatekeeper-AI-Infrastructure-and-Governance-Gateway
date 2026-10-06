@@ -1,6 +1,11 @@
+from contextvars import ContextVar
+from contextlib import contextmanager
+from pathlib import Path
 import json
+import sys
 import os
 import hashlib
+from importlib.metadata import PackageNotFoundError, version as package_version
 import time
 from collections import OrderedDict
 from datetime import datetime, timezone
@@ -90,7 +95,7 @@ class FAISSCache:
 
     def add(self, prompt, vector, risk, score, source="unknown"):
         with self._lock:
-            prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()
+            prompt_hash = _security_key(prompt)
             if hasattr(vector, 'tolist'):
                 vector_list = vector.tolist()
             else:
@@ -98,6 +103,7 @@ class FAISSCache:
 
             entry = {
                 "prompt": prompt,
+                "security_scope": _CACHE_SCOPE.get(),
                 "vector": vector_list,
                 "risk": risk,
                 "score": score,
@@ -109,6 +115,9 @@ class FAISSCache:
 
             # LRU Eviction (local fuzzy-index copy only — the exact backend
             # manages its own eviction/TTL independently, see cache_backend.py)
+            existing = self.cache_data.get(prompt_hash)
+            if existing and existing.get("risk") == "HIGH" and time.time() - existing.get("timestamp_epoch", 0) < TTL_SECONDS:
+                entry = existing
             if prompt_hash in self.cache_data:
                 del self.cache_data[prompt_hash]
             elif len(self.cache_data) >= MAX_CACHE_SIZE:
@@ -140,22 +149,17 @@ class FAISSCache:
         and are not interchangeable.
         """
         # ---- TIER 1: EXACT MATCH ----
-        # O(1) (or one Redis round-trip when shared), zero collision risk by
-        # construction — the same query text can only ever retrieve the
-        # verdict it (or an earlier identical query, on ANY instance sharing
-        # this backend) actually received. This is what almost all real cache
-        # value comes from and it is the only tier this class makes an
-        # unconditional safety claim about. Deliberately OUTSIDE self._lock:
-        # this may be a network call (Redis), and must not block the
-        # in-process fuzzy-index lock for the duration of that round-trip.
-        prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()
+        # Versioned exact identity includes tenant, raw-input hash and clean text.
+        # Only HIGH short-circuits assessment. LOW/MEDIUM always run fresh checks.
+        # Backend calls stay outside the FAISS lock because Redis may block.
+        prompt_hash = _security_key(prompt)
         try:
             entry = self._exact.get(prompt_hash)
         except Exception as e:
             logger.error(f"Exact-cache backend read failed ({type(e).__name__}: {e}); "
                         f"treating as a miss and falling through to fuzzy match.")
             entry = None
-        if entry is not None:
+        if entry is not None and entry.get("risk") == "HIGH":
             return entry.get("risk"), entry.get("score")
 
         if not self.cache_data:
@@ -163,22 +167,8 @@ class FAISSCache:
 
         with self._lock:
             # ---- TIER 2: FUZZY SIMILARITY MATCH ----
-            # measured (scripts/diagnose_cache_threshold.py) against
-            # deepset/prompt-injections: at the OLD default of 0.95, 9.1% of
-            # near-duplicate pairs above threshold had OPPOSITE ground-truth
-            # labels (the dataset mutates a benign wrapper by inserting an
-            # injection payload — nearly identical surface text, opposite
-            # verdict), and at 0.98 that rate was 50%. Sentence-embedding
-            # cosine similarity measures bulk topical content, not the
-            # presence of a short adversarial clause, so it cannot safely
-            # stand in for a security decision at any threshold low enough to
-            # matter. CACHE_SIMILARITY_THRESHOLD's default was raised to 0.99
-            # (zero unsafe pairs observed at or above that value in the same
-            # measurement) as a materially safer margin — NOT a guarantee.
-            # This tier exists for genuine near-duplicates; if this residual
-            # risk is unacceptable for a deployment, disable it entirely by
-            # setting the threshold to 1.0, which leaves exact-match caching
-            # (tier 1) fully intact.
+            # Similarity is not a permissive security verdict. Only a live HIGH
+            # in the same security scope can escalate a fuzzy query.
             import faiss
             index = self._get_index()
             if index.ntotal == 0:
@@ -202,12 +192,13 @@ class FAISSCache:
                 entry = list(self.cache_data.values())[best_idx]
 
                 # Check TTL
-                if time.time() - entry.get("timestamp_epoch", 0) < TTL_SECONDS:
+                if (entry.get("risk") == "HIGH" and entry.get("security_scope") == _CACHE_SCOPE.get()
+                        and time.time() - entry.get("timestamp_epoch", 0) < TTL_SECONDS):
                     # LRU update
                     prompt_hash = entry["prompt_hash"]
                     self.cache_data.move_to_end(prompt_hash)
                     return entry.get("risk"), entry.get("score")
-                else:
+                elif time.time() - entry.get("timestamp_epoch", 0) >= TTL_SECONDS:
                     # Expired
                     del self.cache_data[entry["prompt_hash"]]
                     self._rebuild_faiss()
@@ -237,3 +228,49 @@ def lookup_cache(prompt, new_vector):
 
 def flush_cache():
     _cache.flush()
+
+
+_CACHE_SCOPE = ContextVar("security_cache_scope", default="direct-v2")
+
+@contextmanager
+def security_cache_scope(raw_prompt, tenant):
+    # Raw identity is hashed in memory; it is never persisted as text.
+    digest = hashlib.sha256(b"gatekeeper-security-cache-v2")
+    # Runtime interpretation can change scores with identical pinned weights.
+    # A model-library change must create a new assessment version.
+    for package in ("torch", "transformers", "sentence-transformers", "huggingface-hub", "numpy", "tokenizers", "safetensors"):
+        try:
+            runtime_version = package_version(package)
+        except PackageNotFoundError:
+            runtime_version = "unavailable"
+        digest.update(f"{package}={runtime_version}".encode())
+
+    for directory in ("core", "policies", "models"):
+        for path in sorted(Path(directory).glob("**/*")):
+            if path.is_file() and path.suffix in (".py", ".json", ".yaml", ".yml", ".toml"):
+                digest.update(str(path).encode())
+                digest.update(path.read_bytes())
+    from core.config import settings
+    digest.update(json.dumps(settings.model_dump(), sort_keys=True, default=str).encode())
+    for key, value in settings.model_dump().items():
+        if isinstance(value, str) and ("POLICY" in key or "MODEL" in key):
+            path = Path(value)
+            if path.is_file():
+                digest.update(path.read_bytes())
+    detectors = sys.modules.get("core.detectors")
+    registry = getattr(detectors, "_REGISTRY", None) or {}
+    state = {name: (getattr(detector, "_model", None) is not None,
+                    type(getattr(detector, "_load_error", None)).__name__)
+             for name, detector in registry.items()}
+    digest.update(json.dumps(state, sort_keys=True).encode())
+    scope = ":".join((digest.hexdigest(), hashlib.sha256(tenant.encode()).hexdigest(),
+                      hashlib.sha256(raw_prompt.encode()).hexdigest()))
+    token = _CACHE_SCOPE.set(scope)
+    try:
+        yield
+    finally:
+        _CACHE_SCOPE.reset(token)
+
+
+def _security_key(prompt):
+    return hashlib.sha256((_CACHE_SCOPE.get() + "\0" + prompt).encode()).hexdigest()

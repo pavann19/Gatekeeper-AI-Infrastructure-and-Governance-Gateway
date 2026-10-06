@@ -26,6 +26,7 @@ finding rather than noise a deployment would learn to ignore.
 import re
 
 SECRET_PATTERNS = {
+    "GATEKEEPER_API_KEY": r"(?<![A-Za-z0-9_-])gk_[A-Za-z0-9_-]{43,}(?![A-Za-z0-9_-])",
     # Non-capturing group deliberately: re.findall() returns ONLY a
     # capturing group's content when a pattern has one, not the full match
     # -- a real bug this module's own tests caught (findall returned just

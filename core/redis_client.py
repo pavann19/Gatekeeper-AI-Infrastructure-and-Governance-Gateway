@@ -20,15 +20,19 @@ from __future__ import annotations
 
 import os
 import threading
-from typing import Optional
+from typing import Optional, Protocol
 
 from core.logger import get_logger
 
 logger = get_logger(__name__)
 
+class DisconnectablePool(Protocol):
+    def disconnect(self) -> None: ...
+
+
 _lock = threading.Lock()
 _cached_client: Optional[object] = None
-_cached_pool: Optional[object] = None
+_cached_pool: Optional[DisconnectablePool] = None
 _last_url: Optional[str] = None
 
 

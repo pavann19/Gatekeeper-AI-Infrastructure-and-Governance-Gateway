@@ -146,10 +146,11 @@ def test_redis_set_serialises_complex_nested_entry():
         "reasons": ["pattern_match", "llm_judge"],
         "metadata": {"model": "llama-guard-8b", "nested": {"a": 1}},
     }
+    fake_redis.eval.return_value = json.dumps(complex_entry)
     backend.set("hash1", complex_entry)
 
-    args, _ = fake_redis.setex.call_args
-    assert json.loads(args[2]) == complex_entry
+    args, _ = fake_redis.eval.call_args
+    assert json.loads(args[3]) == complex_entry
 
 
 def test_redis_flush_with_no_matching_keys_deletes_nothing():

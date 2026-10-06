@@ -162,7 +162,8 @@ def test_review_decision_is_audited_and_handler_never_ran():
 def test_successful_call_is_audited_with_success_true(registry):
     with patch("core.logger.log_tool_event") as mock_log:
         execute_tool("GENERAL", "database.read", {"table": "orders"}, registry=registry)
-    mock_log.assert_called_once()
+    assert mock_log.call_count == 2
+    assert mock_log.call_args_list[0].kwargs["phase"] == "execution_intent"
     assert mock_log.call_args.kwargs["success"] is True
 
 
@@ -175,7 +176,8 @@ def test_handler_exception_is_audited_with_success_false(registry):
     reg.register(make_spec(), handler=boom)
     with patch("core.logger.log_tool_event") as mock_log:
         execute_tool("GENERAL", "database.read", {"table": "orders"}, registry=reg)
-    mock_log.assert_called_once()
+    assert mock_log.call_count == 2
+    assert mock_log.call_args_list[0].kwargs["phase"] == "execution_intent"
     assert mock_log.call_args.kwargs["success"] is False
     assert "RuntimeError" in mock_log.call_args.kwargs["error"]
 
@@ -195,7 +197,8 @@ def test_exactly_one_event_per_call_never_zero_never_two(registry):
     later one."""
     with patch("core.logger.log_tool_event") as mock_log:
         execute_tool("GENERAL", "database.read", {"table": "orders"}, registry=registry)
-    assert mock_log.call_count == 1
+    assert mock_log.call_count == 2
+    assert [call.kwargs["phase"] for call in mock_log.call_args_list] == ["execution_intent", "execution_completed"]
 
 
 def test_tenant_and_request_id_flow_through(registry):

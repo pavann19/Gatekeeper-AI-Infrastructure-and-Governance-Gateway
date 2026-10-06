@@ -220,7 +220,8 @@ def test_get_tenant_store_len_reflects_only_valid_entries_after_reload(tmp_path,
     }), encoding="utf-8")
     monkeypatch.setattr(tenancy_mod, "_store", TenantStore(str(path)))
 
-    assert len(tenancy_mod._store) == 1
+    assert len(tenancy_mod._store) == 2
+    assert resolve_tenant("bad-one").suspended
 
     path.write_text(json.dumps({
         "good-one": {"status": "active"},

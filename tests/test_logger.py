@@ -31,36 +31,12 @@ AUDIT_LOGGER_NAME = "gatekeeper.audit"
 
 
 @pytest.fixture
-def audit_file(tmp_path):
-    """Redirects the real "gatekeeper.audit" logger to a tmp_path file for
-    the duration of the test, then restores whatever handlers were there
-    before. This exercises the actual logging.FileHandler + JsonFormatter
-    pipeline log_event/log_output_event/etc. write through -- not a mock."""
+def audit_file(tmp_path, monkeypatch):
+    """Exercise actual append, flush and fsync persistence in a private file."""
     path = tmp_path / "audit.jsonl"
-    audit_logger = logging.getLogger(AUDIT_LOGGER_NAME)
-    original_handlers = list(audit_logger.handlers)
-    original_propagate = audit_logger.propagate
-
-    for h in original_handlers:
-        audit_logger.removeHandler(h)
-
-    handler = logging.FileHandler(str(path), encoding="utf-8")
-    from pythonjsonlogger import jsonlogger
-    handler.setFormatter(
-        jsonlogger.JsonFormatter("%(timestamp)s %(level)s %(name)s %(message)s")
-    )
-    audit_logger.addHandler(handler)
-    audit_logger.propagate = False
-    audit_logger.setLevel(logging.INFO)
-
-    try:
-        yield path
-    finally:
-        audit_logger.removeHandler(handler)
-        handler.close()
-        for h in original_handlers:
-            audit_logger.addHandler(h)
-        audit_logger.propagate = original_propagate
+    monkeypatch.setattr(logger_mod.settings, "AUDIT_LOG_PATH", str(path))
+    monkeypatch.setattr(logger_mod.settings, "AUDIT_READ_FROM_SQLITE", False)
+    yield path
 
 
 def _read_lines(path):

@@ -95,7 +95,7 @@ class LLMProvider:
 
     name = "base"
 
-    def complete(self, messages: List[Dict[str, str]], model: str = None,
+    def complete(self, messages: List[Dict[str, str]], model: str | None = None,
                 timeout: float = DEFAULT_TIMEOUT_SECONDS) -> LLMResponse:
         raise NotImplementedError
 
@@ -110,7 +110,7 @@ class OllamaProvider(LLMProvider):
     """
     name = "ollama"
 
-    def __init__(self, base_url: str = None, default_model: str = None):
+    def __init__(self, base_url: str | None = None, default_model: str | None = None):
         self.base_url = base_url or settings.OLLAMA_CHAT_URL
         self.default_model = default_model or settings.OLLAMA_MODEL
 
@@ -121,16 +121,16 @@ class OllamaProvider(LLMProvider):
         try:
             response = requests.post(self.base_url, json=payload, timeout=timeout)
         except requests.RequestException as e:
-            raise LLMProviderError(f"Ollama request failed: {type(e).__name__}: {e}") from e
+            raise LLMProviderError(f"Ollama request failed: {type(e).__name__}") from e
 
         if response.status_code != 200:
-            raise LLMProviderError(f"Ollama returned HTTP {response.status_code}: {response.text[:200]}")
+            raise LLMProviderError(f"Ollama returned HTTP {response.status_code}")
 
         try:
             data = response.json()
             content = data["message"]["content"]
         except (ValueError, KeyError) as e:
-            raise LLMProviderError(f"Unrecognised Ollama response shape: {e}") from e
+            raise LLMProviderError(f"Unrecognised Ollama response shape: {type(e).__name__}") from e
 
         return LLMResponse(
             content=content, model=model, provider=self.name,
@@ -149,7 +149,7 @@ class OpenAICompatibleProvider(LLMProvider):
     """
     name = "openai_compatible"
 
-    def __init__(self, api_key: str = None, base_url: str = None, default_model: str = None):
+    def __init__(self, api_key: str | None = None, base_url: str | None = None, default_model: str | None = None):
         self.api_key = api_key if api_key is not None else settings.OPENAI_API_KEY
         self.base_url = (base_url or settings.OPENAI_BASE_URL).rstrip("/")
         self.default_model = default_model or settings.OPENAI_MODEL
@@ -168,17 +168,17 @@ class OpenAICompatibleProvider(LLMProvider):
             response = requests.post(f"{self.base_url}/chat/completions",
                                      json=payload, headers=headers, timeout=timeout)
         except requests.RequestException as e:
-            raise LLMProviderError(f"OpenAI-compatible request failed: {type(e).__name__}: {e}") from e
+            raise LLMProviderError(f"OpenAI-compatible request failed: {type(e).__name__}") from e
 
         if response.status_code != 200:
             raise LLMProviderError(f"OpenAI-compatible endpoint returned HTTP "
-                                   f"{response.status_code}: {response.text[:200]}")
+                                   f"{response.status_code}")
 
         try:
             data = response.json()
             content = data["choices"][0]["message"]["content"]
         except (ValueError, KeyError, IndexError) as e:
-            raise LLMProviderError(f"Unrecognised OpenAI-compatible response shape: {e}") from e
+            raise LLMProviderError(f"Unrecognised OpenAI-compatible response shape: {type(e).__name__}") from e
 
         return LLMResponse(
             content=content, model=data.get("model", model), provider=self.name,
@@ -195,8 +195,8 @@ class AnthropicCompatibleProvider(LLMProvider):
     """
     name = "anthropic_compatible"
 
-    def __init__(self, api_key: str = None, base_url: str = None, default_model: str = None,
-                anthropic_version: str = None):
+    def __init__(self, api_key: str | None = None, base_url: str | None = None, default_model: str | None = None,
+                anthropic_version: str | None = None):
         self.api_key = api_key if api_key is not None else settings.ANTHROPIC_API_KEY
         self.base_url = (base_url or settings.ANTHROPIC_BASE_URL).rstrip("/")
         self.default_model = default_model or settings.ANTHROPIC_MODEL
@@ -228,17 +228,17 @@ class AnthropicCompatibleProvider(LLMProvider):
             response = requests.post(f"{self.base_url}/messages",
                                      json=payload, headers=headers, timeout=timeout)
         except requests.RequestException as e:
-            raise LLMProviderError(f"Anthropic-compatible request failed: {type(e).__name__}: {e}") from e
+            raise LLMProviderError(f"Anthropic-compatible request failed: {type(e).__name__}") from e
 
         if response.status_code != 200:
             raise LLMProviderError(f"Anthropic-compatible endpoint returned HTTP "
-                                   f"{response.status_code}: {response.text[:200]}")
+                                   f"{response.status_code}")
 
         try:
             data = response.json()
             content = data["content"][0]["text"]
         except (ValueError, KeyError, IndexError) as e:
-            raise LLMProviderError(f"Unrecognised Anthropic-compatible response shape: {e}") from e
+            raise LLMProviderError(f"Unrecognised Anthropic-compatible response shape: {type(e).__name__}") from e
 
         return LLMResponse(
             content=content, model=data.get("model", model), provider=self.name,

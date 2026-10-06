@@ -58,9 +58,8 @@ class ExactCacheBackend:
 
 class LocalExactCache(ExactCacheBackend):
     """
-    Process-local, file-persisted backend — the pre-existing behaviour,
-    extracted essentially unchanged so single-node deployments (and the test
-    suite, which never sets REDIS_URL) are unaffected by this refactor.
+    Process-local, atomically file-persisted backend. An unexpired HIGH is
+    retained under the same lock used to publish all cache mutations.
     """
 
     def __init__(self, path="semantic_cache_exact.json", max_size=5000):
@@ -69,6 +68,9 @@ class LocalExactCache(ExactCacheBackend):
         self._data = OrderedDict()
         self._lock = threading.Lock()
         self._save_thread = None
+        self._save_lock = threading.Lock()
+        self._saving = False
+        self._dirty = False
         self._load()
 
     def _load(self):
@@ -85,16 +87,32 @@ class LocalExactCache(ExactCacheBackend):
             logger.error(f"Local exact-cache load error: {e}")
 
     def _save_async(self):
-        def _write():
-            try:
-                with open(self.path, "w", encoding="utf-8") as f:
-                    json.dump(dict(self._data), f)
-            except Exception as e:
-                logger.error(f"Local exact-cache save error: {e}")
+        def write():
+            while True:
+                with self._save_lock:
+                    self._dirty = False
+                try:
+                    with self._lock:
+                        payload = json.dumps(dict(self._data))
+                    temporary = self.path + ".tmp"
+                    with open(temporary, "w", encoding="utf-8") as stream:
+                        stream.write(payload)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    os.replace(temporary, self.path)
+                except Exception:
+                    logger.error("Local exact-cache persistence failed")
+                with self._save_lock:
+                    if not self._dirty:
+                        self._saving = False
+                        return
 
-        if self._save_thread is None or not self._save_thread.is_alive():
-            self._save_thread = threading.Thread(target=_write)
-            self._save_thread.start()
+        with self._save_lock:
+            self._dirty = True
+            if not self._saving:
+                self._saving = True
+                self._save_thread = threading.Thread(target=write)
+                self._save_thread.start()
 
     def get(self, key):
         with self._lock:
@@ -109,6 +127,10 @@ class LocalExactCache(ExactCacheBackend):
 
     def set(self, key, entry, ttl_seconds=DEFAULT_TTL_SECONDS):
         with self._lock:
+            existing = self._data.get(key)
+            if (existing and existing.get("risk") == "HIGH"
+                    and time.time() - existing.get("timestamp_epoch", 0) < existing.get("ttl_seconds", DEFAULT_TTL_SECONDS)):
+                return dict(existing)
             entry = dict(entry)
             entry["timestamp_epoch"] = time.time()
             entry["ttl_seconds"] = ttl_seconds
@@ -118,6 +140,7 @@ class LocalExactCache(ExactCacheBackend):
                 self._data.popitem(last=False)
             self._data[key] = entry
         self._save_async()
+        return dict(entry)
 
     def delete(self, key):
         with self._lock:
@@ -132,7 +155,7 @@ class LocalExactCache(ExactCacheBackend):
 
 class RedisExactCache(ExactCacheBackend):
     """Shared backend: every gateway instance reads and writes the SAME
-    store. TTL is native to Redis (SETEX), not re-implemented by hand."""
+    store. A Lua operation protects HIGH and writes with native Redis expiry."""
 
     KEY_PREFIX = "gatekeeper:cache:"
 
@@ -149,7 +172,17 @@ class RedisExactCache(ExactCacheBackend):
             return None
 
     def set(self, key, entry, ttl_seconds=DEFAULT_TTL_SECONDS):
-        self._client.setex(self.KEY_PREFIX + key, ttl_seconds, json.dumps(entry))
+        script = """
+        local old = redis.call('GET', KEYS[1])
+        if old then
+            local ok, value = pcall(cjson.decode, old)
+            if ok and value.risk == 'HIGH' then return old end
+        end
+        redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2])
+        return ARGV[1]
+        """
+        effective = self._client.eval(script, 1, self.KEY_PREFIX + key, json.dumps(entry), ttl_seconds)
+        return json.loads(effective)
 
     def delete(self, key):
         self._client.delete(self.KEY_PREFIX + key)

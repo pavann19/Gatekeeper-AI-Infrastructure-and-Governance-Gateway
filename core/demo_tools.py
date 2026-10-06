@@ -143,7 +143,7 @@ _DEMO_HANDLERS = {
 }
 
 
-def register_demo_tools(registry: ToolRegistry = None) -> ToolRegistry:
+def register_demo_tools(registry: ToolRegistry | None = None) -> ToolRegistry:
     """
     Registers all four demo tools. Explicit opt-in — see module
     docstring for why this isn't automatic on import. Returns the

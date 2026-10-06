@@ -88,9 +88,10 @@ def test_async_path_answers_from_fast_judge_without_calling_llama_guard(monkeypa
     assert details["source"] == "semantic_judge_override"
     assert len(scheduled) == 1
     fn, args = scheduled[0]
-    assert fn is risk_mod.llama_guard_async_confirmation
-    assert args[0] == "ambiguous prompt"
-    assert args[2] == "LOW" and args[3] == "semantic_judge_override"
+    assert args[0] is risk_mod.llama_guard_async_confirmation
+    assert callable(fn)  # Captured Context.run restores the original security cache identity.
+    assert args[1] == "ambiguous prompt"
+    assert args[3] == "LOW" and args[4] == "semantic_judge_override"
 
 
 def test_no_scheduler_keeps_the_old_synchronous_behaviour(monkeypatch, force_judge_required):
@@ -121,7 +122,27 @@ def test_scheduler_receives_the_actual_prompt_vector(monkeypatch, force_judge_re
     scheduled = []
     risk_mod.assess_risk("x", background_scheduler=lambda fn, *args: scheduled.append(args))
 
-    assert scheduled[0][1] is sentinel_vec
+    assert scheduled[0][2] is sentinel_vec
+
+
+def test_background_escalation_preserves_original_cache_identity(monkeypatch, force_judge_required):
+    from core.cache import _CACHE_SCOPE, security_cache_scope
+    scheduled, request_scopes, saved_scopes = [], [], []
+
+    def fast_judge(prompt, threat_present=False):
+        request_scopes.append(_CACHE_SCOPE.get())
+        return "LOW", "semantic_judge_override"
+
+    monkeypatch.setattr(risk_mod, "judge_arbitration", fast_judge)
+    monkeypatch.setattr(risk_mod, "llama_guard_arbitration", lambda *args, **kwargs: ("HIGH", "llama_guard_arbitration"))
+    monkeypatch.setattr(risk_mod, "save_cache_entry", lambda *args, **kwargs: saved_scopes.append(_CACHE_SCOPE.get()))
+    risk_mod.assess_risk("redacted", raw_prompt="original private identity", tenant="tenant-a",
+                        background_scheduler=lambda fn, *args: scheduled.append((fn, args)))
+    saved_scopes.clear()
+    with security_cache_scope("unrelated input", "tenant-b"):
+        callback, args = scheduled[0]
+        callback(*args)
+    assert saved_scopes == request_scopes
 
 
 # --- llama_guard_async_confirmation: the one-way ratchet --------------------

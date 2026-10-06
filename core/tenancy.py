@@ -20,18 +20,17 @@ nothing has ever read it — confirmed in the Phase 0 component audit
 (docs/ENGINEERING_ASSESSMENT.md, "Tenant Resolver" row: "`Principal.tenant`
 is threaded through but nothing branches on it"). A resolver that only
 echoes a field back is not a resolver, it is dead code with an audit trail.
-This module makes the field load-bearing: an unknown/misconfigured tenant
-gets a safe default, a suspended tenant is rejected before any detection
-work runs, and a tenant's SLA actually changes its rate limit.
+This module makes the field load-bearing: unknown tenants in a valid store
+use defaults, while suspended tenants and unavailable configured state reject
+admission before detection work. Tenant SLA settings change the rate limit.
 
 DESIGN, MIRRORING core/auth.py's KeyStore ON PURPOSE
 ------------------------------------------------------
 Same shape as the API key store: JSON file, loaded once and cached, a
 force-reload hook for after provisioning, per-entry validation so one
 malformed tenant doesn't take down the others, and a safe default when the
-file is absent (no tenants.json means every caller gets the DEFAULT_TENANT
-config, unchanged from today's behaviour — configuring tenancy is opt-in,
-not a prerequisite for the gateway to keep working). Consistency with the
+optional store has never been configured. A missing configured store is
+unavailable, and malformed tenant entries remain explicit denial entries. Consistency with the
 existing auth module matters more here than any abstract preference,
 because whoever operates one will need to operate the other.
 """
@@ -39,6 +38,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from dataclasses import dataclass
 
 from core.config import settings
@@ -79,7 +79,7 @@ class TenantConfig:
 
     @property
     def suspended(self) -> bool:
-        return self.status == "suspended"
+        return self.status != "active"
 
 
 # The tenant every caller resolves to when tenancy is unconfigured, or when
@@ -109,25 +109,50 @@ class TenantStore:
           }
         }
 
-    A missing file is not an error — see DEFAULT_TENANT. Malformed entries
-    are rejected individually and logged, same reasoning as KeyStore: a typo
-    in one tenant's config must not silently affect the others.
+    An absent, unconfigured optional store uses defaults. Failed configured
+    stores reject admission; malformed entries reject only their own tenant.
+    Reloads publish one complete snapshot under the store lock.
     """
 
     def __init__(self, path=None):
         self.path = path or settings.TENANTS_FILE
         self._tenants: dict[str, TenantConfig] = {}
         self._loaded = False
+        self._configured = bool(path or os.environ.get("TENANTS_FILE")
+                                or "TENANTS_FILE" in settings.model_fields_set
+                                or settings.TENANTS_FILE != "tenants.json")
+        self._lock = threading.Lock()
+        self._snapshot = ("unconfigured", {})
 
     def load(self, force=False):
-        if self._loaded and not force:
-            return self
-        self._tenants = {}
-        self._loaded = True
+        """Atomically publish state; failed configured reloads reject admission."""
+        with self._lock:
+            if self._loaded and not force:
+                return self
+            missing = not os.path.exists(self.path)
+            if missing and not self._configured:
+                snapshot = ("unconfigured", {})
+            else:
+                self._configured = True
+                tenants = self._read_snapshot()
+                snapshot = (("unavailable", self._snapshot[1]) if tenants is None
+                            else ("valid", tenants))
+            self._snapshot = snapshot
+            self._tenants = snapshot[1]
+            self._loaded = True
+        return self
+
+    @property
+    def state(self):
+        self.load()
+        return self._snapshot[0]
+
+    def _read_snapshot(self):
+        tenants = {}
 
         if not os.path.exists(self.path):
-            logger.info(f"No tenant store at {self.path}; all callers resolve to DEFAULT_TENANT.")
-            return self
+            logger.error("Configured tenant store is missing; rejecting admission.")
+            return None
 
         try:
             with open(self.path, "r", encoding="utf-8") as f:
@@ -138,15 +163,16 @@ class TenantStore:
             # silently falling back to "no tenants configured" could
             # re-admit a caller who was meant to be blocked.
             logger.error(f"Tenant store unreadable ({e}); no tenants loaded.")
-            return self
+            return None
 
         if not isinstance(raw, dict):
             logger.error(f"Tenant store {self.path} must be a JSON object; no tenants loaded.")
-            return self
+            return None
 
         for tenant_id, grant in raw.items():
             if not isinstance(grant, dict):
                 logger.error(f"Ignoring malformed tenant entry {tenant_id!r}: not an object.")
+                tenants[tenant_id] = TenantConfig(tenant_id=tenant_id, status="unavailable")
                 continue
             status = str(grant.get("status", "active")).lower()
             if status not in VALID_STATUSES:
@@ -154,6 +180,7 @@ class TenantStore:
                     f"Ignoring tenant {tenant_id!r}: status {status!r} not one of "
                     f"{VALID_STATUSES}."
                 )
+                tenants[tenant_id] = TenantConfig(tenant_id=tenant_id, status="unavailable")
                 continue
             rpm = grant.get("rate_limit_rpm")
             if rpm is not None:
@@ -200,7 +227,7 @@ class TenantStore:
                     )
                     priv_ner = None
 
-            self._tenants[tenant_id] = TenantConfig(
+            tenants[tenant_id] = TenantConfig(
                 tenant_id=tenant_id,
                 display_name=str(grant.get("display_name", tenant_id)),
                 status=status,
@@ -210,15 +237,19 @@ class TenantStore:
                 privacy_ner_labels=priv_ner,
             )
 
-        logger.info(f"Loaded {len(self._tenants)} tenant(s) from {self.path}")
-        return self
+        logger.info(f"Loaded {len(tenants)} tenant(s) from {self.path}")
+        return tenants
 
     def get(self, tenant_id: str) -> TenantConfig:
-        """Never raises. Unknown tenant -> DEFAULT_TENANT, same fail-open-
-        but-unprivileged shape as an unrecognised API key resolving to
-        GENERAL rather than a 500."""
+        """Resolve one immutable snapshot; unavailable configuration denies admission."""
         self.load()
-        return self._tenants.get(tenant_id, DEFAULT_TENANT)
+        state, tenants = self._snapshot
+        if state == "unavailable":
+            previous = tenants.get(tenant_id)
+            if previous is not None and previous.suspended:
+                return previous
+            return TenantConfig(tenant_id=tenant_id, status="unavailable")
+        return tenants.get(tenant_id, DEFAULT_TENANT)
 
     def __len__(self):
         self.load()

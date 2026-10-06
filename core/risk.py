@@ -4,7 +4,7 @@ import json
 import os
 from core.semantic_judge import semantic_judge
 from core.embeddings import get_embedding, cosine_similarity
-from core.cache import lookup_cache, save_cache_entry
+from core.cache import lookup_cache, save_cache_entry, security_cache_scope
 from core.domain_classifier import is_domain_aligned
 from core.config import (
     SEMANTIC_THRESHOLD_HIGH,
@@ -95,7 +95,7 @@ JAILBREAK_PATTERNS = get_jailbreak_patterns()
 INSTRUCTION_OVERRIDE_PATTERNS = get_instruction_override_patterns()
 HARD_BAN_KEYWORDS = get_hard_ban_keywords()
 
-def check_symbolic_violations(prompt: str) -> str:
+def check_symbolic_violations(prompt: str) -> str | None:
     # FAIL-CLOSED: If symbolic rules failed to load, block everything
     if (JAILBREAK_PATTERNS is None or INSTRUCTION_OVERRIDE_PATTERNS is None
             or HARD_BAN_KEYWORDS is None):
@@ -246,7 +246,7 @@ def _fast_path_decision(fast: dict):
 # STAGE 2: PARALLEL SIGNAL COLLECTION
 # ============================================================================
 
-def collect_semantic_signals(prompt: str, prompt_vec, fast: dict = None) -> dict:
+def collect_semantic_signals(prompt: str, prompt_vec, fast: dict | None = None) -> dict:
     """
     Stage 2: Collects all semantic signals without making any blocking decisions.
     Returns a dict of raw signal values for downstream fusion.
@@ -682,7 +682,18 @@ def judge_arbitration(prompt: str, threat_present: bool = False) -> tuple:
 # POLICY ARBITER — STAGED ORCHESTRATOR
 # ============================================================================
 
-def assess_risk(prompt: str, background_scheduler=None, raw_prompt: str = None) -> tuple:
+def assess_risk(prompt: str, background_scheduler=None, raw_prompt: str | None = None, tenant: str = "default") -> tuple:
+    from contextvars import copy_context
+    with security_cache_scope(raw_prompt if raw_prompt is not None else prompt, tenant):
+        scheduler = None
+        if background_scheduler is not None:
+            def scheduler(function, *args):
+                context = copy_context()
+                background_scheduler(context.run, function, *args)
+        return _assess_risk(prompt, scheduler, raw_prompt)
+
+
+def _assess_risk(prompt: str, background_scheduler=None, raw_prompt: str | None = None) -> tuple:
     """
     Staged governance pipeline:
         Stage 0: Cache lookup
@@ -728,6 +739,20 @@ def assess_risk(prompt: str, background_scheduler=None, raw_prompt: str = None) 
     """
     text_for_detectors = raw_prompt if raw_prompt is not None else prompt
 
+    from core import metrics as _metrics
+    # ---- STAGE 1: HARD BAN (SYMBOLIC VETO) ----
+    # Includes normalize_prompt, which hard_ban_triggered runs internally as
+    # its own first step -- not split into a separate stage, since it is one
+    # small preprocessing call with nothing else on that path to time against.
+    _t0 = time.perf_counter()
+    triggered, detail = hard_ban_triggered(text_for_detectors)
+    _metrics.stage_duration_seconds.labels(stage="symbolic").observe(
+        time.perf_counter() - _t0
+    )
+    if triggered:
+        # HARD RULE: Educational context NEVER overrides Symbolic Violations
+        return AssessResult.symbolic(detail).as_return()
+
     # ---- INIT: Ensure FAISS indexes are populated (lazy, once only) ----
     _ensure_faiss_initialized()
 
@@ -749,20 +774,6 @@ def assess_risk(prompt: str, background_scheduler=None, raw_prompt: str = None) 
             return AssessResult.cache_hit("HIGH", cached_score, locked_high=True).as_return()
         logger.info(f"⚡ CACHE HIT! Risk: {cached_risk}")
         return AssessResult.cache_hit(cached_risk, cached_score).as_return()
-
-    # ---- STAGE 1: HARD BAN (SYMBOLIC VETO) ----
-    # Includes normalize_prompt, which hard_ban_triggered runs internally as
-    # its own first step -- not split into a separate stage, since it is one
-    # small preprocessing call with nothing else on that path to time against.
-    _t0 = time.perf_counter()
-    triggered, detail = hard_ban_triggered(text_for_detectors)
-    _metrics.stage_duration_seconds.labels(stage="symbolic").observe(
-        time.perf_counter() - _t0
-    )
-    if triggered:
-        # HARD RULE: Educational context NEVER overrides Symbolic Violations
-        save_cache_entry(prompt, prompt_vec, "HIGH", 1.0, source="symbolic_rule")
-        return AssessResult.symbolic(detail).as_return()
 
     # ---- STAGE 1.5: FAST PATH (cheap, escalate-only cascade) ----
     # See _fast_path_decision's docstring for why this is safe: it can only

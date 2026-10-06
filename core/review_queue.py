@@ -55,9 +55,9 @@ class ReviewRecord:
     prompt_hash: str
     request_id: str
     created_at: str
-    resolved_at: str = None
-    reviewer: str = None
-    final_decision: str = None
+    resolved_at: str | None = None
+    reviewer: str | None = None
+    final_decision: str | None = None
 
 
 class ReviewQueue:
@@ -114,7 +114,7 @@ class ReviewQueue:
         logger.info(f"Review queued: {record.review_id} (tenant={tenant}, risk={risk})")
         return record
 
-    def get(self, review_id: str) -> dict:
+    def get(self, review_id: str) -> dict | None:
         self.load()
         return self._records.get(review_id)
 
@@ -158,7 +158,7 @@ def enqueue_review(reason, capability, risk, tenant, prompt_hash, request_id) ->
     return _queue.enqueue(reason, capability, risk, tenant, prompt_hash, request_id)
 
 
-def get_review(review_id: str) -> dict:
+def get_review(review_id: str) -> dict | None:
     return _queue.get(review_id)
 
 

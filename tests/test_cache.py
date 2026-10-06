@@ -110,8 +110,7 @@ def test_exact_match_returns_its_own_verdict_regardless_of_neighbors(cache):
     # Re-querying the exact benign text must return its OWN verdict, not the
     # near-duplicate malicious entry's, despite 0.9876 similarity between them.
     risk, score = cache.lookup(BENIGN_VARIANT, benign_vec)
-    assert risk == "LOW"
-    assert score == 0.05
+    assert (risk, score) == (None, None)  # Permissive entries require fresh assessment.
 
     risk, score = cache.lookup(MALICIOUS_VARIANT, malicious_vec)
     assert risk == "HIGH"
@@ -132,7 +131,7 @@ def test_exact_match_used_even_when_a_closer_fuzzy_neighbor_exists(cache):
     # Querying "prompt A" verbatim must return A's verdict even though B is
     # nearly identical in vector space.
     risk, _ = cache.lookup("prompt A", a_vec)
-    assert risk == "LOW"
+    assert risk is None  # A permissive nearest entry requires fresh assessment.
 
 
 def test_exact_match_respects_ttl(cache, monkeypatch):
@@ -248,10 +247,10 @@ def test_lru_eviction_drops_oldest_when_full(cache, monkeypatch):
     cache._exact.max_size = 2
     cache.add("a", unit_vector(seed=1), "LOW", 0.1)
     cache.add("b", unit_vector(seed=2), "LOW", 0.1)
-    cache.add("c", unit_vector(seed=3), "LOW", 0.1)  # should evict "a"
+    cache.add("c", unit_vector(seed=3), "HIGH", 0.1)  # should evict "a"
 
     assert cache.lookup("a", unit_vector(seed=1)) == (None, None)
-    assert cache.lookup("c", unit_vector(seed=3))[0] == "LOW"
+    assert cache.lookup("c", unit_vector(seed=3))[0] == "HIGH"
 
 
 def test_re_adding_same_prompt_updates_rather_than_duplicates(cache):

@@ -51,7 +51,7 @@ def _file_hash(path: str) -> str:
         return hashlib.sha256(f.read()).hexdigest()[:12]
 
 
-def snapshot_policy(path: str = None) -> str:
+def snapshot_policy(path: str | None = None) -> str | None:
     """
     Copies the current policy file into POLICY_VERSIONS_DIR. Returns the
     version filename (not a full path — that's an implementation detail of
@@ -85,7 +85,7 @@ def list_versions() -> list[str]:
     )
 
 
-def rollback_to(version_name: str, path: str = None) -> None:
+def rollback_to(version_name: str, path: str | None = None) -> None:
     """
     Restores a snapshot over the live policy file and reloads it
     immediately — a rollback that required a separate manual reload step
@@ -129,7 +129,7 @@ def rollback_to(version_name: str, path: str = None) -> None:
     reload_policies()
 
 
-def deploy_policy(new_path: str, live_path: str = None) -> str:
+def deploy_policy(new_path: str, live_path: str | None = None) -> str | None:
     """
     The safe way to change the live policy: snapshot the current one, then
     replace it with `new_path`'s content, then reload. Returns the snapshot

@@ -81,7 +81,7 @@ def _tail_raw_lines(
             return [], False, True, 0, b""
         return [], False, True
 
-    lines_newest_first = []
+    lines_newest_first: list[bytes] = []
     pos = file_size if start_pos is None else start_pos
     if pos <= 0:
         if return_state:

@@ -236,5 +236,5 @@ def test_audit_log_unwritable_opt_out_serves_with_loud_log(_mock_assess, monkeyp
     with caplog.at_level(logging.CRITICAL):
         response = client.post("/api/v1/assess", json={"prompt": "Hello safe query"})
 
-    assert response.status_code == 200
-    assert any("audit write failed" in r.message.lower() for r in caplog.records)
+    assert response.status_code == 503
+    assert any("audit persistence failed" in r.message.lower() for r in caplog.records)

@@ -58,7 +58,7 @@ def check_system_prompt_leakage(response_text: str, system_prompt: str,
     return False
 
 
-def assess_output(response_text: str, system_prompt: str = None, tenant_config=None) -> tuple:
+def assess_output(response_text: str, system_prompt: str | None = None, tenant_config=None) -> tuple:
     """
     Evaluates the LLM's response before it is returned to the user.
 
@@ -79,15 +79,9 @@ def assess_output(response_text: str, system_prompt: str = None, tenant_config=N
        PII-redacted text, not the raw text, for the same reason (2) redacts
        rather than reveals: a toxicity judge does not need to see PII to do
        its job, so there is no reason to widen exposure of it further. This
-       function only checks `verdict == "DANGEROUS"`, so any other string
-       output_judge() returns falls through to ALLOW below — that is now
-       safe rather than a silent fail-open, because output_judge() itself
-       no longer returns the bare JUDGE_OFFLINE sentinel when the primary
-       judge is down: it falls back to a fast local model first (the
-       "inverter", core/semantic_judge.py::_fallback_output_judge,
-       OUTPUT_JUDGE_FALLBACK_ENABLED in core/config.py) and only reaches
-       JUDGE_OFFLINE — and therefore ALLOW — if that fallback is also
-       unavailable.
+       assessment passes only for an explicit SAFE verdict. Unavailable,
+       malformed and failed judgments block release of the response.
+
     5. Semantic Grounding Check (hallucination) — BLOCK. Same redacted text.
 
     Returns:
@@ -103,6 +97,8 @@ def assess_output(response_text: str, system_prompt: str = None, tenant_config=N
         "hallucination_detected": False,
         "source": "clean_pass",
         "clean_response": None,
+        "toxicity_assessed": False,
+        "toxicity_status": "NOT_ASSESSED",
     }
 
     # 1. Secret detection — hard block, no redact-and-continue (see docstring).
@@ -123,14 +119,29 @@ def assess_output(response_text: str, system_prompt: str = None, tenant_config=N
         return "BLOCK", details
 
     # 3. PII — redact and continue.
-    clean_text, redacted_info = redact_pii(response_text, tenant_config=tenant_config)
+    try:
+        clean_text, redacted_info = redact_pii(response_text, tenant_config=tenant_config)
+    except Exception:
+        details["source"] = "privacy_unavailable_fail_closed"
+        return "BLOCK", details
     if redacted_info.get("pii_found"):
         logger.info(f"Output PII redacted (not blocked). Source: {redacted_info.get('source')}")
         details["pii_leakage"] = True
         details["redacted_items"] = redacted_info.get("items")
 
     # 4. Toxicity Check via Local LLM Judge — on the redacted text.
-    verdict = output_judge(clean_text)
+    try:
+        verdict = output_judge(clean_text)
+    except TimeoutError:
+        verdict = "JUDGE_TIMEOUT"
+    except Exception:
+        verdict = "JUDGE_ERROR"
+    if verdict not in ("SAFE", "DANGEROUS"):
+        details["toxicity_status"] = verdict if verdict in ("JUDGE_OFFLINE", "JUDGE_ERROR", "JUDGE_TIMEOUT") else "INVALID_VERDICT"
+        details["source"] = "toxicity_unavailable_fail_closed"
+        return "BLOCK", details
+    details["toxicity_assessed"] = True
+    details["toxicity_status"] = verdict
     if verdict == "DANGEROUS":
         logger.warning("🚫 OUTPUT BLOCKED: Semantic Judge classified response as TOXIC/HARMFUL.")
         details["toxicity_detected"] = True

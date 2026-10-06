@@ -1,7 +1,8 @@
-from core.config import EMBEDDING_MODEL
+from core.config import EMBEDDING_MODEL, settings
 
 # Lazy-loaded model — loaded only on first use, not at import time.
 # This prevents CI failures when the package is mocked or unavailable.
+DEFAULT_EMBEDDING_REVISION = "e8c3b32edf5434bc2275fc9bab85f82640a19130"
 _model = None
 
 def _get_model():
@@ -9,7 +10,10 @@ def _get_model():
     global _model
     if _model is None:
         from sentence_transformers import SentenceTransformer  # noqa: PLC0415
-        _model = SentenceTransformer(EMBEDDING_MODEL)
+        revision = settings.EMBEDDING_MODEL_REVISION
+        if revision is None and EMBEDDING_MODEL in ("all-mpnet-base-v2", "sentence-transformers/all-mpnet-base-v2"):
+            revision = DEFAULT_EMBEDDING_REVISION
+        _model = SentenceTransformer(EMBEDDING_MODEL, revision=revision)
     return _model
 
 def get_embedding(text: str):

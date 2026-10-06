@@ -116,7 +116,8 @@ def test_unknown_argument_rejected():
     spec = make_spec()
     ok, detail = validate_arguments(spec, {"table": "orders", "drop_all": True})
     assert ok is False
-    assert "drop_all" in detail
+    assert "unknown argument" in detail
+    assert "drop_all" not in detail
 
 
 def test_wrong_type_rejected():
@@ -386,7 +387,7 @@ def test_execute_unknown_tool_blocks_cleanly():
     reg = ToolRegistry()
     result = execute_tool("INTERNAL", "does_not_exist", {}, registry=reg)
     assert result["decision"] == "BLOCK"
-    assert "does_not_exist" in result["reason"]
+    assert "unknown tool" in result["reason"]
 
 
 def test_execute_allowed_tool_with_no_handler_blocks():
@@ -409,7 +410,8 @@ def test_execute_handler_exception_is_reported_not_raised():
     result = execute_tool("GENERAL", "database.read", {"table": "orders"}, registry=reg)
     assert result["decision"] == "ALLOW"  # the call WAS allowed to attempt running
     assert "RuntimeError" in result["error"]
-    assert "downstream database unreachable" in result["error"]
+    assert "downstream database unreachable" not in result["error"]
+    assert "tool execution failed" in result["error"]
 
 
 def test_execute_uses_shared_registry_by_default():

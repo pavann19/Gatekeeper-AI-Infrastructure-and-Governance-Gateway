@@ -42,8 +42,8 @@ class Settings(BaseSettings):
     # no threshold low enough to matter is provably safe for this cache's
     # fuzzy-match tier. 0.99 is the highest value with zero observed unsafe
     # pairs in that measurement — a materially safer margin, not a guarantee.
-    # core/cache.py checks an exact prompt-hash match FIRST and unconditionally
-    # (zero collision risk); this threshold only governs the fuzzy fallback.
+    # Current cache reuse is HIGH-only; permissive decisions are assessed
+    # afresh. This threshold governs conservative fuzzy HIGH escalation.
     CACHE_SIMILARITY_THRESHOLD: float = 0.99
 
     # Run the fusion's transformer detectors concurrently rather than one
@@ -128,25 +128,9 @@ class Settings(BaseSettings):
     # replace the borrowed one.
     HALLUCINATION_CHECK_ENABLED: bool = False
 
-    # Output-judge fallback ("inverter") — core.semantic_judge.output_judge.
-    # WHY THIS EXISTS: when the primary judge (Ollama/Llama Guard) is
-    # unreachable, output_judge() returns the sentinel "JUDGE_OFFLINE", and
-    # core.output_guardrails.assess_output only ever checks
-    # `if verdict == "DANGEROUS"` -- anything else, including
-    # "JUDGE_OFFLINE", falls through to ALLOW. That is a silent fail-OPEN:
-    # exactly the window an attacker would want, and exactly the outage a
-    # real deployment WILL eventually hit (Ollama restarts, OOMs, or the
-    # host it runs on reboots). Fix: when the primary judge is unreachable,
-    # fall back to `toxic_bert` -- already loaded and warmed at startup for
-    # the INPUT-side fusion ensemble (core/fusion.py's LIVE_MODEL_DETECTORS,
-    # chosen there specifically for being fast enough for synchronous
-    # request handling, unlike Llama Guard) -- instead of allowing blind.
-    # It is not as accurate as the primary judge, but a fast, local,
-    # network-independent second opinion beats no opinion at all: the same
-    # reasoning as an inverter picking up a house's critical circuits the
-    # instant utility power drops, not a substitute for the grid but enough
-    # to keep the lights from going out entirely. True JUDGE_OFFLINE (fail
-    # open) is now reached only if THIS fallback model also fails to load.
+    # The optional local toxicity fallback improves availability when the
+    # primary judge is down. Output release still requires an explicit SAFE
+    # verdict; unavailable, malformed, timed-out and failed judgments BLOCK.
     OUTPUT_JUDGE_FALLBACK_ENABLED: bool = True
     # toxic_bert emits an independent sigmoid probability per label (see
     # TransformerDetector's multi_label=True path); 0.5 is the same neutral
@@ -165,6 +149,8 @@ class Settings(BaseSettings):
     # asked Ollama for a model this project stopped validating against.
     OLLAMA_MODEL: str = "llama-guard3"
     EMBEDDING_MODEL: str = "all-mpnet-base-v2"
+    # Default encoder pin; custom encoders must supply their own revision.
+    EMBEDDING_MODEL_REVISION: str | None = None
 
     # --- Phase 5 (Real LLM Gateway), scoped down to provider abstraction
     # only for this pass — core/llm_providers.py. No request-forwarding
@@ -217,12 +203,8 @@ class Settings(BaseSettings):
     # container recreation.
     AUDIT_LOG_PATH: str = "audit.jsonl"
 
-    # When True (default), a request whose audit record cannot be persisted
-    # (disk full, permission error, ...) fails CLOSED with HTTP 503 rather
-    # than returning a decision that was never recorded. The audit trail is
-    # the compliance artefact — a governance verdict the system cannot prove
-    # it made is not a verdict it should serve. Set False only for a
-    # deployment that has explicitly accepted un-audited traffic.
+    # Legacy configuration field retained for compatibility. Authoritative
+    # audit failures always fail closed; False no longer enables un-audited traffic.
     AUDIT_WRITE_FAILS_CLOSED: bool = True
 
     # Embedded-SQLite mirror of the audit trail. Path to the SQLite

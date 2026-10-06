@@ -87,7 +87,7 @@ def _result_response(msg_id, result: Any) -> Dict[str, Any]:
     return {"jsonrpc": "2.0", "id": msg_id, "result": result}
 
 
-def handle_request(msg: Dict[str, Any], capability: str, registry: ToolRegistry = None,
+def handle_request(msg: Dict[str, Any], capability: str, registry: ToolRegistry | None = None,
                    tenant: str = "mcp") -> Optional[Dict[str, Any]]:
     """
     Dispatches one already-parsed JSON-RPC message and returns the
@@ -152,7 +152,7 @@ def handle_request(msg: Dict[str, Any], capability: str, registry: ToolRegistry 
     return _error_response(msg_id, METHOD_NOT_FOUND, f"Unknown method: {method!r}")
 
 
-def run_stdio_server(capability: str = "GENERAL", registry: ToolRegistry = None,
+def run_stdio_server(capability: str = "GENERAL", registry: ToolRegistry | None = None,
                      tenant: str = "mcp", input_stream=None, output_stream=None) -> None:
     """
     The actual transport loop: one JSON-RPC message per line on
@@ -178,6 +178,7 @@ def run_stdio_server(capability: str = "GENERAL", registry: ToolRegistry = None,
 
     logger.info(f"MCP stdio server starting (capability={capability!r}, tenant={tenant!r}).")
 
+    response: dict[str, Any] | None
     while True:
         raw = input_stream.readline(MAX_LINE_BYTES + 1)
         if raw == "":
@@ -222,8 +223,8 @@ def run_stdio_server(capability: str = "GENERAL", registry: ToolRegistry = None,
             # A bug in dispatch/handling must not take the whole server
             # down mid-session -- report it as an internal error for
             # THIS message and keep serving the next one.
-            logger.exception(f"Unhandled error processing MCP message: {msg}")
-            response = _error_response(msg.get("id"), INTERNAL_ERROR, f"{type(e).__name__}: {e}") \
+            logger.error("Unhandled MCP request failure (%s)", type(e).__name__)
+            response = _error_response(msg.get("id"), INTERNAL_ERROR, "MCP execution or audit persistence failed") \
                 if "id" in msg else None
 
         if response is not None:

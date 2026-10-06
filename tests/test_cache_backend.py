@@ -97,15 +97,16 @@ def test_redis_get_corrupt_value_is_a_miss_not_a_crash(fake_redis):
     assert cb.RedisExactCache(fake_redis).get("hash1") is None
 
 
-def test_redis_set_uses_setex_with_ttl(fake_redis):
+def test_redis_set_uses_atomic_monotonic_script_with_ttl(fake_redis):
+    entry = {"risk": "HIGH", "score": 0.9}
+    fake_redis.eval.return_value = json.dumps(entry)
     backend = cb.RedisExactCache(fake_redis)
-    backend.set("hash1", {"risk": "HIGH", "score": 0.9}, ttl_seconds=3600)
-
-    fake_redis.setex.assert_called_once()
-    args, _ = fake_redis.setex.call_args
-    assert args[0] == "gatekeeper:cache:hash1"
-    assert args[1] == 3600
-    assert json.loads(args[2]) == {"risk": "HIGH", "score": 0.9}
+    assert backend.set("hash1", entry, ttl_seconds=3600) == entry
+    script, count, key, payload, ttl = fake_redis.eval.call_args.args
+    assert "value.risk == 'HIGH'" in script
+    assert "redis.call('SET'" in script
+    assert (count, key, json.loads(payload), ttl) == (1, "gatekeeper:cache:hash1", entry, 3600)
+    fake_redis.setex.assert_not_called()
 
 
 def test_redis_flush_only_touches_this_apps_keys(fake_redis):

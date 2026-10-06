@@ -4,7 +4,7 @@ import json
 import os
 from datetime import datetime
 import logging
-from pythonjsonlogger import jsonlogger
+import threading
 
 from core.config import settings
 
@@ -26,17 +26,6 @@ if not logger.handlers:
     console_formatter = logging.Formatter('%(levelname)s: %(message)s')
     console_handler.setFormatter(console_formatter)
     logger.addHandler(console_handler)
-
-    # JSON Audit Handler
-    os.makedirs(os.path.dirname(AUDIT_LOG_PATH) or ".", exist_ok=True)
-    audit_handler = logging.FileHandler(AUDIT_LOG_PATH, encoding="utf-8")
-    json_formatter = jsonlogger.JsonFormatter('%(timestamp)s %(level)s %(name)s %(message)s')
-    audit_handler.setFormatter(json_formatter)
-    
-    audit_logger = logging.getLogger("gatekeeper.audit")
-    audit_logger.setLevel(logging.INFO)
-    audit_logger.propagate = False 
-    audit_logger.addHandler(audit_handler)
 
 def get_logger(name="gatekeeper"):
     return logging.getLogger(name)
@@ -72,6 +61,45 @@ def _mirror_to_sqlite(event_type, log_entry):
             "continuing. event_type=%s request_id=%s",
             type(e).__name__, e, event_type, log_entry.get("request_id"),
         )
+
+class AuditPersistenceError(RuntimeError):
+    """The authoritative audit store did not acknowledge persistence."""
+
+
+_audit_lock = threading.Lock()
+
+
+def _persist_audit(event_type, entry):
+    sqlite_authority = settings.AUDIT_READ_FROM_SQLITE
+    try:
+        if sqlite_authority:
+            if not settings.AUDIT_SQLITE_ENABLED:
+                raise AuditPersistenceError("SQLite audit authority is disabled")
+            _mirror_to_sqlite(event_type, entry)
+        payload = json.dumps(entry, ensure_ascii=True) + "\n"
+        try:
+            with _audit_lock:
+                path = settings.AUDIT_LOG_PATH
+                os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+                with open(path, "a", encoding="utf-8") as stream:
+                    if stream.write(payload) != len(payload):
+                        raise OSError("Incomplete audit write")
+                    stream.flush()
+                    os.fsync(stream.fileno())
+        except Exception:
+            if not sqlite_authority:
+                raise
+            logger.critical("JSONL audit mirror failed after authoritative SQLite persistence")
+        if not sqlite_authority:
+            _mirror_to_sqlite(event_type, entry)
+    except Exception as exc:
+        raise AuditPersistenceError("Authoritative audit persistence failed") from exc
+    # Diagnostic observers run only after authoritative persistence succeeded.
+    try:
+        logging.getLogger("gatekeeper.audit").info("Audit persisted", extra=entry)
+    except Exception:
+        logger.warning("Diagnostic audit observer failed")
+
 
 def log_event(capability, prompt, risk, decision, metadata=None):
     if metadata is None:
@@ -115,9 +143,7 @@ def log_event(capability, prompt, risk, decision, metadata=None):
     }
 
     # Structured JSON log for Audit
-    audit_logger = logging.getLogger("gatekeeper.audit")
-    audit_logger.info("Governance Decision", extra=log_entry)
-    _mirror_to_sqlite("input_assessment", log_entry)
+    _persist_audit("input_assessment", log_entry)
 
 
 def log_output_event(capability, response_text, decision, metadata=None, tenant="unset", request_id="unset"):
@@ -155,14 +181,14 @@ def log_output_event(capability, response_text, decision, metadata=None, tenant=
         "pii_leakage": metadata.get("pii_leakage", False),
         "secrets_detected": metadata.get("secrets_detected", False),
         "toxicity_detected": metadata.get("toxicity_detected", False),
+        "toxicity_assessed": metadata.get("toxicity_assessed", False),
+        "toxicity_status": metadata.get("toxicity_status", "NOT_ASSESSED"),
         "hallucination_detected": metadata.get("hallucination_detected", False),
         "system_prompt_leak_detected": metadata.get("system_prompt_leak_detected", False),
         "source": metadata.get("source", "unknown"),
     }
 
-    audit_logger = logging.getLogger("gatekeeper.audit")
-    audit_logger.info("Output Governance Decision", extra=log_entry)
-    _mirror_to_sqlite("output_assessment", log_entry)
+    _persist_audit("output_assessment", log_entry)
 
 
 def log_gateway_event(capability, provider, model, success, latency_ms, decision,
@@ -203,14 +229,12 @@ def log_gateway_event(capability, provider, model, success, latency_ms, decision
         "error": error,
     }
 
-    audit_logger = logging.getLogger("gatekeeper.audit")
-    audit_logger.info("Gateway Call", extra=log_entry)
-    _mirror_to_sqlite("gateway_call", log_entry)
+    _persist_audit("gateway_call", log_entry)
 
 
 def log_tool_event(capability, tool_name, decision, risk_level, reason,
                    arguments=None, success=None, error=None,
-                   tenant="unset", request_id="unset"):
+                   tenant="unset", request_id="unset", phase="decision"):
     """
     Audit record for a TOOL CALL (Phase 6, Tool/Agent Gateway,
     "Audit events" roadmap item) — a FOURTH distinct `event_type`
@@ -246,6 +270,7 @@ def log_tool_event(capability, tool_name, decision, risk_level, reason,
     log_entry = {
         "timestamp": datetime.now().isoformat(),
         "event_type": "tool_call",
+        "phase": phase,
         "request_id": request_id,
         "tenant": tenant,
         "capability": capability,
@@ -258,6 +283,4 @@ def log_tool_event(capability, tool_name, decision, risk_level, reason,
         "error": error,
     }
 
-    audit_logger = logging.getLogger("gatekeeper.audit")
-    audit_logger.info("Tool Call", extra=log_entry)
-    _mirror_to_sqlite("tool_call", log_entry)
+    _persist_audit("tool_call", log_entry)

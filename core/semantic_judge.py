@@ -1,10 +1,13 @@
 import requests
 import json
+from typing import Union
 from core.config import OLLAMA_API_URL, OLLAMA_MODEL, settings
 from core.circuit_breaker import ollama_judge_breaker
 from core.logger import get_logger
 
 logger = get_logger(__name__)
+
+JSONValue = Union[None, bool, int, float, str, list["JSONValue"], dict[str, "JSONValue"]]
 
 
 def _fallback_output_judge(response_text: str) -> str:
@@ -24,8 +27,8 @@ def _fallback_output_judge(response_text: str) -> str:
 
     Returns "SAFE" or "DANGEROUS" on success. Returns "JUDGE_OFFLINE" only
     if the fallback model itself is unavailable (e.g. never downloaded, or
-    disabled via OUTPUT_JUDGE_FALLBACK_ENABLED=False) -- true fail-open is
-    now reached only when BOTH the primary and the fallback are down.
+    disabled via OUTPUT_JUDGE_FALLBACK_ENABLED=False). The output guardrail
+    blocks this unavailable result; only explicit SAFE can permit release.
     """
     if not settings.OUTPUT_JUDGE_FALLBACK_ENABLED:
         return "JUDGE_OFFLINE"
@@ -121,7 +124,7 @@ def _judge_via_llama_guard(prompt: str) -> str:
     # OLLAMA_API_URL ends in ".../api/generate"; the chat endpoint is
     # ".../api/chat". Same derivation the availability probe uses.
     base_url = "/".join(OLLAMA_API_URL.split("/")[:-1])
-    payload = {
+    payload: dict[str, JSONValue] = {
         "model": OLLAMA_MODEL,
         "messages": [{"role": "user", "content": prompt}],
         "stream": False,
@@ -206,7 +209,7 @@ def semantic_judge(prompt: str) -> str:
     )
 
     try:
-        payload = {
+        payload: dict[str, JSONValue] = {
             "model": OLLAMA_MODEL,
             "prompt": f"{system_instruction}\n\n<user_prompt>\n{prompt}\n</user_prompt>",
             "stream": False
@@ -291,7 +294,7 @@ def output_judge(response_text: str) -> str:
     )
 
     try:
-        payload = {
+        payload: dict[str, JSONValue] = {
             "model": OLLAMA_MODEL,
             "prompt": f"{system_instruction}\n\n<generated_response>\n{response_text}\n</generated_response>",
             "stream": False
@@ -314,4 +317,4 @@ def output_judge(response_text: str) -> str:
         return "DANGEROUS"
 
     except Exception:
-        return _fallback_output_judge(response_text)
+        return _fallback_output_judge(response_text)

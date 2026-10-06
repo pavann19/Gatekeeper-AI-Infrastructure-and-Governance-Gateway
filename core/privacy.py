@@ -1,5 +1,6 @@
 import re
 import spacy
+from spacy.language import Language
 
 from core.config import SPACY_MODEL
 from core.logger import get_logger
@@ -8,6 +9,7 @@ logger = get_logger(__name__)
 
 # --- CONFIGURATION ---
 # Load spaCy small model for efficiency (Research Grade: Lightweight)
+NLP_MODEL: Language | None
 try:
     NLP_MODEL = spacy.load(SPACY_MODEL)
     # Disable heavy pipeline components we don't need (parser, lemmatizer)
@@ -30,6 +32,10 @@ REGEX_PATTERNS = {
 # Only redact high-confidence entities relevant to safety
 NER_LABELS = {"PERSON", "ORG", "GPE"} 
 
+class PrivacyAssessmentUnavailable(RuntimeError):
+    """Configured contextual PII detection cannot be completed."""
+
+
 def redact_pii(text: str, tenant_config=None) -> tuple:
     """
     Hybrid PII Detection Pipeline with optional per-tenant overrides.
@@ -48,6 +54,9 @@ def redact_pii(text: str, tenant_config=None) -> tuple:
             disabled_regex = set(tenant_config.privacy_disabled_patterns)
         if getattr(tenant_config, "privacy_ner_labels", None) is not None:
             ner_labels = set(tenant_config.privacy_ner_labels)
+
+    if ner_labels and NLP_MODEL is None:
+        raise PrivacyAssessmentUnavailable("Configured privacy NER is unavailable")
 
     # --- STAGE 1: SYMBOLIC (Regex) ---
     regex_hit = False

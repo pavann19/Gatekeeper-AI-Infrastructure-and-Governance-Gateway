@@ -43,7 +43,8 @@ def cache(monkeypatch, tmp_path):
 
 def _hash_of(cache, prompt):
     import hashlib
-    return hashlib.sha256(prompt.encode()).hexdigest()
+    from core.cache import _security_key
+    return _security_key(prompt)
 
 
 def _force_fuzzy_only(cache, prompt):
@@ -66,22 +67,22 @@ def test_fuzzy_lru_evicts_the_actually_least_recently_used_entry(cache, monkeypa
     monkeypatch.setattr("core.cache.CACHE_SIMILARITY_THRESHOLD", 0.99)
 
     v0, v1, v2, v3 = (unit_vector(seed=i) for i in range(4))
-    cache.add("p0", v0, "LOW", 0.1)
-    cache.add("p1", v1, "LOW", 0.1)
-    cache.add("p2", v2, "LOW", 0.1)
+    cache.add("p0", v0, "HIGH", 0.1)
+    cache.add("p1", v1, "HIGH", 0.1)
+    cache.add("p2", v2, "HIGH", 0.1)
     assert len(cache.cache_data) == 3
 
     # Force p0's lookup through the fuzzy tier and promote it to MRU via a
     # genuine fuzzy hit (same vector => similarity 1.0, above threshold).
     _force_fuzzy_only(cache, "p0")
     risk, score = cache.lookup("p0 (fuzzy path, not exact)", v0)
-    assert risk == "LOW" and score == 0.1  # confirms it was actually a hit
+    assert risk == "HIGH" and score == 0.1  # confirms it was actually a hit
 
     # Insertion/recency order in cache_data is now p1, p2, p0 (p0 moved to
     # the MRU end by the fuzzy hit above). Adding a 4th item must evict p1,
     # the true least-recently-used entry -- not p0, which is oldest only by
     # original insertion order.
-    cache.add("p3", v3, "LOW", 0.1)
+    cache.add("p3", v3, "HIGH", 0.1)
 
     assert len(cache.cache_data) == 3
     remaining_prompts = {e["prompt"] for e in cache.cache_data.values()}
@@ -157,7 +158,7 @@ def test_concurrent_adds_from_many_threads_lose_no_entries(cache):
     def worker(i):
         try:
             vec = unit_vector(seed=1000 + i)
-            cache.add(f"concurrent-prompt-{i}", vec, "LOW", round(i / 1000, 3))
+            cache.add(f"concurrent-prompt-{i}", vec, "HIGH", round(i / 1000, 3))
         except Exception as e:  # pragma: no cover - failure path
             errors.append(e)
 
@@ -173,7 +174,7 @@ def test_concurrent_adds_from_many_threads_lose_no_entries(cache):
     for i in range(n_threads):
         vec = unit_vector(seed=1000 + i)
         risk, score = cache.lookup(f"concurrent-prompt-{i}", vec)
-        assert risk == "LOW"
+        assert risk == "HIGH"
         assert score == round(i / 1000, 3)
 
 
@@ -223,7 +224,7 @@ def test_near_identical_prompts_get_distinct_exact_entries(cache):
 
     risk_a, score_a = cache.lookup(prompt_a, v1)
     risk_b, score_b = cache.lookup(prompt_b, v2)
-    assert (risk_a, score_a) == ("LOW", 0.1)
+    assert (risk_a, score_a) == (None, None)
     assert (risk_b, score_b) == ("HIGH", 0.9)
     assert len(cache.cache_data) == 2
 
@@ -240,7 +241,7 @@ def test_whitespace_variant_prompts_do_not_collide(cache):
     risk1, score1 = cache.lookup("delete all files", v1)
     risk2, score2 = cache.lookup(" delete all files ", v2)
     assert (risk1, score1) == ("HIGH", 0.95)
-    assert (risk2, score2) == ("LOW", 0.05)
+    assert (risk2, score2) == (None, None)
 
 
 # --- Clear / flush behaviour -------------------------------------------------

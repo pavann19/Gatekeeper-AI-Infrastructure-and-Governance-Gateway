@@ -47,8 +47,8 @@ def test_missing_file_means_every_tenant_is_default(tmp_path, monkeypatch):
     """No tenants.json AT ALL — the store must not error, and every caller
     must resolve exactly as before this module existed."""
     monkeypatch.setattr(tenancy_mod, "_store", TenantStore(str(tmp_path / "absent.json")))
-    assert resolve_tenant("acme") == DEFAULT_TENANT
-    assert resolve_tenant("anything") == DEFAULT_TENANT
+    assert resolve_tenant("acme").suspended is True
+    assert resolve_tenant("anything").suspended is True
 
 
 def test_configured_tenant_resolves_to_its_own_config(tenant_store):
@@ -91,7 +91,7 @@ def test_bad_status_value_is_rejected_not_defaulted(tmp_path, monkeypatch):
     path.write_text(json.dumps({"acme": {"status": "definitely-not-a-status"}}), encoding="utf-8")
     monkeypatch.setattr(tenancy_mod, "_store", TenantStore(str(path)))
 
-    assert resolve_tenant("acme") == DEFAULT_TENANT
+    assert resolve_tenant("acme").suspended is True
 
 
 def test_non_dict_entry_is_skipped(tmp_path, monkeypatch):
@@ -99,7 +99,7 @@ def test_non_dict_entry_is_skipped(tmp_path, monkeypatch):
     path.write_text(json.dumps({"acme": "not-an-object"}), encoding="utf-8")
     monkeypatch.setattr(tenancy_mod, "_store", TenantStore(str(path)))
 
-    assert resolve_tenant("acme") == DEFAULT_TENANT
+    assert resolve_tenant("acme").suspended is True
 
 
 def test_non_dict_entry_does_not_block_valid_siblings(tmp_path, monkeypatch):
@@ -110,7 +110,7 @@ def test_non_dict_entry_does_not_block_valid_siblings(tmp_path, monkeypatch):
     }), encoding="utf-8")
     monkeypatch.setattr(tenancy_mod, "_store", TenantStore(str(path)))
 
-    assert resolve_tenant("broken") == DEFAULT_TENANT
+    assert resolve_tenant("broken").suspended is True
     assert resolve_tenant("good").display_name == "Good Co"
 
 
@@ -128,7 +128,7 @@ def test_corrupt_json_fails_closed_not_open(tmp_path, monkeypatch):
     assert len(tenancy_mod._store) == 0
     # Still resolves (to DEFAULT_TENANT) rather than raising — a broken file
     # degrades tenancy, it must not take down the gateway.
-    assert resolve_tenant("acme") == DEFAULT_TENANT
+    assert resolve_tenant("acme").suspended is True
 
 
 @pytest.mark.parametrize("bad_rpm", ["not-a-number", -5, 0, None])

@@ -31,6 +31,21 @@ def _allowlist(monkeypatch):
                         "example.com,api.example.org")
 
 
+
+def _controlled_fetch(url, status=200, body=b"hello"):
+    import io
+    from core.real_tools import _pinned_fetch
+    sock = MagicMock()
+    wire = f"HTTP/1.1 {status} Response\r\nContent-Length: {len(body)}\r\nLocation: http://127.0.0.1/\r\n\r\n".encode() + body
+    sock.makefile.return_value = io.BytesIO(wire)
+    with patch("socket.getaddrinfo", return_value=_fake_addrinfo("93.184.216.34")), \
+         patch("socket.socket", return_value=sock), \
+         patch("ssl.create_default_context") as tls:
+        tls.return_value.wrap_socket.return_value = sock
+        result = _pinned_fetch(url, 2)
+    sock.connect.assert_called_once()
+    return result
+
 # --- domain allowlist ---------------------------------------------------------
 
 def test_disallowed_hostname_rejected():
@@ -52,16 +67,10 @@ def test_subdomain_not_implicitly_covered_by_parent_domain():
 
 
 def test_case_insensitive_hostname_match(monkeypatch):
-    monkeypatch.setattr("core.real_tools._resolved_addresses_are_all_public", lambda h: True)
-    with patch("requests.get") as mock_get:
-        mock_response = MagicMock(status_code=200, headers={"Content-Type": "text/plain"})
-        mock_response.iter_content.return_value = [b"ok"]
-        mock_get.return_value = mock_response
-        result = _http_get("https://EXAMPLE.COM/path")
-    assert result["status_code"] == 200
+    with patch("core.real_tools._isolated_fetch", return_value={"status_code": 200}) as fetch:
+        assert _http_get("https://EXAMPLE.COM/path")["status_code"] == 200
+    fetch.assert_called_once_with("https://EXAMPLE.COM/path", 10)
 
-
-# --- scheme restriction --------------------------------------------------------
 
 @pytest.mark.parametrize("scheme", ["file", "ftp", "gopher", "javascript"])
 def test_non_http_schemes_rejected(scheme):
@@ -77,41 +86,40 @@ def test_no_hostname_rejected():
 # --- DNS-rebinding defence: resolved address must be public ------------------
 
 def test_private_ip_resolution_blocks_the_call(monkeypatch):
-    monkeypatch.setattr(socket, "getaddrinfo", lambda host, port: _fake_addrinfo("10.0.0.5"))
-    with pytest.raises(DisallowedURLError, match="private/loopback/reserved"):
-        _http_get("https://example.com/")
+    from core.real_tools import _pinned_fetch
+    with patch("socket.getaddrinfo", return_value=_fake_addrinfo("10.0.0.5")), patch("socket.socket") as connect:
+        with pytest.raises(DisallowedURLError, match="not exclusively public"):
+            _pinned_fetch("https://example.com/", 1)
+    connect.assert_not_called()
 
 
 def test_loopback_resolution_blocks_the_call(monkeypatch):
-    monkeypatch.setattr(socket, "getaddrinfo", lambda host, port: _fake_addrinfo("127.0.0.1"))
-    with pytest.raises(DisallowedURLError, match="private/loopback/reserved"):
-        _http_get("https://example.com/")
+    from core.real_tools import _pinned_fetch
+    with patch("socket.getaddrinfo", return_value=_fake_addrinfo("127.0.0.1")), patch("socket.socket") as connect:
+        with pytest.raises(DisallowedURLError, match="not exclusively public"):
+            _pinned_fetch("https://example.com/", 1)
+    connect.assert_not_called()
 
 
 def test_cloud_metadata_address_blocks_the_call(monkeypatch):
-    """169.254.169.254 is the classic SSRF target (cloud instance
-    metadata service) -- it's link-local, must be rejected."""
-    monkeypatch.setattr(socket, "getaddrinfo", lambda host, port: _fake_addrinfo("169.254.169.254"))
-    with pytest.raises(DisallowedURLError, match="private/loopback/reserved"):
-        _http_get("https://example.com/")
+    from core.real_tools import _pinned_fetch
+    with patch("socket.getaddrinfo", return_value=_fake_addrinfo("169.254.169.254")), patch("socket.socket") as connect:
+        with pytest.raises(DisallowedURLError, match="not exclusively public"):
+            _pinned_fetch("https://example.com/", 1)
+    connect.assert_not_called()
 
 
 def test_dns_resolution_failure_fails_closed(monkeypatch):
-    def raise_gaierror(host, port):
-        raise socket.gaierror("name resolution failed")
-    monkeypatch.setattr(socket, "getaddrinfo", raise_gaierror)
-    with pytest.raises(DisallowedURLError, match="private/loopback/reserved"):
-        _http_get("https://example.com/")
+    from core.real_tools import _pinned_fetch
+    with patch("socket.getaddrinfo", side_effect=socket.gaierror("failed")), patch("socket.socket") as connect:
+        with pytest.raises(socket.gaierror):
+            _pinned_fetch("https://example.com/", 1)
+    connect.assert_not_called()
 
 
 def test_public_ip_resolution_allows_the_call(monkeypatch):
-    monkeypatch.setattr(socket, "getaddrinfo", lambda host, port: _fake_addrinfo("93.184.216.34"))
-    with patch("requests.get") as mock_get:
-        mock_response = MagicMock(status_code=200, headers={"Content-Type": "text/html"})
-        mock_response.iter_content.return_value = [b"hello"]
-        mock_get.return_value = mock_response
-        result = _http_get("https://example.com/")
-    assert result["content"] == "hello"
+    result = _controlled_fetch("https://example.com/")
+    assert result["content"] == "hello" and result["status_code"] == 200
 
 
 def test_resolved_addresses_are_all_public_directly():
@@ -124,41 +132,22 @@ def test_resolved_addresses_are_all_public_directly():
 # --- redirects are never followed --------------------------------------------
 
 def test_redirect_response_is_not_followed_requests_called_with_allow_redirects_false(monkeypatch):
-    monkeypatch.setattr("core.real_tools._resolved_addresses_are_all_public", lambda h: True)
-    with patch("requests.get") as mock_get:
-        mock_response = MagicMock(status_code=302, headers={"Content-Type": "text/plain"})
-        mock_response.iter_content.return_value = [b""]
-        mock_get.return_value = mock_response
-        result = _http_get("https://example.com/")
-    assert result["status_code"] == 302
-    assert mock_get.call_args.kwargs["allow_redirects"] is False
+    result = _controlled_fetch("https://example.com/", status=302, body=b"")
+    assert result["status_code"] == 302  # Only one connection despite private Location.
 
-
-# --- size cap and request shape ------------------------------------------------
 
 def test_response_larger_than_cap_is_truncated(monkeypatch):
-    monkeypatch.setattr("core.real_tools._resolved_addresses_are_all_public", lambda h: True)
     monkeypatch.setattr("core.real_tools.MAX_RESPONSE_BYTES", 10)
-    with patch("requests.get") as mock_get:
-        mock_response = MagicMock(status_code=200, headers={})
-        mock_response.iter_content.return_value = [b"0123456789", b"more data past the cap"]
-        mock_get.return_value = mock_response
-        result = _http_get("https://example.com/")
+    result = _controlled_fetch("https://example.com/", body=b"0123456789more data")
     assert result["truncated"] is True
-    assert len(result["content"].encode("utf-8")) <= 10
+    assert len(result["content"].encode()) <= 10
 
 
 def test_request_uses_a_hard_timeout(monkeypatch):
-    monkeypatch.setattr("core.real_tools._resolved_addresses_are_all_public", lambda h: True)
-    with patch("requests.get") as mock_get:
-        mock_response = MagicMock(status_code=200, headers={})
-        mock_response.iter_content.return_value = [b""]
-        mock_get.return_value = mock_response
+    with patch("core.real_tools._isolated_fetch", return_value={}) as fetch:
         _http_get("https://example.com/")
-    assert mock_get.call_args.kwargs["timeout"] == 10
+    assert fetch.call_args.args[1] == 10
 
-
-# --- ToolSpec ------------------------------------------------------------------
 
 def test_http_get_spec_requires_elevated_capability_and_medium_risk():
     assert HTTP_GET_SPEC.capability_required == "ELEVATED"
@@ -192,7 +181,8 @@ def test_disallowed_url_surfaces_as_allow_with_error_not_a_block():
     result = execute_tool("ELEVATED", "http.get", {"url": "https://evil.com/"}, registry=reg)
     assert result["decision"] == "ALLOW"
     assert result["error"] is not None
-    assert "not in the configured allowlist" in result["error"]
+    assert "DisallowedURLError" in result["error"]
+    assert "evil.com" not in result["error"]
 
 
 def test_general_capability_denied_before_the_url_is_even_checked():
@@ -203,19 +193,12 @@ def test_general_capability_denied_before_the_url_is_even_checked():
 
 
 def test_allowed_url_succeeds_through_the_full_pipeline(monkeypatch):
-    monkeypatch.setattr("core.real_tools._resolved_addresses_are_all_public", lambda h: True)
+    monkeypatch.setattr("core.real_tools._isolated_fetch", lambda url, timeout: _controlled_fetch(url, body=b"ok"))
     reg = ToolRegistry()
     register_real_tools(reg)
-    with patch("requests.get") as mock_get:
-        mock_response = MagicMock(status_code=200, headers={"Content-Type": "text/plain"})
-        mock_response.iter_content.return_value = [b"ok"]
-        mock_get.return_value = mock_response
-        result = execute_tool("ELEVATED", "http.get", {"url": "https://example.com/"}, registry=reg)
-    assert result["decision"] == "ALLOW"
-    assert result["output"]["content"] == "ok"
+    result = execute_tool("ELEVATED", "http.get", {"url": "https://example.com/"}, registry=reg)
+    assert result["decision"] == "ALLOW" and result["output"]["content"] == "ok"
 
-
-# --- register_real_tools --------------------------------------------------------
 
 def test_register_real_tools_is_idempotent():
     reg = ToolRegistry()

@@ -100,7 +100,7 @@ def test_mcp_sse_session_force_closed_after_max_lifetime(mcp_app, mcp_client, mo
     assert mcp_app.state.sessions == {}
 
 
-def test_mcp_sse_session_relay(mcp_app, mcp_client):
+def test_mcp_sse_session_relay(mcp_app, mcp_client, monkeypatch):
     """
     Verifies full SSE session relay:
     1. Client registers an active SSE session queue in app.state.sessions.
@@ -109,7 +109,9 @@ def test_mcp_sse_session_relay(mcp_app, mcp_client):
     """
     session_id = "test-session-42"
     queue = asyncio.Queue()
-    mcp_app.state.sessions[session_id] = queue
+    from core.mcp_http_server import MCPSession
+    monkeypatch.setattr("core.mcp_http_server._session_identity", lambda *args: "owner")
+    mcp_app.state.sessions[session_id] = MCPSession("owner", queue)
 
     msg = {
         "jsonrpc": "2.0",

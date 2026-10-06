@@ -133,20 +133,20 @@ def test_review_does_not_override_a_more_severe_block(mock_assess, isolated_revi
 # GET /api/v1/review/{review_id}
 # ---------------------------------------------------------------------------
 
-def test_get_review_status_pending(isolated_review_queue):
+def test_get_review_status_pending(isolated_review_queue, key_store):
     record = isolated_review_queue.enqueue(
         reason="r", capability="GENERAL", risk="MEDIUM", tenant="default",
         prompt_hash="h", request_id="req-1",
     )
-    response = client.get(f"/api/v1/review/{record.review_id}")
+    response = client.get(f"/api/v1/review/{record.review_id}", headers={"Authorization": f"Bearer {key_store()}"})
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "PENDING"
     assert body["final_decision"] is None
 
 
-def test_get_review_status_unknown_id_404(isolated_review_queue):
-    response = client.get("/api/v1/review/nonexistent-id")
+def test_get_review_status_unknown_id_404(isolated_review_queue, key_store):
+    response = client.get("/api/v1/review/nonexistent-id", headers={"Authorization": f"Bearer {key_store()}"})
     assert response.status_code == 404
 
 

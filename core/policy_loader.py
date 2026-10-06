@@ -15,8 +15,8 @@ DOMAIN_ANCHORS_FILE = "policies/domain_anchors.json"
 SYMBOLIC_RULES_FILE = "policies/symbolic_rules.json"
 
 # --- Internal State (loaded once) ---
-_domain_anchors = []
-_suspicious_phrases = []
+_domain_anchors: list[str] = []
+_suspicious_phrases: list[str] = []
 _jailbreak_patterns = None            # None signals fail-closed
 _instruction_override_patterns = None  # None signals fail-closed
 _hard_ban_keywords = None             # None signals fail-closed

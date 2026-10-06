@@ -84,7 +84,7 @@ def test_mutant_mcp_suspended_tenant_enforcement():
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_mutant_mcp_session_queue_delivery():
+async def test_mutant_mcp_session_queue_delivery(monkeypatch):
     """
     Target: `core/mcp_http_server.py::_handle_messages`
     Mutant: omitting `await queue.put(rpc_resp)`
@@ -95,7 +95,9 @@ async def test_mutant_mcp_session_queue_delivery():
 
     session_id = "test-session-uuid-1234"
     session_queue = asyncio.Queue()
-    app.state.sessions[session_id] = session_queue
+    from core.mcp_http_server import MCPSession
+    monkeypatch.setattr("core.mcp_http_server._session_identity", lambda *args: "owner")
+    app.state.sessions[session_id] = MCPSession("owner", session_queue)
 
     resp = client.post(
         f"/mcp/messages?sessionId={session_id}",

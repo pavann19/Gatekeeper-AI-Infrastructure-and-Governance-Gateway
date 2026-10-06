@@ -5,7 +5,8 @@ Re-runs a frozen stratified sample of ~300 rows from data/eval_suite.jsonl throu
 core.risk.assess_risk(text) and asserts that risk_level matches expected_risk exactly
 with zero tolerance.
 
-The corpus baseline was generated with NO judge backend reachable; 56 rows expect HIGH via judge_failure_fail_closed. On a host with a live judge, regenerate.
+The frozen baseline used unavailable judges. Canonical replay explicitly pins its
+model tier, artifacts and configuration; live-judge results are a separate experiment.
 
 Regeneration Policy:
 --------------------
@@ -31,8 +32,6 @@ from typing import Any, Dict, List
 
 import pytest
 
-import core.risk as risk_mod
-from core.risk import assess_risk
 
 
 CORPUS_FILE = os.path.join(os.path.dirname(__file__), "fixtures", "decision_replay_corpus.jsonl")
@@ -76,52 +75,24 @@ def test_corpus_fixture_validity():
 
 
 @pytest.mark.slow
-def test_decision_replay_regression_gate(monkeypatch):
-    """
-    Re-scores every row in the frozen corpus through assess_risk(text).
-    Asserts risk_level matches expected_risk exactly with zero tolerance.
-    On any mismatch, fails with a detailed diff.
-    """
-    rows = _load_corpus()
-    assert len(rows) > 0, "Corpus is empty"
+def test_decision_replay_regression_gate(tmp_path):
+    """Run in a fresh process so unit-test model state cannot change the oracle."""
+    import subprocess
+    from pathlib import Path
 
-    # Bypass cache so the test validates the real decision engine directly
-    monkeypatch.setattr(risk_mod, "lookup_cache", lambda prompt, vec: (None, None))
-    monkeypatch.setattr(risk_mod, "save_cache_entry", lambda *a, **k: None)
-
-    def _mock_fast_fail_post(*args, **kwargs):
-        raise ConnectionError("Judge backend unreachable")
-
-    # Mock judge HTTP calls and llama_guard path to fail-fast without connection timeout delays
-    monkeypatch.setattr("core.semantic_judge.requests.post", _mock_fast_fail_post)
-    monkeypatch.setattr(risk_mod, "llama_guard_arbitration", lambda *a, **k: None)
-
-    mismatches = []
-
-    for row in rows:
-        prompt_id = row["id"]
-        text = row["text"]
-        expected_risk = row["expected_risk"]
-        expected_source = row.get("expected_source", "unknown")
-
-        got_risk, details = assess_risk(text)
-        got_source = details.get("source", "unknown")
-
-        if got_risk != expected_risk:
-            snippet = text[:80].replace("\n", " ")
-            mismatches.append(
-                f"- ID: {prompt_id}\n"
-                f"  Snippet: {snippet!r}\n"
-                f"  Expected Risk: {expected_risk} (Source: {expected_source})\n"
-                f"  Got Risk:      {got_risk} (Source: {got_source})\n"
-            )
-
-    if mismatches:
-        diff_report = "\n".join(mismatches)
+    output = tmp_path / "canonical-replay"
+    root = Path(__file__).resolve().parents[1]
+    completed = subprocess.run(
+        [sys.executable, "-m", "scripts.canonical_replay", "--output", str(output)],
+        cwd=root, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=1800,
+    )
+    if completed.returncode != 0:
+        mismatch_path = output / "mismatches.json"
+        mismatches = mismatch_path.read_text(encoding="utf-8") if mismatch_path.exists() else ""
         pytest.fail(
-            f"Decision replay regression gate failed on {len(mismatches)}/{len(rows)} cases:\n\n"
-            f"{diff_report}\n"
-            "Corpus must NOT be regenerated without deliberate, reviewed decision changes."
+            "Canonical decision replay failed; degraded model tiers are not equivalent.\n"
+            + completed.stdout + completed.stderr + mismatches
         )
 
 

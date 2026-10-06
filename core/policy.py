@@ -91,7 +91,7 @@ def _parse_policy_file(path: str) -> dict:
         return json.load(f)
 
 
-def load_policy_file(path: str = None) -> dict:
+def load_policy_file(path: str | None = None) -> dict:
     """Public wrapper over `_parse_policy_file`, defaulting to the live
     `settings.POLICY_RULES_FILE` -- for callers (the Policy Editor API)
     that need the raw parsed content itself, not a resolved `PolicySet`.
@@ -351,11 +351,11 @@ def reload_policies():
     return _store.load(force=True)
 
 
-def resolve_policy_set(tenant_id: str, store: PolicyStore = None) -> PolicySet:
+def resolve_policy_set(tenant_id: str, store: PolicyStore | None = None) -> PolicySet:
     return (store or _store).get(tenant_id)
 
 
-def get_default_action(store: PolicyStore = None) -> str:
+def get_default_action(store: PolicyStore | None = None) -> str:
     """The top-level, tenant-independent fail-safe action -- for a caller
     (the Settings/Protection view) that wants to show what happens for a
     capability/risk combination no tenant's policy explicitly maps."""
@@ -363,7 +363,7 @@ def get_default_action(store: PolicyStore = None) -> str:
 
 
 def policy_decision(capability: str, risk: str, tenant_id: str = DEFAULT_TENANT_ID,
-                    store: PolicyStore = None):
+                    store: PolicyStore | None = None):
     """
     Determines the enforcement action for (capability, risk) under a
     tenant's policy.

@@ -199,7 +199,14 @@ def _apply_policy(feature_values: dict, policy=None, feature_order=None) -> floa
     is correct for every call site that predates upgrade tiers.
     """
     pol = policy if policy is not None else _policy
-    order = feature_order if feature_order is not None else _policy["feature_order"]
+    if pol is None:
+        raise ValueError("Fusion policy unavailable")
+    if feature_order is None:
+        if _policy is None:
+            raise ValueError("Fusion feature order unavailable")
+        order = _policy["feature_order"]
+    else:
+        order = feature_order
     z = pol["intercept"]
     for name, mean, scale, coef in zip(
         order, pol["scaler_mean"], pol["scaler_scale"], pol["coefficients"],

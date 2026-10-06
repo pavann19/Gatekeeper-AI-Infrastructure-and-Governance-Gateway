@@ -56,7 +56,7 @@ def test_get_model_returns_same_cached_instance(monkeypatch):
     fake = _FakeModel()
     load_calls = {"n": 0}
 
-    def fake_constructor(name):
+    def fake_constructor(name, revision=None):
         load_calls["n"] += 1
         return fake
 
@@ -75,9 +75,11 @@ def test_get_model_returns_same_cached_instance(monkeypatch):
 def test_get_model_uses_configured_embedding_model_name(monkeypatch):
     _reset_model_cache(monkeypatch)
     seen_names = []
+    seen_revisions = []
 
-    def fake_constructor(name):
+    def fake_constructor(name, revision=None):
         seen_names.append(name)
+        seen_revisions.append(revision)
         return _FakeModel()
 
     monkeypatch.setattr(
@@ -85,12 +87,13 @@ def test_get_model_uses_configured_embedding_model_name(monkeypatch):
     )
     embeddings_mod._get_model()
     assert seen_names == [embeddings_mod.EMBEDDING_MODEL]
+    assert seen_revisions == [embeddings_mod.DEFAULT_EMBEDDING_REVISION]
 
 
 def test_model_load_failure_propagates_and_does_not_cache(monkeypatch):
     _reset_model_cache(monkeypatch)
 
-    def failing_constructor(name):
+    def failing_constructor(name, revision=None):
         raise OSError("model not found")
 
     monkeypatch.setattr(

@@ -141,19 +141,19 @@ _COLUMNS: dict[str, tuple[str, ...]] = {
     "output_assessment": (
         "timestamp", "request_id", "tenant", "capability", "decision",
         "response_hash", "pii_leakage", "secrets_detected", "toxicity_detected",
-        "hallucination_detected", "system_prompt_leak_detected", "source"),
+        "hallucination_detected", "system_prompt_leak_detected", "source", "toxicity_assessed", "toxicity_status"),
     "gateway_call": (
         "timestamp", "request_id", "tenant", "capability", "provider", "model",
         "success", "latency_ms", "decision", "usage_json", "error"),
     "tool_call": (
         "timestamp", "request_id", "tenant", "capability", "tool", "decision",
-        "risk_level", "reason", "arguments_hash", "success", "error"),
+        "risk_level", "reason", "arguments_hash", "success", "error", "phase"),
 }
 
 _BOOL_COLUMNS = {
     "educational_context", "symbolic_triggered", "judge_invoked", "pii_leakage",
     "secrets_detected", "toxicity_detected", "hallucination_detected",
-    "system_prompt_leak_detected", "success",
+    "system_prompt_leak_detected", "success", "toxicity_assessed",
 }
 
 
@@ -165,8 +165,17 @@ def _connect(path: str | None = None) -> sqlite3.Connection:
     conn = sqlite3.connect(_db_path(path), timeout=5.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA synchronous=FULL")
     conn.executescript(_SCHEMA)
+    for table, additions in {
+        "tool_call": {"phase": "TEXT"},
+        "output_assessment": {"toxicity_assessed": "INTEGER", "toxicity_status": "TEXT"},
+    }.items():
+        columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        for column, kind in additions.items():
+            if column not in columns:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
+    conn.commit()
     for table, col in _INDEXES:
         conn.execute(
             f"CREATE INDEX IF NOT EXISTS ix_{table}_{col} ON {table}({col})"

@@ -7,6 +7,7 @@ still returns well-formed probabilities and still produces a plausible results
 table, it is just backwards. That failure is silent, so it gets tests.
 """
 import types
+import sys
 
 import pytest
 
@@ -24,6 +25,32 @@ from core.detectors import (
 
 
 # --- registry ---------------------------------------------------------------
+
+def test_uncased_toxicity_preprocessing_is_explicit(monkeypatch):
+    """An uncased vocabulary must not inherit changing runtime defaults."""
+    calls = []
+    model = types.SimpleNamespace(
+        config=types.SimpleNamespace(id2label={0: "toxic"}), eval=lambda: None,
+    )
+    fake = types.SimpleNamespace(
+        AutoTokenizer=types.SimpleNamespace(
+            from_pretrained=lambda *args, **kwargs: calls.append(kwargs) or object(),
+        ),
+        AutoModelForSequenceClassification=types.SimpleNamespace(
+            from_pretrained=lambda *args, **kwargs: model,
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "transformers", fake)
+    detector = get_detector("toxic_bert")
+    # Use a fresh instance so earlier tests cannot leave a loaded tokenizer.
+    fresh = TransformerDetector(
+        detector.name, detector.model_id, ["toxic"], detector.targets,
+        revision=detector.revision,
+    )
+    fresh._load()
+    assert fresh._load_error is None
+    assert calls[0].get("do_lower_case") is True
+
 
 def test_registry_contains_baseline_and_public_detectors():
     reg = get_registry()
