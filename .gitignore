@@ -12,6 +12,7 @@ build/
 # Virtual environments
 .env
 .env*
+!.env.example
 .venv
 env/
 venv/
@@ -31,7 +32,7 @@ logging/
 *.jsonl
 !tests/fixtures/decision_replay_corpus.jsonl
 
-# Agent/debug scaffolding — must never be committed
+# Local debug output
 debug-*.log
 
 # Local benchmark and evaluation evidence. Public repository keeps curated
@@ -42,7 +43,7 @@ _evidence/
 benchmark_rows.csv
 benchmark_results.json
 
-# Notes, Clutter & Archive (Crucial: never commit the archive folder to GitHub)
+# Local notes and archives
 Notes.txt
 Gatekeeper_Technical_Report.md
 Gatekeeper_Technical_Report.pdf
@@ -64,7 +65,7 @@ Thumbs.db
 # Binary & reports
 *.pdf
 
-# Local HuggingFace model cache (redirected off the C: drive)
+# Local model cache
 .hf_cache/
 
 # API key store (hashed keys, but still a credential inventory)
@@ -73,7 +74,36 @@ api_keys.json
 # Local tenant fixtures (e.g. from live pentest setup) -- not real deployment config
 tenants.json
 
-# Local editor / assistant config and runtime state — never public
+# Local editor configuration and runtime state
 .claude/
 review_queue.json
 .bench_api_key
+*.json.lock
+
+# Generated verification, benchmark and runtime outputs
+*.log
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+coverage.xml
+coverage.json
+.coverage.*
+policy_versions/
+/docs/screenshots/
+/docs/benchmarks/
+/docs/observability/
+
+# Local development plans and research corpus
+/docs/archive/
+/docs/research/
+/docs/MAINTENANCE.md
+/docs/ROADMAP_V3.md
+/scripts/git-hooks/
+_bench_local/
+
+# CI-produced supply-chain artifacts
+/*-sbom.spdx.json

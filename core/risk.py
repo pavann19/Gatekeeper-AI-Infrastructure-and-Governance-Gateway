@@ -85,12 +85,6 @@ from core.policy_loader import (  # noqa: E402
     get_jailbreak_patterns, get_instruction_override_patterns, get_hard_ban_keywords,
 )
 
-# Split 2026-08-14: JAILBREAK_PATTERNS previously also held instruction-
-# override (prompt-injection) regexes, so every hit reported the same
-# "JAILBREAK_DETECTED" detail regardless of which kind of attack actually
-# matched. See policies/symbolic_rules.json's _comment and
-# docs/ENGINEERING_ASSESSMENT.md section 1y. No pattern coverage changed,
-# only which detail string each one now reports.
 JAILBREAK_PATTERNS = get_jailbreak_patterns()
 INSTRUCTION_OVERRIDE_PATTERNS = get_instruction_override_patterns()
 HARD_BAN_KEYWORDS = get_hard_ban_keywords()
@@ -189,28 +183,6 @@ def hard_ban_triggered(prompt: str) -> tuple:
         return True, violation
     return False, None
 
-# ============================================================================
-# STAGE 1.5: FAST PATH (cheap, vector-only, escalate-only cascade)
-# ============================================================================
-#
-# Everything in this stage is a cosine similarity against an already-loaded
-# anchor set — no transformer inference, no fusion call. §1m measured the
-# expensive part of the pipeline as the 3-detector fusion pass (parallel
-# median 308ms, cold p50 938ms+ end to end); meta-intent and anchor-threat
-# similarity are microsecond-scale dot products on the SAME prompt_vec the
-# pipeline already computed for the cache lookup in Stage 0.
-#
-# ASYMMETRIC AUTHORITY, the property that makes this cascade safe rather
-# than a detection regression: this stage may only ESCALATE to HIGH, never
-# ALLOW. A prompt that clears both cheap checks still goes through the full
-# deep path unchanged — cheap anchor similarity to a small, fixed set is
-# exactly what an adversarial prompt is likely to evade BY DESIGN, which is
-# the whole reason the deep fusion pass (which generalises better) exists at
-# all. This stage only saves latency for the subset of attacks a cheap
-# signal is ALREADY confident about; it does not, and cannot, reduce
-# latency for benign or subtle traffic, which must still reach the deep
-# path. See docs/ENGINEERING_ASSESSMENT.md §1v for the measured before/after
-# and this scope boundary stated in full.
 def _fast_path_signals(prompt_vec) -> dict:
     """The two cheap, vector-only signals, computed once and reused whether
     or not they end up deciding anything — collect_semantic_signals accepts
@@ -222,15 +194,10 @@ def _fast_path_signals(prompt_vec) -> dict:
 
 
 def _fast_path_decision(fast: dict):
-    """
-    Returns (risk, source) if the cheap signals alone are already decisive,
-    else None. Both thresholds are pre-existing, calibrated values reused
-    verbatim from their deep-path equivalents (META_INTENT_THRESHOLD;
-    SEMANTIC_THRESHOLD_HIGH, the standalone anchors-only operating point —
-    see docs/ENGINEERING_ASSESSMENT.md §1b) — this stage introduces no new
-    threshold, only an earlier exit for a decision the deep path (or its
-    anchors-only fallback) would have reached anyway.
-    """
+    """Return a decisive cheap-signal risk/source pair or None.
+
+    Uses the configured deep-path thresholds; ambiguous signals continue to
+    full collection/fusion rather than fabricating a verdict."""
     if fast["meta_intent_score"] >= META_INTENT_THRESHOLD:
         logger.warning(f"🚫 META-INTENT DETECTED (score: {fast['meta_intent_score']:.3f}) — fast path")
         return "HIGH", "fast_path_meta_intent"
@@ -247,25 +214,8 @@ def _fast_path_decision(fast: dict):
 # ============================================================================
 
 def collect_semantic_signals(prompt: str, prompt_vec, fast: dict | None = None) -> dict:
-    """
-    Stage 2: Collects all semantic signals without making any blocking decisions.
-    Returns a dict of raw signal values for downstream fusion.
-
-    `fast`, when provided, carries meta_intent_score/threat_score already
-    computed by the Stage 1.5 fast-path check (see above) — reused here
-    rather than recomputed, since they are the identical dot products
-    against the identical prompt_vec. `fast=None` (the default) preserves
-    the original from-scratch behaviour for any caller that still invokes
-    this function directly, e.g. existing tests that construct signals
-    without going through assess_risk's fast-path stage.
-
-    BUG FIX (F1): Previously, `details` and the first `t0` were used before
-    being assigned, causing a NameError on every prompt that survived Stage 0
-    (cache hit) and Stage 1 (hard ban).  This made the G3 pipeline completely
-    non-functional in the committed snapshot and invalidated the published
-    evaluation results (ASR 0%, FPR ~10%).  Both variables are now initialised
-    at the start of the function before first use.
-    """
+    """Stage 2: Collects all semantic signals without making any blocking decisions.
+        Returns a dict of raw signal values for downstream fusion."""
     # FIX: Initialise accumulator dict and first timing checkpoint here.
     details: dict = {}
 
@@ -289,15 +239,6 @@ def collect_semantic_signals(prompt: str, prompt_vec, fast: dict | None = None) 
         details["faiss_threat_search_ms"] = round((t1 - t0) * 1000, 2)
 
         details["threat_score"] = float(threat_score)
-    # BUG FIX (2026-08-14, §1z): this previously called
-    # check_dynamic_safe_harbors(prompt_vec) directly -- a function that
-    # only ever consults DYNAMIC_SAFE_HARBORS, a list nothing populated
-    # (see docs/ENGINEERING_ASSESSMENT.md section 1z), so it always
-    # returned 0.0 (falsy). That silently disabled the entire educational-
-    # safe-harbor MEDIUM-downgrade path in fuse_signals below: no prompt,
-    # however clearly framed as authorized security research against the
-    # real, populated `educational_store` anchors, could ever trigger it.
-    # check_educational_context is the correct, complete check.
     details["is_educational"] = check_educational_context(prompt_vec)
 
     # 3) Check Domain Alignment (topicality — NOT a safety signal).
@@ -317,13 +258,6 @@ def collect_semantic_signals(prompt: str, prompt_vec, fast: dict | None = None) 
 
     details["centroid_score"] = compute_centroid_similarity(prompt_vec)
 
-    # 4) Multi-detector learned fusion (see core/fusion.py). `threat_score`
-    #    above is the anchor-only signal this project shipped with originally;
-    #    the fusion combines it with three additional specialised detectors
-    #    and is the validated improvement (out-of-fold AUC 0.944 vs 0.890
-    #    anchors-alone — see docs/ENGINEERING_ASSESSMENT.md §1d-1e). It is
-    #    computed here, in Stage 2, so Stage 3 can make a single deterministic
-    #    decision from whichever signal is actually available.
     t0 = time.perf_counter()
     fusion = fused_threat_score(prompt, anchor_score=details["threat_score"])
     t1 = time.perf_counter()
@@ -334,12 +268,6 @@ def collect_semantic_signals(prompt: str, prompt_vec, fast: dict | None = None) 
     details["fusion_threshold_medium"] = fusion["threshold_medium"]
     details["fusion_detail"] = fusion["detail"]
     details["fusion_detector_scores"] = fusion["detector_scores"]
-    # Per-class risk vector (§1w) — `fused_threat_score` already computes
-    # this (core/fusion.py's _select_per_class_verdict), it just wasn't
-    # copied into `details` before. `triggering_class` is None and
-    # `class_scores` is {} when FUSION_PER_CLASS is off or the loaded
-    # policy artifact has no per-class section — distinct from "computed
-    # but nothing triggered", which is not a state this returns.
     details["fusion_triggering_class"] = fusion.get("triggering_class")
     details["fusion_class_scores"] = fusion.get("class_scores", {})
     if not fusion["available"]:
@@ -355,65 +283,17 @@ def collect_semantic_signals(prompt: str, prompt_vec, fast: dict | None = None) 
 # ============================================================================
 
 def classify_topicality(signals: dict) -> str:
-    """
-    Determines whether the prompt falls inside the deployment's configured
-    subject domain.  This is a SCOPING judgement, not a SAFETY judgement:
-    "is this prompt about my product?" is a different question from
-    "is this prompt an attack?".  Conflating the two is what produced the
-    ~98% false-positive rate in the pre-fix benchmark, because every benign
-    off-topic prompt was scored as a malice prediction.
-
-    Returns one of: IN_DOMAIN, OUT_OF_DOMAIN, UNKNOWN.
-    """
+    """Implementation of classify topicality."""
     if signals.get("domain_aligned") is None:
         return "UNKNOWN"
     return "IN_DOMAIN" if signals["domain_aligned"] else "OUT_OF_DOMAIN"
 
 
 def _in_upper_ambiguous_band(score: float, threshold_medium: float, threshold_high: float) -> bool:
-    """
-    THE FIX for a real structural bug found while benchmarking Llama Guard
-    live (docs/ENGINEERING_ASSESSMENT.md §1j): Stage 4 is only ever reached
-    from fuse_signals' ambiguous-zone branch (score >= threshold_medium), so
-    `threat_present = score >= threshold_medium`, computed again at the Stage
-    4 call site, was TAUTOLOGICALLY TRUE every single time — the condition
-    had already been guaranteed true by the caller before this function could
-    ever run. The practical effect: a SAFE verdict from ANY arbiter — the
-    Ollama judge or Llama Guard — was unconditionally capped at MEDIUM, never
-    LOW, regardless of how confident or accurate the arbiter was. This is why
-    swapping in Llama Guard moved the Strict metric (HIGH vs not-HIGH) but
-    left the Operational metric (HIGH-or-MEDIUM vs LOW) completely flat: no
-    arbiter's SAFE verdict could ever reach the Operational metric's LOW
-    bucket, by construction, no matter how good it was.
+    """Distinguish the upper ambiguous band from the lower judge zone.
 
-    The fix is NOT to make the restriction disappear — an attack that evades
-    the fast fusion AND fools the judge is exactly the case this restriction
-    exists to catch, and removing it outright would weaken a legitimate
-    defence-in-depth posture. Instead the ambiguous band [threshold_medium,
-    threshold_high) is split at its MIDPOINT. A score in the lower half —
-    barely past threshold_medium, the mildest kind of "ambiguous" — lets a
-    SAFE verdict fully clear to LOW: the fast path was only weakly suspicious,
-    and a confident arbiter is trusted. A score in the upper half — close to
-    the HIGH boundary, the strongest kind of "ambiguous" — keeps the
-    restriction: this is precisely the case where a judge being fooled is
-    most consequential, so SAFE still caps at MEDIUM. This makes the
-    restriction proportionate to how suspicious the original signal was,
-    rather than a single bit that is identical for every ambiguous-zone
-    prompt regardless of where in that zone it actually falls.
-
-    HONEST CAVEAT: the midpoint is a principled DEFAULT, not an empirically
-    calibrated threshold — this project has no labelled data yet on how often
-    a SAFE verdict in the lower half is actually correct. Every other
-    threshold in this codebase (SEMANTIC_THRESHOLD_HIGH/MEDIUM, the fusion
-    policy's own thresholds) was calibrated by ROC sweep against a stated FPR
-    budget on labelled data; this one cannot be yet, because the relevant
-    label — "was the arbiter's SAFE verdict actually correct for a prompt at
-    this score" — does not exist as a dataset. It does now start
-    accumulating for free: every llama_guard_async_confirmation escalation is
-    exactly that label for one point in the band. Once enough of those exist,
-    this midpoint should be replaced with a calibrated split, the same way
-    every other guessed threshold in this project's history eventually was.
-    """
+    A nonzero threat score alone is insufficient because the caller already
+    enters this branch after the medium threshold."""
     band = threshold_high - threshold_medium
     if band <= 0:
         # Degenerate config (medium >= high) — fail toward the more
@@ -498,38 +378,11 @@ def fuse_signals(signals: dict, prompt: str) -> tuple:
 # ============================================================================
 
 def llama_guard_arbitration(prompt: str, threat_present: bool = False):
-    """
-    Stage 4 arbiter using Llama Guard's hazard-taxonomy classification,
-    preferred over the generic Ollama judge when available.
+    """Arbitrate with the Llama Guard safety classifier when available.
 
-    WHY THIS EXISTS: Llama Guard is a purpose-built safety classifier —
-    measured at 60-63% harmful-content detection offline (see
-    docs/ENGINEERING_ASSESSMENT.md §1f/§1h) versus the anchor baseline's
-    ~24%, and versus whatever the general-purpose chat model behind the
-    Ollama judge happens to achieve when repurposed via a prompt. Until this
-    function, that offline number never reached the live pipeline.
-
-    WHY ONLY HERE, NOT IN THE ALWAYS-ON FUSION: Llama Guard takes seconds per
-    prompt on CPU (core/fusion.py's LIVE_MODEL_DETECTORS deliberately excludes
-    it for exactly this reason). Stage 4 only runs for the ambiguous zone — a
-    small fraction of total traffic — where that latency is an acceptable
-    trade for materially better harmful-content coverage, unlike the
-    always-on Stage 2/3 fusion path where it would be a latency regression on
-    every request.
-
-    Returns (risk, source) on success, or None if Llama Guard is unavailable
-    (not loaded, gated, out of memory, or raises for any reason) — the caller
-    falls back to judge_arbitration (the Ollama judge), the same fail-closed-
-    to-fallback pattern core/fusion.py already established for detector
-    availability.
-
-    A circuit breaker (core/circuit_breaker.py) guards the `classify()` call
-    specifically: repeated inference failures (as opposed to the fast,
-    expected "insufficient memory" precheck result, which already fails fast
-    on its own and isn't counted here) trip the breaker so subsequent
-    requests skip straight to the Ollama fallback instead of each retrying a
-    call that just failed.
-    """
+    This is a judge path, not an always-on fusion feature. Availability/failure
+    remain explicit; safety arbitration must not manufacture a permissive
+    outcome from a missing model."""
     from core.detectors import get_detector
     from core.circuit_breaker import llama_guard_breaker
 
@@ -582,35 +435,10 @@ def llama_guard_arbitration(prompt: str, threat_present: bool = False):
 
 
 def llama_guard_async_confirmation(prompt: str, prompt_vec, fast_risk: str, fast_source: str) -> None:
-    """
-    Runs Llama Guard AFTER a response has already been sent to the caller —
-    invoked via a background scheduler (e.g. FastAPI's BackgroundTasks), never
-    on the request path. This is what lets Stage 4 use Llama Guard's better
-    harmful-content coverage (§1f/§1h/§1j of docs/ENGINEERING_ASSESSMENT.md)
-    without imposing its multi-second tail latency (measured p99 ~18s) on the
-    ~9% of traffic that reaches the ambiguous zone.
+    """Run background confirmation after the caller response.
 
-    ONE-WAY RATCHET, matching this pipeline's existing fail-closed philosophy
-    (the same asymmetry `assess_risk`'s cache-hit path already applies via
-    `cache_locked_high` — a cached HIGH can never be served back down):
-
-      - If Llama Guard's slower, more accurate verdict says the prompt is
-        UNSAFE and the fast path already served something less severe, this
-        ESCALATES: the cache entry for this exact prompt is upgraded to HIGH,
-        so every future occurrence — and, via the cache's fuzzy tier, close
-        near-duplicates — is blocked immediately without waiting on Llama
-        Guard again. The already-sent response cannot be recalled; this
-        closes the gap for every subsequent request instead.
-      - If Llama Guard is more lenient than the fast path, nothing is
-        downgraded. A response already served under a stricter verdict stays
-        that way — an async, lower-priority confirmation is not license to
-        loosen a decision already enforced.
-
-    Failures here (Llama Guard unavailable, raises, or the write to the cache
-    is skipped) are logged and otherwise swallowed: this function runs after
-    the client already has an answer, so it must never raise into the
-    background-task runner or affect any other request.
-    """
+    Uses the captured input/security scope and can escalate retained cache
+    state. It is not synchronous clearance or permission to release output."""
     try:
         result = llama_guard_arbitration(prompt, threat_present=(fast_risk in ("MEDIUM", "HIGH")))
     except Exception as e:
@@ -694,49 +522,11 @@ def assess_risk(prompt: str, background_scheduler=None, raw_prompt: str | None =
 
 
 def _assess_risk(prompt: str, background_scheduler=None, raw_prompt: str | None = None) -> tuple:
-    """
-    Staged governance pipeline:
-        Stage 0: Cache lookup
-        Stage 1: Hard ban (symbolic veto)
-        Stage 2: Parallel signal collection
-        Stage 3: Deterministic fusion
-        Stage 4: Judge arbitration (only if needed)
-        Stage 5: Cache save + return
+    """Assess current symbolic veto, scoped cache, detector signals and fusion.
 
-    `background_scheduler`, if provided, is a callable with the signature
-    `scheduler(fn, *args)` that runs `fn(*args)` AFTER this function returns
-    (e.g. `FastAPI.BackgroundTasks.add_task`). When supplied, Stage 4 answers
-    immediately using only the fast Ollama judge (sub-second in practice) and
-    schedules Llama Guard's slower, more accurate confirmation to run
-    afterwards via `llama_guard_async_confirmation` — see that function's
-    docstring for the one-way escalate-only correction it applies.
-
-    When `background_scheduler` is None (the default), Stage 4 behaves as it
-    did before this existed: Llama Guard is tried synchronously, in-request,
-    falling back to the Ollama judge if unavailable. This is deliberate, not
-    a leftover — `tests/benchmark.py` and any other evaluation harness call
-    `assess_risk(prompt)` with no scheduler, because measuring detection
-    quality requires a single definitive verdict per prompt, not one that a
-    background task might revise after the fact. Only the live API path
-    (api/main.py) passes a real scheduler.
-    `raw_prompt`, if provided, is used ONLY for the local, in-process text
-    classifiers below (hard-ban regex, domain alignment, the fusion
-    sub-detectors) — never for the embedding, the persisted semantic cache,
-    or the judge escalation, all of which stay on `prompt` exactly as
-    before. This is a deliberate, narrow boundary, not a blanket "use raw
-    text everywhere": a live pentest (see docs/ROADMAP_V2.md's Phase 8
-    findings) found that `[REDACTED:PERSON]`-style placeholder tokens are
-    themselves out-of-distribution for text classifiers trained on natural
-    language — "Summarize the plot of Romeo and Juliet" was flagged
-    RESTRICT purely because redaction turned "Juliet" into a bracketed
-    token that spiked injection/toxicity sub-detector scores on an
-    otherwise benign sentence, reproduced with an unrelated second prompt.
-    Passing the original text to these in-process, non-persisted
-    classifiers fixes that false-positive class without touching the two
-    places redaction exists specifically to protect: anything written to
-    disk (the semantic cache) or sent to a process this one calls out to
-    (the LLM judge).
-    """
+    Threat risk and topicality remain separate. Required judge paths fail
+    closed. Local classifiers may use raw_prompt; downstream judges/cache use
+    privacy-processed content within the captured security identity."""
     text_for_detectors = raw_prompt if raw_prompt is not None else prompt
 
     from core import metrics as _metrics
@@ -756,9 +546,6 @@ def _assess_risk(prompt: str, background_scheduler=None, raw_prompt: str | None 
     # ---- INIT: Ensure FAISS indexes are populated (lazy, once only) ----
     _ensure_faiss_initialized()
 
-    # ---- STAGE 0: CACHE CHECK ----
-    # Timed as one "cache_lookup" stage (embedding + the actual cache probe)
-    # rather than split further -- see docs/perf/01-baseline-analysis.md.
     _t0 = time.perf_counter()
     prompt_vec = get_embedding(prompt)
     cached_risk, cached_score = lookup_cache(prompt, prompt_vec)

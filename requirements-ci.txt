@@ -1,12 +1,5 @@
-# CI-only requirements (lightweight where possible; no heavy ML MODEL
-# DOWNLOADS needed for unit tests — sentence-transformers and real HF weights
-# are still excluded/mocked). torch and faiss-cpu ARE included: several tests
-# exercise the real FAISSCache index (tests/test_cache.py) and real tensor
-# shape/label-resolution logic (tests/test_detectors.py) against synthetic
-# data, not mocks of those libraries themselves — the cache exact-match bug
-# this project fixed was exactly the kind of thing a faiss-free mock could
-# have hidden. Both are plain pip packages here, no model weights fetched.
-
+# Source-test dependencies. Real detector model downloads are omitted.
+# Torch and FAISS support tensor/index tests; see docs/EVALUATION.md.
 fastapi>=0.109.0
 uvicorn>=0.27.0
 httpx>=0.26.0
@@ -17,7 +10,6 @@ python-json-logger>=2.0.7
 requests>=2.31.0
 numpy>=1.26.0,<2.0.0
 spacy>=3.7.0
-# >=9.0.3 closes PYSEC-2026-1845 (predictable /tmp/pytest-of-{user} dir name).
 pytest>=9.0.3
 pytest-asyncio>=0.23.0
 pytest-cov>=4.1.0
@@ -25,20 +17,7 @@ ruff>=0.6.0
 torch>=2.0.0
 faiss-cpu>=1.7.4
 redis>=5.0.0
-# psutil is NOT a transitive dependency of torch/transformers/faiss, and was
-# missing from BOTH requirement files until this line — meaning
-# LlamaGuardDetector's memory precheck (core/detectors.py) silently no-ops
-# whenever psutil happens to be absent, in CI or in a real deployment, and the
-# detector proceeds to attempt loading a multi-GB model regardless of whether
-# it fits in memory. Declaring it explicitly is a correctness fix, not just a
-# CI convenience.
 psutil>=5.9.0
-# prometheus-client is imported by core/metrics.py, which api/main.py imports
-# unconditionally — so its absence is a collection-time ImportError for every
-# test module that touches the API, not a skipped feature. It must be in BOTH
-# requirement files for the same reason psutil above had to be.
 prometheus-client>=0.20.0
-# tests/test_openapi_contract.py validates the generated OpenAPI schema is
-# spec-conformant, not just "FastAPI didn't crash generating it" -- a
-# dev/CI-only tool, not something the running application itself imports.
 openapi-spec-validator>=0.7.0
+mypy==2.1.0

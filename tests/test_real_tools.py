@@ -155,8 +155,8 @@ def test_http_get_spec_requires_elevated_capability_and_medium_risk():
 
 
 def test_http_get_spec_bounds_url_length():
-    """Phase 8 hardening -- a URL has no legitimate reason to be huge;
-    an oversized one should never reach urlsplit/DNS resolution."""
+    """implementation hardening -- a URL has no legitimate reason to be huge;
+        an oversized one should never reach urlsplit/DNS resolution."""
     assert HTTP_GET_SPEC.parameters["properties"]["url"]["maxLength"] == 2048
 
 

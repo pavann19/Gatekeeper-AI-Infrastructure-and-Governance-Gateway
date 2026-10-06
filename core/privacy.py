@@ -39,7 +39,7 @@ class PrivacyAssessmentUnavailable(RuntimeError):
 def redact_pii(text: str, tenant_config=None) -> tuple:
     """
     Hybrid PII Detection Pipeline with optional per-tenant overrides.
-    Strategy: Fail-Fast. 
+    Strategy: Fail-Fast.
     1. Run Regex (skipping any patterns disabled for this tenant).
     2. If clean, run NER for configured labels (default: PERSON, ORG, GPE).
     """

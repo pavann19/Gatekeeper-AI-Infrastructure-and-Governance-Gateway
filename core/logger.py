@@ -70,6 +70,8 @@ _audit_lock = threading.Lock()
 
 
 def _persist_audit(event_type, entry):
+    from core.policy import policy_identity
+    entry = {**entry, 'policy_digest': policy_identity()}
     sqlite_authority = settings.AUDIT_READ_FROM_SQLITE
     try:
         if sqlite_authority:
@@ -104,14 +106,14 @@ def _persist_audit(event_type, entry):
 def log_event(capability, prompt, risk, decision, metadata=None):
     if metadata is None:
         metadata = {}
-    
+
     timestamp = datetime.now().isoformat()
     prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
 
     log_entry = {
         "timestamp": timestamp,
         # Distinguishes this record from log_output_event's records in the
-        # same audit stream — see that function's docstring (Phase 2, Output
+        # same audit stream — see that function's docstring (, Output
         # Security) for why they are separate events rather than one shape
         # with an optional half.
         "event_type": "input_assessment",
@@ -148,25 +150,25 @@ def log_event(capability, prompt, risk, decision, metadata=None):
 
 def log_output_event(capability, response_text, decision, metadata=None, tenant="unset", request_id="unset"):
     """
-    Audit record for an OUTPUT assessment — distinct from log_event's INPUT
-    record (Phase 2, Output Security roadmap item).
+        Audit record for an OUTPUT assessment — distinct from log_event's INPUT
+        record (implementation).
 
-    WHY A SEPARATE FUNCTION, not log_event with more optional fields. An
-    input assessment and an output assessment answer different questions
-    ("is this prompt an attack?" vs "is this response safe to return?") and
-    carry fields that don't apply to the other (risk/symbolic_triggered vs
-    pii_leakage/secrets_detected/system_prompt_leak). Cramming both into one
-    schema with everything optional makes every consumer of the audit log —
-    a query, a dashboard, a compliance export — responsible for knowing
-    which half of the record is meaningful for a given row. `event_type`
-    lets a query select cleanly; the two record shapes stay honest about
-    what they actually measure.
+        WHY A SEPARATE FUNCTION, not log_event with more optional fields. An
+        input assessment and an output assessment answer different questions
+        ("is this prompt an attack?" vs "is this response safe to return?") and
+        carry fields that don't apply to the other (risk/symbolic_triggered vs
+        pii_leakage/secrets_detected/system_prompt_leak). Cramming both into one
+        schema with everything optional makes every consumer of the audit log —
+        a query, a dashboard, a compliance export — responsible for knowing
+        which half of the record is meaningful for a given row. `event_type`
+        lets a query select cleanly; the two record shapes stay honest about
+        what they actually measure.
 
-    Previously MISSING ENTIRELY for the standalone /api/v1/assess_output
-    endpoint — that endpoint could BLOCK a response (PII leak, toxicity,
-    secret, hallucination) with zero audit trail. Every output decision must
-    be as auditable as every input decision; this closes that gap.
-    """
+        Previously MISSING ENTIRELY for the standalone /api/v1/assess_output
+        endpoint — that endpoint could BLOCK a response (PII leak, toxicity,
+        secret, hallucination) with zero audit trail. Every output decision must
+        be as auditable as every input decision; this closes that gap.
+        """
     if metadata is None:
         metadata = {}
 
@@ -193,27 +195,7 @@ def log_output_event(capability, response_text, decision, metadata=None, tenant=
 
 def log_gateway_event(capability, provider, model, success, latency_ms, decision,
                       usage=None, error=None, tenant="unset", request_id="unset"):
-    """
-    Audit record for a PROXIED CALL through the LLM gateway (Phase 5: Real
-    LLM Gateway, "Audit trail for the proxied call itself" roadmap item) —
-    a THIRD distinct event_type alongside log_event's "input_assessment"
-    and log_output_event's "output_assessment", for the same reason those
-    two are separate from each other: this answers a third, different
-    question ("did the call to the external provider succeed, and what did
-    it cost?") that neither the input nor output assessment records answer.
-
-    Deliberately does not duplicate the input/output governance verdicts —
-    those are already fully recorded by log_event/log_output_event for the
-    same request_id, joinable on it. `decision` here is the FINAL combined
-    decision the gateway returned to the caller (ALLOW/BLOCK/etc.), present
-    for a quick "did this proxied call actually go through" filter without
-    needing to join, not a duplicate source of truth for WHY.
-
-    No prompt or response content is logged here either — same privacy
-    discipline as every other audit event in this codebase. `usage` is
-    whatever the provider returned (core.llm_providers.LLMResponse.usage),
-    logged verbatim since it is already just token counts, not content.
-    """
+    """Persist a distinct provider-gateway event with sanitized metadata."""
     log_entry = {
         "timestamp": datetime.now().isoformat(),
         "event_type": "gateway_call",
@@ -235,33 +217,7 @@ def log_gateway_event(capability, provider, model, success, latency_ms, decision
 def log_tool_event(capability, tool_name, decision, risk_level, reason,
                    arguments=None, success=None, error=None,
                    tenant="unset", request_id="unset", phase="decision"):
-    """
-    Audit record for a TOOL CALL (Phase 6, Tool/Agent Gateway,
-    "Audit events" roadmap item) — a FOURTH distinct `event_type`
-    alongside `log_event`'s "input_assessment", `log_output_event`'s
-    "output_assessment", and `log_gateway_event`'s "gateway_call", for
-    the same reason all three are already separate from each other: this
-    answers a fourth, different question ("was this tool call allowed to
-    run, and did it succeed?") that none of the others answer. Emitted
-    for EVERY decision core/tools.py::execute_tool reaches — BLOCK and
-    REVIEW included, not just ALLOW — because "an agent tried to call a
-    tool it wasn't authorized for" is itself an auditable security event,
-    arguably more interesting than a routine successful call.
-
-    `arguments` is never logged verbatim — only its SHA-256 hash, same
-    privacy discipline `log_event`'s `prompt_hash` and `log_output_event`'s
-    `response_hash` already apply: a tool argument can carry the same
-    sensitive content a prompt can (a customer ID, a file path, a query
-    string), and this audit trail's existing guarantee — no raw content,
-    ever — must not have a silent exception for tool calls. Hashed as
-    `json.dumps(arguments, sort_keys=True)` so the same call always hashes
-    identically regardless of dict key order.
-
-    `success`/`error` are only meaningful when `decision == "ALLOW"` — a
-    BLOCK or REVIEW never reached the handler at all (see
-    `execute_tool`'s own docstring), so both stay `None` for those rows
-    rather than being coerced into a misleading `False`.
-    """
+    """Persist a tool intent/completion/failure event with argument hashes."""
     arguments_hash = None
     if arguments is not None:
         canonical = json.dumps(arguments, sort_keys=True, default=str)

@@ -8,7 +8,7 @@ client = TestClient(app)
 def test_assess_endpoint_clean(mock_assess_risk):
     # Mock assess_risk to return low risk so we don't trigger ML models in unit tests
     mock_assess_risk.return_value = ("LOW", {"semantic_score": 0.1, "source": "mock"})
-    
+
     response = client.post("/api/v1/assess", json={"prompt": "Hello world"})
     assert response.status_code == 200
     data = response.json()
@@ -66,7 +66,7 @@ def test_health_check():
     assert data["status"] == ("healthy" if all(data["checks"].values()) else "degraded")
 
 
-# --- Phase 8 hardening: /health consults the circuit breaker instead of -----
+# --- /health consults the circuit breaker instead of -----
 # --- always making a fresh network call (found via a real load test showing
 # --- /health latency badly degrading under concurrency when Ollama is down)
 

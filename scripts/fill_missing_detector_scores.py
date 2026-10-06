@@ -1,15 +1,7 @@
-"""
-Incrementally completes a detector's score cache against the full eval
-suite -- scores only rows missing from `_evidence/detector_scores/<name>.jsonl`
-and appends, rather than scripts/compare_detectors.py's --refresh, which
-rescores EVERY row from scratch the moment even one id is missing from
-cache. That distinction is the entire reason this script exists: after
-scripts/build_eval_suite.py grows the suite, --refresh would burn hours
-re-scoring rows that were already scored and unchanged.
+"""Incrementally complete a local detector score cache for a supplied suite.
 
-Usage:
-    python -m scripts.fill_missing_detector_scores anchors protectai_injection
-"""
+Requires unchanged dataset and detector identity; cached score reuse is not
+proof that the runtime or model revision is unchanged."""
 import json
 import os
 import sys

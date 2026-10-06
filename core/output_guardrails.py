@@ -60,35 +60,35 @@ def check_system_prompt_leakage(response_text: str, system_prompt: str,
 
 def assess_output(response_text: str, system_prompt: str | None = None, tenant_config=None) -> tuple:
     """
-    Evaluates the LLM's response before it is returned to the user.
+        Evaluates the LLM's response before it is returned to the user.
 
-    Checks, in order (cheapest/most severe first, mirroring core/risk.py's
-    own hard-veto-before-expensive-checks shape):
-    1. Secrets (API keys, tokens, private key blocks) — BLOCK. No safe
-       partial version of a leaked credential exists, so there is nothing to
-       redact-and-continue here, unlike PII below.
-    2. System-prompt leakage (only if `system_prompt` was supplied) — BLOCK.
-    3. PII — REDACT AND CONTINUE, not block (Phase 2, Output Security). The
-       previous behaviour blocked the entire response over a single
-       incidental PII match, discarding the redaction it had already
-       computed. This mirrors the INPUT side's own behaviour
-       (core/risk.py's collect_semantic_signals runs on the PII-redacted
-       prompt, never on the raw one) rather than treating input and output
-       PII inconsistently.
-    4. Toxicity / harmful content, via Semantic Judge — BLOCK. Runs on the
-       PII-redacted text, not the raw text, for the same reason (2) redacts
-       rather than reveals: a toxicity judge does not need to see PII to do
-       its job, so there is no reason to widen exposure of it further. This
-       assessment passes only for an explicit SAFE verdict. Unavailable,
-       malformed and failed judgments block release of the response.
+        Checks, in order (cheapest/most severe first, mirroring core/risk.py's
+        own hard-veto-before-expensive-checks shape):
+        1. Secrets (API keys, tokens, private key blocks) — BLOCK. No safe
+           partial version of a leaked credential exists, so there is nothing to
+           redact-and-continue here, unlike PII below.
+        2. System-prompt leakage (only if `system_prompt` was supplied) — BLOCK.
+        3. PII — REDACT AND CONTINUE, not block (implementation). The
+           previous behaviour blocked the entire response over a single
+           incidental PII match, discarding the redaction it had already
+           computed. This mirrors the INPUT side's own behaviour
+           (core/risk.py's collect_semantic_signals runs on the PII-redacted
+           prompt, never on the raw one) rather than treating input and output
+           PII inconsistently.
+        4. Toxicity / harmful content, via Semantic Judge — BLOCK. Runs on the
+           PII-redacted text, not the raw text, for the same reason (2) redacts
+           rather than reveals: a toxicity judge does not need to see PII to do
+           its job, so there is no reason to widen exposure of it further. This
+           assessment passes only for an explicit SAFE verdict. Unavailable,
+           malformed and failed judgments block release of the response.
 
-    5. Semantic Grounding Check (hallucination) — BLOCK. Same redacted text.
+        5. Semantic Grounding Check (hallucination) — BLOCK. Same redacted text.
 
-    Returns:
-        (decision, details) where decision is "ALLOW" or "BLOCK".
-        details["clean_response"] carries the PII-redacted text whenever the
-        response was not blocked outright — None if it was.
-    """
+        Returns:
+            (decision, details) where decision is "ALLOW" or "BLOCK".
+            details["clean_response"] carries the PII-redacted text whenever the
+            response was not blocked outright — None if it was.
+        """
     details = {
         "secrets_detected": False,
         "system_prompt_leak_detected": False,

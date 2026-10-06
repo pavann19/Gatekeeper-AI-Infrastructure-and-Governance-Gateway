@@ -1,46 +1,20 @@
-# core/review_queue.py
-"""
-Human review queue (Phase 4 roadmap item). Backs the `REVIEW` decision
-outcome: a request a tenant's policy maps to REVIEW is neither auto-allowed
-nor auto-blocked — it is queued, and a human resolves it to a final
-ALLOW/BLOCK.
-
-DESIGN, MIRRORING core/auth.py's KeyStore / core/tenancy.py's TenantStore
---------------------------------------------------------------------------
-A single JSON object file (review_queue.json: review_id -> record),
-read-modify-written on each mutation — NOT the audit log's append-only
-JSONL convention. The audit log is append-only because it never needs to
-change once written (a compliance record). A review record's whole point
-is that it changes exactly once, from PENDING to APPROVED/REJECTED — an
-append-only log would need every reader to replay history to find a
-record's current state, for a use case (a handful of pending reviews at
-any moment) where that replay buys nothing a mutable file doesn't already
-give more simply.
-
-WHAT IS DELIBERATELY NOT STORED
-----------------------------------
-No raw prompt text — only its SHA-256 hash, matching core/logger.py's
-audit-record convention exactly (log_event stores `prompt_hash`, never the
-prompt). A reviewer resolving a request needs to know WHAT triggered review
-(capability, risk, tenant, reason) to make a judgement call, but this
-module does not assume a human reviewer necessarily needs the raw prompt
-text visible in this queue's own storage — a real deployment wanting that
-would surface it via the request_id, joining against wherever the caller
-itself logs the actual prompt (which Gatekeeper, as a sidecar, was never
-positioned to be the source of truth for).
-"""
+"""Durable review state, serialized across threads and local processes."""
 import json
+from copy import deepcopy
 import os
 import uuid
-from dataclasses import asdict, dataclass
+import tempfile
+from contextlib import contextmanager
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 
 from core.config import settings
+from core.state_lock import state_lock
 from core.logger import get_logger
 
 logger = get_logger(__name__)
 
-VALID_STATUSES = ("PENDING", "APPROVED", "REJECTED")
+VALID_STATUSES = ("PENDING", "APPROVED", "REJECTED", "CONSUMED")
 _RESOLUTION_TO_DECISION = {"APPROVED": "ALLOW", "REJECTED": "BLOCK"}
 
 
@@ -58,6 +32,9 @@ class ReviewRecord:
     resolved_at: str | None = None
     reviewer: str | None = None
     final_decision: str | None = None
+    expires_at: str | None = None
+    context: dict = field(default_factory=dict)
+    consumed_at: str | None = None
 
 
 class ReviewQueue:
@@ -65,39 +42,62 @@ class ReviewQueue:
         self.path = path or settings.REVIEW_QUEUE_FILE
         self._records: dict[str, dict] = {}
         self._loaded = False
+        self._corrupt = False
 
     def load(self, force=False):
         if self._loaded and not force:
             return self
         self._loaded = True
+        self._corrupt = False
         if not os.path.exists(self.path):
             self._records = {}
             return self
         try:
+            if os.path.getsize(self.path) > settings.REVIEW_MAX_BYTES:
+                raise ValueError('Review store exceeds configured byte limit')
             with open(self.path, "r", encoding="utf-8") as f:
-                self._records = json.load(f)
-        except Exception as e:
-            # Fail closed to an EMPTY queue, not a crash — a corrupt review
-            # queue file must not take down request handling. Reviews
-            # already resolved are unaffected (the resolution already fed
-            # back to whichever caller checked status before corruption);
-            # anything still PENDING is lost, which is the same class of
-            # data-loss risk core/auth.py's KeyStore accepts for the same
-            # reason: a queue this codebase can't parse is not a queue this
-            # codebase can safely keep enforcing decisions from either.
-            logger.error(f"Review queue at {self.path} unreadable ({e}); starting empty.")
+                records = json.load(f)
+                if not isinstance(records, dict) or any(
+                    not isinstance(r, dict) or r.get("review_id") != key
+                    or r.get("status") not in VALID_STATUSES
+                    for key, r in records.items()
+                ):
+                    raise ValueError("Malformed review state")
+                self._records = records
+        except Exception:
+            logger.error("Review state unreadable; mutations disabled until recovery")
             self._records = {}
+            self._corrupt = True
         return self
 
-    def _save(self):
-        os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
-        tmp_path = f"{self.path}.tmp"
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(self._records, f, indent=2)
-        os.replace(tmp_path, self.path)  # atomic on both POSIX and Windows
+    @contextmanager
+    def _transaction(self, write=False):
+        with state_lock(self.path):
+            self.load(force=True)
+            if write and self._corrupt:
+                raise RuntimeError("Review state is corrupt; restore it before writing")
+            yield
+            if write:
+                self._save()
 
-    def enqueue(self, reason, capability, risk, tenant, prompt_hash, request_id) -> ReviewRecord:
-        self.load()
+    def _save(self):
+        payload = json.dumps(self._records, indent=2)
+        if len(payload.encode('utf-8')) > settings.REVIEW_MAX_BYTES:
+            raise RuntimeError('Review store capacity exhausted')
+        directory = os.path.dirname(self.path) or "."
+        os.makedirs(directory, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=".review-")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(payload)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, self.path)
+        finally:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+
+    def enqueue(self, reason, capability, risk, tenant, prompt_hash, request_id, context=None) -> ReviewRecord:
         record = ReviewRecord(
             review_id=uuid.uuid4().hex,
             status="PENDING",
@@ -108,54 +108,83 @@ class ReviewQueue:
             prompt_hash=prompt_hash,
             request_id=request_id,
             created_at=datetime.now(timezone.utc).isoformat(),
+            expires_at=datetime.fromtimestamp(datetime.now(timezone.utc).timestamp() + 3600, timezone.utc).isoformat(),
+            context=deepcopy(context or {}),
         )
-        self._records[record.review_id] = asdict(record)
-        self._save()
+        with self._transaction(write=True):
+            if len(self._records) >= settings.REVIEW_MAX_RECORDS:
+                raise RuntimeError('Review store capacity exhausted')
+            self._records[record.review_id] = asdict(record)
         logger.info(f"Review queued: {record.review_id} (tenant={tenant}, risk={risk})")
         return record
 
     def get(self, review_id: str) -> dict | None:
-        self.load()
-        return self._records.get(review_id)
+        with self._transaction():
+            record = self._records.get(review_id)
+            return deepcopy(record) if record is not None else None
 
     def list_pending(self) -> list:
-        self.load()
-        return [r for r in self._records.values() if r["status"] == "PENDING"]
+        with self._transaction():
+            return [deepcopy(r) for r in self._records.values() if r["status"] == "PENDING"]
 
     def resolve(self, review_id: str, outcome: str, reviewer: str) -> dict:
         """
         outcome: "APPROVED" or "REJECTED". Raises KeyError if the review
-        doesn't exist, ValueError if it was already resolved — a caller
-        resolving twice (a double-click, a race between two reviewers) must
-        get a loud error, not silently overwrite who resolved it first and
-        why.
+        doesn't exist. Matching resolutions are idempotent; conflicting
+        outcomes cannot overwrite the original reviewer or resolution.
         """
-        self.load()
-        record = self._records.get(review_id)
-        if record is None:
-            raise KeyError(f"No such review: {review_id}")
-        if record["status"] != "PENDING":
-            raise ValueError(
-                f"Review {review_id} is already {record['status']} "
-                f"(by {record.get('reviewer')!r}) — cannot resolve twice."
-            )
-        if outcome not in ("APPROVED", "REJECTED"):
-            raise ValueError(f"outcome must be one of APPROVED/REJECTED, got {outcome!r}")
+        with self._transaction(write=True):
+            record = self._records.get(review_id)
+            if record is None:
+                raise KeyError(f"No such review: {review_id}")
+            if outcome not in ("APPROVED", "REJECTED"):
+                raise ValueError("outcome must be APPROVED or REJECTED")
+            if record["status"] == outcome or (record['status'] == 'CONSUMED' and outcome == 'APPROVED'):
+                return deepcopy(record)
+            if record["status"] != "PENDING":
+                raise ValueError(
+                    f"Review {review_id} is already {record['status']} "
+                    f"(by {record.get('reviewer')!r}) — cannot resolve twice."
+                )
+            expiry = record.get("expires_at")
+            if outcome == 'APPROVED' and (not expiry or datetime.fromisoformat(expiry) <= datetime.now(timezone.utc)):
+                raise ValueError("Review expired or has no trustworthy expiry")
+            record["status"] = outcome
+            record["reviewer"] = reviewer
+            record["resolved_at"] = datetime.now(timezone.utc).isoformat()
+            record["final_decision"] = _RESOLUTION_TO_DECISION[outcome]
+            logger.info(f"Review resolved: {review_id} -> {outcome} by {reviewer!r}")
+            return deepcopy(record)
 
-        record["status"] = outcome
-        record["reviewer"] = reviewer
-        record["resolved_at"] = datetime.now(timezone.utc).isoformat()
-        record["final_decision"] = _RESOLUTION_TO_DECISION[outcome]
-        self._save()
-        logger.info(f"Review resolved: {review_id} -> {outcome} by {reviewer!r}")
-        return record
+    def consume(self, review_id: str, context: dict) -> dict:
+        """Atomically reserve an approval before execution; never retry an effect.
+
+        A crash after reservation requires operator investigation. Exactly-once
+        effects across arbitrary external handlers are not claimed.
+        """
+        required = {'request_id', 'tenant', 'principal', 'capability', 'action',
+                    'policy_digest', 'security_version', 'decision_context'}
+        if set(context) != required or any(not value for value in context.values()):
+            raise ValueError("Incomplete approval context")
+        with self._transaction(write=True):
+            record = self._records.get(review_id)
+            if record is None:
+                raise KeyError(review_id)
+            expiry = record.get('expires_at')
+            if (record['status'] != 'APPROVED' or record.get('consumed_at')
+                    or not expiry or datetime.fromisoformat(expiry) <= datetime.now(timezone.utc)
+                    or record.get('context') != context):
+                raise ValueError("Approval is unavailable or context changed")
+            record['consumed_at'] = datetime.now(timezone.utc).isoformat()
+            record['status'] = 'CONSUMED'
+            return deepcopy(record)
 
 
 _queue = ReviewQueue()
 
 
-def enqueue_review(reason, capability, risk, tenant, prompt_hash, request_id) -> ReviewRecord:
-    return _queue.enqueue(reason, capability, risk, tenant, prompt_hash, request_id)
+def enqueue_review(reason, capability, risk, tenant, prompt_hash, request_id, context=None) -> ReviewRecord:
+    return _queue.enqueue(reason, capability, risk, tenant, prompt_hash, request_id, context)
 
 
 def get_review(review_id: str) -> dict | None:

@@ -1,22 +1,4 @@
-"""
-Tests for the threat_present fix (core/risk.py::_in_upper_ambiguous_band).
-
-THE BUG: Stage 4 is only ever reached from fuse_signals' ambiguous-zone
-branch (score >= threshold_medium), so re-checking `score >= threshold_medium`
-at the Stage 4 call site — which is what `threat_present` used to be — was
-tautologically True on every single invocation. A SAFE verdict from any
-arbiter was therefore unconditionally capped at MEDIUM, and the Operational
-benchmark metric could not move regardless of arbiter quality (this is
-exactly what made the Llama Guard live-benchmark numbers look flat on that
-metric — see docs/ENGINEERING_ASSESSMENT.md §1j and §1n).
-
-These tests exercise the REAL call site through assess_risk end-to-end, with
-only the underlying judge/detector mocked — not judge_arbitration or
-llama_guard_arbitration themselves — because mocking those functions directly
-(as the existing arbitration test suites do, for unrelated reasons) never
-touches the threat_present computation this fix changes. A regression here
-would have passed every pre-existing test in the suite silently.
-"""
+"""Regression tests for the upper ambiguous-band decision boundary."""
 import unittest.mock as mock
 
 import pytest
@@ -106,16 +88,8 @@ def test_safe_verdict_in_lower_half_clears_to_low_only_when_permitted(monkeypatc
 
 
 def test_default_denies_the_arbiter_clear_authority(monkeypatch, drive_to_stage4):
-    """
-    THE DETERMINISTIC-ARBITER PROPERTY: with default config, an LLM's SAFE
-    verdict cannot return a prompt the deterministic layer flagged to LOW.
-
-    Measured justification, not preference. On the 546-prompt deepset
-    benchmark the judge exercised clear-authority 17 times: 13 genuine attacks
-    cleared, 4 genuine benign cleared — 3.25 true positives destroyed per
-    false positive saved. Denying it moves recall 55.67% -> 62.07% and F1
-    0.671 -> 0.712 for +1.17pp FPR.
-    """
+    """THE DETERMINISTIC-ARBITER PROPERTY: with default config, an LLM's SAFE
+        verdict cannot return a prompt the deterministic layer flagged to LOW."""
     drive_to_stage4(score=0.11, threshold_medium=0.10, threshold_high=0.30)  # lower half
     monkeypatch.setattr(risk_mod, "semantic_judge", lambda p: "SAFE")
 

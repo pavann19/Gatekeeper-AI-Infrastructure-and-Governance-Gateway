@@ -351,38 +351,11 @@ class TransformerDetector(Detector):
 # ---------------------------------------------------------------------------
 
 class EmbeddingHeadDetector(Detector):
-    """
-    Wraps a sentence-embedding model plus a small logistic-regression head
-    FITTED ON THIS PROJECT'S OWN eval suite (`scripts.train_multilingual_
-    head_artifact`) — structurally different from every other detector in
-    this registry, which are all pretrained third-party classifiers used
-    as-is. This is the multilingual-injection/offensive-content feature
-    from issue #4: an off-the-shelf English-trained classifier has no
-    reason to generalise to German, so this one is trained directly on
-    the German (and other-language) rows the suite now provides.
+    """Apply a sentence encoder and plain-JSON logistic-regression head.
 
-    WHY `trained_on` IS MEANINGLESS HERE, NOT JUST EMPTY
-    -------------------------------------------------------
-    Every other detector's `trained_on` names eval-suite sources to
-    EXCLUDE from its own evaluation (contamination). This detector's
-    artifact is refit on 100% of `data/eval_suite.jsonl` by design (see
-    `scripts.train_multilingual_head_artifact`'s docstring) — there is no
-    subset of the suite this detector wasn't trained on, so declaring a
-    `trained_on` exclusion list would be meaningless; the correct
-    exclusion is "the entire suite, always, for this detector specifically."
-    Its unbiased numbers come from splits done BEFORE the deployed refit
-    (`scripts.build_multilingual_feature`'s held-out test and leave-one-
-    source-out; `scripts.validate_multilingual_head_nested`'s fully
-    disjoint three-way split), never from scoring the deployed artifact
-    against the suite directly.
-
-    PERSISTENCE: PLAIN JSON, SAME REASONING AS `models/fusion_policy.json`
-    --------------------------------------------------------------------
-    A scaler + logistic regression over a fixed-size embedding is a
-    handful of numbers per dimension — applying them by hand at inference
-    time (see `_apply_head` below) avoids tying this detector's runtime to
-    the exact sklearn/Python version that trained the artifact.
-    """
+    The deployed head is refit on the local evaluation suite. Scoring that same
+    suite with the refit is not independent accuracy evidence. Encoder revision,
+    artifact identity and held-out validation must be reported separately."""
 
     def __init__(self, name, artifact_path, targets, revision="e8f8c211226b894fcb81acc59f3b34ba3efd5f42", description=""):
         self.name = name
@@ -480,42 +453,11 @@ class EmbeddingHeadDetector(Detector):
 # ---------------------------------------------------------------------------
 
 class LlamaGuardDetector(Detector):
-    """
-    Wraps Meta's Llama Guard, which is a CAUSAL LM rather than a sequence
-    classifier: given a conversation it emits the literal token `safe`, or
-    `unsafe` followed by a hazard category (S1..S13).
+    """Apply a generative safety classifier to conversation text.
 
-    WHY THIS CLASS EXISTS SEPARATELY
-    --------------------------------
-    `TransformerDetector` cannot drive it — different architecture, different
-    output contract, and a required chat template.
-
-    WHY IT MATTERS HERE
-    -------------------
-    Measurement showed harmful-content requests are the class every detector in
-    the stack misses: anchors 24.4%, ProtectAI 2.0%, toxic-bert 36.2%. The
-    diagnosis was that none of them models the right construct — toxicity
-    (abusive language) is not the same thing as dangerous capability uplift.
-    "How do I synthesise sarin" is calmly worded and not toxic at all. Llama
-    Guard is trained on a hazard taxonomy, which is that construct.
-
-    SCORING: ONE FORWARD PASS, NOT GENERATION
-    -----------------------------------------
-    The chat template ends exactly where the verdict token is emitted, so the
-    next-token distribution at the final position already contains the answer.
-    We read P(unsafe) from those logits directly instead of running
-    autoregressive generation.
-
-    Two benefits, one of them essential:
-      - Far cheaper: a single forward pass rather than a decode loop.
-      - CONTINUOUS score. Generation yields a hard safe/unsafe label, which
-        collapses ROC analysis to two points and makes threshold calibration
-        impossible. A probability keeps the detector comparable to every other
-        one in the registry and lets it participate in the learned fusion.
-
-    Use `classify()` when the hazard category is wanted; that path does
-    generate, and is for diagnostics rather than bulk scoring.
-    """
+    Unlike a sequence classifier, this detector parses safe/unsafe and hazard
+    category output. Loading requires model access and memory; missing or
+    invalid results remain explicit. It is separate from always-on fusion."""
 
     def __init__(self, name, model_id, revision=None, targets=(CLASS_HARMFUL,), dtype="bfloat16",
                  max_length=2048, min_free_gb=3.0, description="", trained_on=()):
@@ -859,13 +801,6 @@ class NemoGuardJailbreakDetector(Detector):
     """
 
     name = "nemoguard_jailbreak"
-    # JAILBREAK ONLY, and this is measured rather than assumed. An initial
-    # version of this class also declared prompt_injection; a 300-row sample
-    # put it at AUC 1.000 on jailbreak but 0.402 on injection — WORSE than
-    # random, i.e. it scores injections lower than benign text. NVIDIA's own
-    # naming ("JailbreakDetect") agrees. Declaring a target a detector
-    # demonstrably does not serve would corrupt the per-class comparison and
-    # the polarity probe that depends on `targets`.
     targets = (CLASS_JAILBREAK,)
     trained_on = ()  # UNKNOWN, not verified clean — see class docstring
     description = ("NVIDIA NeMo Guardrails model-based jailbreak rail "
@@ -1033,8 +968,6 @@ def _build_registry():
             description="DistilBERT jailbreak detector",
         ),
 
-        # --- Harmful content / toxicity ---
-        # The class the anchor detector is measurably worst at (24.4%).
         "toxic_bert": TransformerDetector(
             name="toxic_bert",
             model_id="unitary/toxic-bert",
@@ -1045,16 +978,6 @@ def _build_registry():
             description="Unitary toxic-bert, multi-label toxicity",
         ),
 
-        # German-specific toxicity/offensive-language classifiers (issue #3:
-        # `toxic_bert` above is English-trained and measured severely
-        # miscalibrated on German — 48.6% FPR standalone against a 5% budget,
-        # docs/ENGINEERING_ASSESSMENT.md §1aa). `trained_on=()` here is
-        # UNKNOWN-not-verified-clean, same honest caveat NemoGuardJailbreak-
-        # Detector's own docstring uses — neither model card names
-        # philschmid/germeval18 explicitly, but neither publishes a full
-        # training-data manifest either, so this is not the same guarantee
-        # as protectai_injection/deepset_injection's own `trained_on`
-        # declarations, which come from reading the paper/card directly.
         "german_toxicity_eistakovskii": TransformerDetector(
             name="german_toxicity_eistakovskii",
             model_id="EIStakovskii/german_toxicity_classifier_plus_v2",
@@ -1086,10 +1009,8 @@ def _build_registry():
             revision="e8f8c211226b894fcb81acc59f3b34ba3efd5f42",
             targets=(CLASS_INJECTION, CLASS_HARMFUL),
             description="Multilingual sentence-embedding + logistic-regression head, "
-                        "fitted on this project's own eval suite (scripts.train_"
-                        "multilingual_head_artifact) — closes the residual German gap "
-                        "off-the-shelf English-trained detectors cannot (nested-"
-                        "validated, see docs/ENGINEERING_ASSESSMENT.md).",
+                        "fitted on the local eval suite; independent evaluation "
+                        "requires held-out data, see docs/EVALUATION.md.",
         ),
 
         # --- Established vendor framework, open licence (benchmark target) ---

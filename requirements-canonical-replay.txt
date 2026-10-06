@@ -1,5 +1,5 @@
-# Oracle-compatible CPU inference profile; install in an isolated environment.
-# These override optional local/ONNX runtimes. No benchmark claims are renewed.
+# Critical offline replay pins; install in a separate provisioned runtime.
+# These pins are not a complete clean-install deployment lock.
 torch==2.6.0
 transformers==5.2.0
 sentence-transformers==5.2.0
@@ -14,5 +14,3 @@ pydantic-settings==2.5.2
 python-dotenv==1.2.3
 python-json-logger==3.3.0
 prometheus-client==0.21.1
-# Use a separate environment; the broad legacy requirements use a different
-# NumPy bound and optional ONNX dependencies are not part of this Torch profile.

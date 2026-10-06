@@ -1,5 +1,5 @@
 """
-Tests for GET /api/v1/tools and GET /api/v1/gateway/providers (Phase 7,
+Tests for GET /api/v1/tools and GET /api/v1/gateway/providers (implementation,
 Developer UI) -- read-only catalogue views over the REAL shared tool
 registry and provider registry, not synthesized data.
 """

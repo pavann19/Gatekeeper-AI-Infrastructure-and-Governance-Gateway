@@ -52,6 +52,12 @@ from __future__ import annotations
 
 import json
 import os
+import hashlib
+import threading
+from functools import wraps
+from types import MappingProxyType
+from contextvars import ContextVar
+from typing import Callable, ParamSpec, TypeVar, cast, Mapping
 from dataclasses import dataclass, field
 
 import yaml
@@ -69,22 +75,22 @@ YAML_EXTENSIONS = (".yaml", ".yml")
 
 def _parse_policy_file(path: str) -> dict:
     """
-    Parses a policy file, dispatching on extension: `.yaml`/`.yml` ->
-    yaml.safe_load, anything else -> json.load.
+        Parses a policy file, dispatching on extension: `.yaml`/`.yml` ->
+        yaml.safe_load, anything else -> json.load.
 
-    Phase 3 (Policy-as-Code): YAML support added alongside JSON, not instead
-    of it. Existing deployments pointing POLICY_RULES_FILE at a `.json` path
-    are unaffected -- only a `.yaml`/`.yml` extension opts into the new
-    parser. YAML's actual advantage over JSON here is comments: an operator
-    can annotate WHY a tenant's policy is stricter directly in the file that
-    defines it, which the JSON format has never been able to express.
+        implementation (Policy-as-Code): YAML support added alongside JSON, not instead
+        of it. Existing deployments pointing POLICY_RULES_FILE at a `.json` path
+        are unaffected -- only a `.yaml`/`.yml` extension opts into the new
+        parser. YAML's actual advantage over JSON here is comments: an operator
+        can annotate WHY a tenant's policy is stricter directly in the file that
+        defines it, which the JSON format has never been able to express.
 
-    yaml.safe_load, deliberately not yaml.load: safe_load refuses to
-    construct arbitrary Python objects from tags like `!!python/object`,
-    which full yaml.load would happily do -- a policy file that decides
-    ALLOW/BLOCK for every request must not also be a code-execution vector
-    for whoever can write to it.
-    """
+        yaml.safe_load, deliberately not yaml.load: safe_load refuses to
+        construct arbitrary Python objects from tags like `!!python/object`,
+        which full yaml.load would happily do -- a policy file that decides
+        ALLOW/BLOCK for every request must not also be a code-execution vector
+        for whoever can write to it.
+        """
     with open(path, "r", encoding="utf-8") as f:
         if os.path.splitext(path)[1].lower() in YAML_EXTENSIONS:
             return yaml.safe_load(f)
@@ -112,7 +118,7 @@ class PolicySet:
     kept separate.
     """
     tenant_id: str
-    policies: dict = field(default_factory=dict)
+    policies: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
 
 
 # Returned when there is no usable policy data at all (file absent, corrupt,
@@ -121,6 +127,19 @@ class PolicySet:
 # rather than inferring it from an empty dict (which a legitimately
 # misconfigured single tenant could also produce).
 FAIL_SAFE = PolicySet(tenant_id="__fail_safe__", policies={})
+
+
+_P = ParamSpec('_P')
+_R = TypeVar('_R')
+
+
+def _locked(method: Callable[_P, _R]) -> Callable[_P, _R]:
+    @wraps(method)
+    def wrapped(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+        owner = cast('PolicyStore', args[0])
+        with owner._lock:
+            return method(*args, **kwargs)
+    return wrapped
 
 
 class PolicyStore:
@@ -153,16 +172,20 @@ class PolicyStore:
     """
 
     def __init__(self, path=None):
+        self._lock = threading.RLock()
+        self.digest = "unavailable"
         self.path = path or settings.POLICY_RULES_FILE
         self._tenants: dict[str, PolicySet] = {}
         self._default_action = "BLOCK"
         self._usable = False
         self._loaded = False
 
+    @_locked
     def load(self, force=False):
         if self._loaded and not force:
             return self
         self._tenants = {}
+        self.digest = "unavailable"
         self._usable = False
         self._loaded = True
 
@@ -172,6 +195,7 @@ class PolicyStore:
 
         try:
             raw = _parse_policy_file(self.path)
+            self.digest = hashlib.sha256(json.dumps(raw, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         except Exception as e:
             logger.error(f"Policy store unreadable ({e}); failing closed (BLOCK).")
             return self
@@ -252,8 +276,10 @@ class PolicyStore:
             logger.error(f"Ignoring policy for tenant {tenant_id!r}: no valid capability entries.")
             return None
 
-        return PolicySet(tenant_id=tenant_id, policies=cleaned)
+        return PolicySet(tenant_id=tenant_id, policies=MappingProxyType(
+            {key: MappingProxyType(value) for key, value in cleaned.items()}))
 
+    @_locked
     def get(self, tenant_id: str) -> PolicySet:
         """Never raises. Unknown/unconfigured tenant -> the 'default'
         tenant's real policy. No usable policy data at all -> FAIL_SAFE."""
@@ -263,32 +289,53 @@ class PolicyStore:
         return self._tenants.get(tenant_id, self._tenants[DEFAULT_TENANT_ID])
 
     @property
+    @_locked
     def default_action(self) -> str:
         self.load()
         return self._default_action
 
+    @_locked
     def __len__(self):
         self.load()
         return len(self._tenants)
 
 
 _store = PolicyStore()
+request_policy: ContextVar[PolicyStore | None] = ContextVar('request_policy', default=None)
+
+
+def capture_policy() -> PolicyStore:
+    """Capture one immutable mapping and its identity for a whole request."""
+    _store.load()
+    with _store._lock:
+        snapshot = PolicyStore(_store.path)
+        snapshot._tenants = dict(_store._tenants)
+        snapshot._default_action = _store._default_action
+        snapshot._usable = _store._usable
+        snapshot._loaded = True
+        snapshot.digest = _store.digest
+        return snapshot
+
+
+def policy_identity() -> str:
+    snapshot = request_policy.get()
+    return (snapshot if snapshot is not None else capture_policy()).digest
 
 
 def validate_policy_file(path: str) -> list[str]:
     """
-    Reports EVERY problem in a candidate policy file, for the Phase 3
-    (Policy-as-Code) validation step -- `scripts/validate_policy.py`.
+        Reports EVERY problem in a candidate policy file, for the implementation
+        (Policy-as-Code) validation step -- `scripts/validate_policy.py`.
 
-    Deliberately NOT the same code path as PolicyStore.load(): the loader's
-    job is to keep serving a good tenant's policy when a SIBLING tenant's
-    entry is malformed (see the module docstring), so it silently drops one
-    bad entry and logs a warning rather than surfacing every problem at
-    once. That is the wrong behaviour for an operator validating a file
-    BEFORE deploying it -- they want the complete list of what is wrong,
-    not one warning at a time discovered by trial and error. Returns an
-    empty list when the file is fully valid.
-    """
+        Deliberately NOT the same code path as PolicyStore.load(): the loader's
+        job is to keep serving a good tenant's policy when a SIBLING tenant's
+        entry is malformed (see the module docstring), so it silently drops one
+        bad entry and logs a warning rather than surfacing every problem at
+        once. That is the wrong behaviour for an operator validating a file
+        BEFORE deploying it -- they want the complete list of what is wrong,
+        not one warning at a time discovered by trial and error. Returns an
+        empty list when the file is fully valid.
+        """
     errors: list[str] = []
 
     if not os.path.exists(path):
@@ -352,59 +399,62 @@ def reload_policies():
 
 
 def resolve_policy_set(tenant_id: str, store: PolicyStore | None = None) -> PolicySet:
-    return (store or _store).get(tenant_id)
+    return (store if store is not None else _store).get(tenant_id)
 
 
 def get_default_action(store: PolicyStore | None = None) -> str:
     """The top-level, tenant-independent fail-safe action -- for a caller
     (the Settings/Protection view) that wants to show what happens for a
     capability/risk combination no tenant's policy explicitly maps."""
-    return (store or _store).default_action
+    return (store if store is not None else _store).default_action
 
 
 def policy_decision(capability: str, risk: str, tenant_id: str = DEFAULT_TENANT_ID,
                     store: PolicyStore | None = None):
     """
-    Determines the enforcement action for (capability, risk) under a
-    tenant's policy.
+        Determines the enforcement action for (capability, risk) under a
+        tenant's policy.
 
-    `tenant_id` defaults to "default" so an existing call site that upgrades
-    without passing one keeps getting exactly the single global policy this
-    module used to be — the same backward-compatibility shape core/fusion.py
-    uses for a v1 policy artifact missing a `per_class` section.
+        `tenant_id` defaults to "default" so an existing call site that upgrades
+        without passing one keeps getting exactly the single global policy this
+        module used to be — the same backward-compatibility shape core/fusion.py
+        uses for a v1 policy artifact missing a `per_class` section.
 
-    `store` defaults to the live module-global policy store. Passing a
-    different `PolicyStore` instance (Phase 3, Policy-as-Code) is how
-    `scripts/simulate_policy.py` evaluates a CANDIDATE policy file against
-    historical audit records without touching what the running gateway is
-    actually enforcing — the live `_store` is never mutated by a simulation.
+        `store` defaults to the live module-global policy store. Passing a
+        different `PolicyStore` instance (implementation) is how
+        `scripts/simulate_policy.py` evaluates a CANDIDATE policy file against
+        historical audit records without touching what the running gateway is
+        actually enforcing — the live `_store` is never mutated by a simulation.
 
-    Fail-safe default, preserved exactly from the pre-tenancy version: no
-    usable policy data at all -> BLOCK. An undefined capability under an
-    otherwise-usable policy -> that policy's own `default_action`, not a
-    hardcoded BLOCK — a tenant's default_action is intentionally global
-    (see module docstring), so this is the SAME default_action regardless of
-    which tenant resolved, which is correct: it is a fail-safe backstop, not
-    a per-tenant policy choice.
-    """
-    active_store = store or _store
-    policy_set = resolve_policy_set(tenant_id, store=active_store)
+        Fail-safe default, preserved exactly from the pre-tenancy version: no
+        usable policy data at all -> BLOCK. An undefined capability under an
+        otherwise-usable policy -> that policy's own `default_action`, not a
+        hardcoded BLOCK — a tenant's default_action is intentionally global
+        (see module docstring), so this is the SAME default_action regardless of
+        which tenant resolved, which is correct: it is a fail-safe backstop, not
+        a per-tenant policy choice.
+        """
+    active_store = store if store is not None else request_policy.get()
+    if active_store is None:
+        active_store = _store
+    with active_store._lock:
+        policy_set = resolve_policy_set(tenant_id, store=active_store)
 
-    if policy_set is FAIL_SAFE:
-        return "BLOCK", "System Error: Policies not loaded"
+        if policy_set is FAIL_SAFE:
+            return "BLOCK", "System Error: Policies not loaded"
 
-    # `policy_set.tenant_id` is whichever tenant's policy ACTUALLY applied,
-    # which is "default" when `tenant_id` was unconfigured — different from
-    # the requested `tenant_id` in that case. The reason string must say so
-    # explicitly: reporting the requested tenant alone would make an audit
-    # record claim tenant X has its own policy when X silently fell back to
-    # someone else's. This is exactly the class of bug it exists to prevent.
-    resolved = policy_set.tenant_id
-    tenant_note = resolved if resolved == tenant_id else f"{tenant_id} -> {resolved} (fallback)"
+        # `policy_set.tenant_id` is whichever tenant's policy ACTUALLY applied,
+        # which is "default" when `tenant_id` was unconfigured — different from
+        # the requested `tenant_id` in that case. The reason string must say so
+        # explicitly: reporting the requested tenant alone would make an audit
+        # record claim tenant X has its own policy when X silently fell back to
+        # someone else's. This is exactly the class of bug it exists to prevent.
+        resolved = policy_set.tenant_id
+        tenant_note = resolved if resolved == tenant_id else f"{tenant_id} -> {resolved} (fallback)"
 
-    capability_policy = policy_set.policies.get(capability)
-    if not capability_policy:
-        return active_store.default_action, f"Role '{capability}' not defined for tenant '{tenant_note}'"
+        capability_policy = policy_set.policies.get(capability)
+        if not capability_policy:
+            return active_store.default_action, f"Role '{capability}' not defined for tenant '{tenant_note}'"
 
-    action = capability_policy.get(risk, active_store.default_action)
-    return action, f"Policy applied for {capability} (Risk: {risk}, Tenant: {tenant_note})"
+        action = capability_policy.get(risk, active_store.default_action)
+        return action, f"Policy applied for {capability} (Risk: {risk}, Tenant: {tenant_note})"

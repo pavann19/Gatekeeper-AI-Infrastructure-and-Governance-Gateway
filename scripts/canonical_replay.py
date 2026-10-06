@@ -166,7 +166,11 @@ def run_replay(output=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, help="Private evidence directory outside the public checkout")
+    parser.add_argument("--verify-training-provenance", action="store_true",
+                        help="Also require the exact local training dataset; not needed for frozen replay")
     args = parser.parse_args()
+    if args.verify_training_provenance:
+        validate_artifacts(load_profile()["training_provenance"])
     summary, _ = run_replay(args.output)
     print(json.dumps({k: summary[k] for k in ("cases", "mismatches", "high_to_low")}))
     return int(bool(summary["mismatches"]))

@@ -1,5 +1,5 @@
 """
-Tests for core/mcp_compat.py — the final Phase 6 item, "MCP
+Tests for core/mcp_compat.py — the final implementation item, "MCP
 compatibility". Scope matches the module's own docstring: protocol-SHAPE
 translation between core/tools.py and MCP's Tool/CallToolResult JSON,
 not a transport server. These tests verify the shapes are correct and

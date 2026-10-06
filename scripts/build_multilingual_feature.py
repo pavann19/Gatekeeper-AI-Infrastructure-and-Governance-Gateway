@@ -1,56 +1,8 @@
-"""
-Builds a PURPOSE-BUILT multilingual attack-detection feature, instead of
-hoping an English-trained classifier generalises to German.
+"""Fit and evaluate a multilingual embedding-based attack feature.
 
-THE REASONING THAT LED HERE
----------------------------
-Three separate attempts to close the German gap by adjusting how existing
-detectors are USED all failed, and the pattern in the failures is the
-finding:
-
-  - German-specific THRESHOLD on protectai_injection: bought FPR back to
-    budget by giving up 15 points of recall. Moving a cutoff cannot create
-    separability that is not in the score distribution.
-  - SWAPPING deepset_injection for protectai_injection: regressed pooled
-    and English badly; German unchanged.
-  - Language-conditional WEIGHTS (fusion refit on German rows only):
-    AUC 0.670 vs the global model's 0.671. Exactly zero.
-
-That last one is decisive. If refitting the weights on the target
-population changes nothing, the weights were never the problem -- the
-features simply do not carry German signal. Every remaining fix has to add
-INFORMATION, not redistribute it. Adding deepset_injection as a 5th feature
-confirmed the frame (German AUC 0.671 -> 0.721) but plateaus there, because
-every detector in the pool is English-trained.
-
-WHAT THIS DOES DIFFERENTLY
---------------------------
-The suite now carries 4,221 German rows (1,655 attacks) -- enough to TRAIN
-against rather than only to evaluate on. This script embeds every row with
-a genuinely multilingual sentence encoder (one shared representation space
-across languages, so German and English attacks with the same intent land
-near each other) and fits a classifier on those embeddings. The resulting
-probability is then available as a fusion feature whose German competence
-does not depend on English-language transfer.
-
-LEAKAGE CONTROL, WHICH IS THE WHOLE METHODOLOGICAL RISK
---------------------------------------------------------
-A classifier trained on suite rows and then measured on suite rows will
-flatter itself. Two guards:
-
-  1. A held-out TEST split (default 20%) is separated FIRST and never
-     participates in fitting, scaling, or model selection.
-  2. Within the training portion, the reported number is out-of-fold
-     (StratifiedKFold, project-standard seed/folds), so even the
-     development-time figure is not in-sample.
-
-The test-split number is the honest one and is what this script leads with.
-Everything else is diagnostic.
-
-Usage:
-    python -m scripts.build_multilingual_feature
-    python -m scripts.build_multilingual_feature --model <hf-model-id>
-"""
+Uses disjoint or out-of-fold predictions for the declared experiment.
+Requires local suite/embedding inputs and is distinct from the all-data
+artifact refit. See docs/EVALUATION.md for reproduction limits."""
 import argparse
 import json
 import os

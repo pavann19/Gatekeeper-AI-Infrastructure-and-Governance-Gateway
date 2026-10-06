@@ -72,16 +72,15 @@
     "JUDGE_MAY_CLEAR_TO_LOW": false
   },
   "artifacts": {
-    "models/fusion_policy.json": "02c671674f4a23a75f870d5ed987c539c76db06a04b6562d6919bb4a799f10af",
+    "models/fusion_policy.json": "077a90258e6918498e72b2981d07707200413a315e0bdde51a4794e91f0a9e49",
     "models/multilingual_head.json": "95c3691aa45da04bc0e49af63689cec9929fded76658c41ebcb2b0ce003a74ea",
     "models/detector_manifest.json": "65526aece1048a716aabe52dcabc0c39ec0fac5686d44f646c1109030e6f1750",
     "tests/fixtures/decision_replay_corpus.jsonl": "0b26ff68ca497f9ed7842e93aa25bdb64dd118fb70bfef02a82d4187d68b7f82",
-    "data/eval_suite.jsonl": "d6532f645982531a4ffa13ba7ec0bb4d13cce32dc458b9e4efad55c2ece7ef1d",
     "policies/domain_anchors.json": "5605406adc3ad40b91b15cbcd42b8ec08c405dea1d8f04f133cd2c99c0b08773",
     "policies/domain_corpus.json": "db9cd9c5e87d9fffc99c41b45bb4730ffda12d855f3cc77531858fe94351a89c",
     "policies/meta_intent_anchors.json": "4d0d559bcb0564d803adde1740936b78e5da8b1fd6561f6a3e30b32fd85df082",
-    "policies/symbolic_rules.json": "fbe173065091c4415ad4bc646ae7a413904d33d5a7658233f8a324842fa7e087",
-    "policies/threat_anchors.json": "f3633cff88cbbf58d8d15b6945b590629966a0307d22e08272286c234540a71f"
+    "policies/symbolic_rules.json": "3c5555f2ccbab31eedd69252018c36f3d89fa1b8db718c8136ea880e31f4e647",
+    "policies/threat_anchors.json": "64e20fd6d1851bfdb635dba74b1c764ba2a26b89440ff31056a0fb7868c450ad"
   },
   "runtime_reference": {
     "torch": "2.6.0+cpu",
@@ -100,6 +99,12 @@
     "prompt_guard_2": {
       "runtime": "transformers 5.2.0",
       "basis": "preserves whitespace boundaries; frozen signals reproduced"
+    }
+  },
+  "training_provenance": {
+    "purpose": "Historical training/corpus-generation input; not consumed by frozen replay. Explicit validation is required for provenance verification.",
+    "artifacts": {
+      "data/eval_suite.jsonl": "d6532f645982531a4ffa13ba7ec0bb4d13cce32dc458b9e4efad55c2ece7ef1d"
     }
   }
 }

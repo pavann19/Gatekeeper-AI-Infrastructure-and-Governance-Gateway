@@ -1,3 +1,4 @@
+# Source and Redis backend contracts; model assets belong to a separate replay profile.
 name: Gatekeeper CI Pipeline
 
 on:
@@ -6,15 +7,36 @@ on:
   pull_request:
     branches: [ main ]
 
+permissions:
+  contents: read
+
 jobs:
+  redis-contracts:
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+        ports: ['6379:6379']
+        options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 5
+    steps:
+      - uses: actions/checkout@a37ce9120846195fa4ece8f58b268e6043cb2f26
+      - uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c
+        with:
+          python-version: '3.10'
+      - run: python -m pip install -r requirements-ci.txt
+      - name: Redis concurrency contracts
+        env:
+          GATEKEEPER_REDIS_INTEGRATION_URL: redis://localhost:6379/0
+        run: python -m pytest tests/test_live_redis_acceptance.py -q
+
   test:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@a37ce9120846195fa4ece8f58b268e6043cb2f26 # v3
 
     - name: Set up Python 3.10
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c # v4
       with:
         python-version: '3.10'
         cache: 'pip'
@@ -22,33 +44,18 @@ jobs:
     - name: Install Dependencies
       run: |
         python -m pip install --upgrade pip
-        # Use CI-optimised requirements: torch/faiss-cpu ARE included (several
-        # tests exercise the real FAISS index and real tensor/label logic
-        # against synthetic data — see requirements-ci.txt for why). Only
-        # sentence-transformers and real HuggingFace model downloads are
-        # excluded/mocked, since those need network access and GB-scale weights.
         pip install -r requirements-ci.txt
         python -m spacy download en_core_web_sm
 
     - name: Lint (ruff)
       run: |
-        # Scoped to core/ and api/ — see pyproject.toml for why. Blocking:
-        # the 12 pre-existing issues here were cheap fixes, not a reason to
-        # ship this as report-only.
         ruff check core/ api/
+
+    - name: Type check governance boundary
+      run: python -m mypy core/ api/ --ignore-missing-imports --explicit-package-bases
 
     - name: Run Pytest with coverage
       env:
         PYTHONPATH: ${{ github.workspace }}
       run: |
-        # Gate set at 65%, a few points BELOW the 69% measured when this was
-        # introduced — margin so incidental variance doesn't flake CI, not a
-        # ceiling. Ratchet the number up as coverage genuinely improves;
-        # lowering it should require the same scrutiny as any other test
-        # deletion. core/audit.py and core/intent.py, previously 0% because
-        # nothing imported them (docs/ENGINEERING_ASSESSMENT.md §4), were
-        # deleted outright once confirmed dead rather than left as an
-        # explained coverage gap — the same applies to core/llm.py and
-        # core/multimodal.py, whose only caller (scripts/cli_demo.py, also
-        # deleted) was itself unreferenced.
         pytest tests/ -v --tb=short --cov=core --cov=api --cov-report=term-missing --cov-fail-under=65

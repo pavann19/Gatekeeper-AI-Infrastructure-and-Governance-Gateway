@@ -151,7 +151,7 @@ def test_snapshotting_identical_content_twice_in_immediate_succession_is_disting
 def test_rollback_restores_byte_for_byte_including_whitespace_and_no_trailing_newline(live_policy):
     """Not just 'some content' -- exact bytes, including trailing
     whitespace/newline quirks that a naive re-serialization would lose."""
-    exact_bytes = b'{"default_action": "BLOCK", "weird":   "  spaced  ", "tab":"\t"}'
+    exact_bytes = b'{"default_action": "BLOCK", "tenants":{"default":{"policies":{"GENERAL":{"HIGH":"BLOCK"}}}}, "weird":   "  spaced  ", "tab":"\\t"}'
     with open(live_policy, "wb") as f:
         f.write(exact_bytes)
 
@@ -173,9 +173,9 @@ def test_deploy_deploy_rollback_rollback_round_trip_ends_at_original_state(tmp_p
     original_content = open(live_policy, encoding="utf-8").read()
 
     candidate_a = tmp_path / "candidate_a.json"
-    candidate_a.write_text(json.dumps({"default_action": "ALLOW", "marker": "A"}), encoding="utf-8")
+    candidate_a.write_text(json.dumps({"default_action": "ALLOW", "marker": "A", "tenants": {"default": {"policies": {"GENERAL": {"HIGH": "ALLOW"}}}}}), encoding="utf-8")
     candidate_b = tmp_path / "candidate_b.json"
-    candidate_b.write_text(json.dumps({"default_action": "RESTRICT", "marker": "B"}), encoding="utf-8")
+    candidate_b.write_text(json.dumps({"default_action": "RESTRICT", "marker": "B", "tenants": {"default": {"policies": {"GENERAL": {"HIGH": "RESTRICT"}}}}}), encoding="utf-8")
 
     # Deploy A: snapshot(original) -> live becomes A
     snap_before_a = deploy_policy(str(candidate_a), live_path=live_policy)
@@ -205,7 +205,7 @@ def test_deploy_auto_creates_versions_dir_when_missing(tmp_path, monkeypatch):
     live.write_text(json.dumps({"default_action": "BLOCK"}), encoding="utf-8")
 
     candidate = tmp_path / "candidate.json"
-    candidate.write_text(json.dumps({"default_action": "ALLOW"}), encoding="utf-8")
+    candidate.write_text(json.dumps({"default_action": "ALLOW", "tenants": {"default": {"policies": {"GENERAL": {"HIGH": "ALLOW"}}}}}), encoding="utf-8")
 
     previous_version = deploy_policy(str(candidate), live_path=str(live))
 

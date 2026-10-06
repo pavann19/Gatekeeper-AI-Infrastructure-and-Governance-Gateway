@@ -1,6 +1,6 @@
 """
-Phase 8 hardening: rate limiting and tenant-suspension enforcement,
-extended to every endpoint added or exposed over HTTP in Phase 7.
+implementation hardening: rate limiting and tenant-suspension enforcement,
+extended to every endpoint added or exposed over HTTP in implementation.
 
 Before this, whoami / activity / trace / logs / gateway providers / tool
 catalogue / benchmarks / policy editor / the review endpoints / cache-flush
@@ -114,7 +114,7 @@ def test_active_tenant_still_served_normally_on_a_new_endpoint(_isolated_audit_l
 def test_activity_feed_is_rate_limited(fast_limit):
     with authenticated_as("k1"):
         codes = [client.get("/api/v1/activity").status_code for _ in range(6)]
-    assert 429 in codes, "sustained overage on a Phase 7 read endpoint must be rejected"
+    assert 429 in codes, "sustained overage on a read endpoint must be rejected"
 
 
 def test_whoami_is_rate_limited(fast_limit):
@@ -146,7 +146,7 @@ def test_unauthenticated_whoami_still_gets_401_not_a_rate_limit_bypass_of_the_ch
     assert response.status_code == 401
 
 
-# --- Real content-size bound on the policy editor (Phase 8 hardening) ---------
+# --- Real content-size bound on the policy editor () ---------
 
 def test_policy_content_oversized_body_is_rejected():
     huge = "x" * 1_000_001

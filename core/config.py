@@ -8,24 +8,6 @@ class Settings(BaseSettings):
     CAPABILITY_ELEVATED: str = "ELEVATED"     # Formerly 'researcher'
     CAPABILITY_INTERNAL: str = "INTERNAL"     # Formerly 'admin'
 
-    # --- Security Thresholds ---
-    #
-    # SEMANTIC_THRESHOLD_MEDIUM and META_INTENT_THRESHOLD are CALIBRATED, not
-    # chosen by hand. Selected by scripts/calibrate_thresholds.py as the point
-    # maximising recall subject to a 5% false-positive-rate budget, fitted on a
-    # 382-prompt calibration split and verified on a held-out 164-prompt split:
-    #
-    #   calibration : recall 31.72%  precision 80.70%  FPR 4.64%
-    #   holdout     : recall 25.86%  precision 88.24%  FPR 1.89%
-    #   ROC AUC     : 0.745 (deterministic signals, judge excluded)
-    #
-    # Public summary: docs/BENCHMARK_SUMMARY.md. Raw calibration evidence is
-    # local/private under _evidence/ and is not committed to the public repo.
-    # Re-run calibration after ANY change to the anchors or the encoder.
-    #
-    # Recall is low because the encoder is English-only while the evaluation set
-    # is largely German. That is an encoder limitation, not a threshold one —
-    # see docs/ENGINEERING_ASSESSMENT.md section 1b.
     SEMANTIC_THRESHOLD_HIGH: float = 0.48
     SEMANTIC_THRESHOLD_MEDIUM: float = 0.30
     META_INTENT_THRESHOLD: float = 0.30
@@ -34,73 +16,14 @@ class Settings(BaseSettings):
     EDUCATIONAL_THRESHOLD: float = 0.45
     DOMAIN_THRESHOLD: float = 0.22
 
-    # CALIBRATED via scripts/diagnose_cache_threshold.py against
-    # deepset/prompt-injections: at the old default (0.95), 9.1% of
-    # near-duplicate prompt pairs above threshold had OPPOSITE ground-truth
-    # labels; at 0.98, 50% did. Sentence-embedding cosine similarity measures
-    # bulk topical content, not the presence of a short adversarial clause, so
-    # no threshold low enough to matter is provably safe for this cache's
-    # fuzzy-match tier. 0.99 is the highest value with zero observed unsafe
-    # pairs in that measurement — a materially safer margin, not a guarantee.
-    # Current cache reuse is HIGH-only; permissive decisions are assessed
-    # afresh. This threshold governs conservative fuzzy HIGH escalation.
     CACHE_SIMILARITY_THRESHOLD: float = 0.99
 
-    # Run the fusion's transformer detectors concurrently rather than one
-    # after another. Wall time becomes roughly the slowest detector instead
-    # of the sum of all of them — but ONLY when the CPU has headroom to run
-    # them at once. PyTorch already parallelises within a single forward
-    # pass, so on a small core count this can oversubscribe the CPU and win
-    # nothing (or lose). It is a flag, not a constant, so a deployment that
-    # measures no gain — or measures a regression — can turn it off without
-    # a redeploy. See scripts/benchmark_fusion_parallel.py for the
-    # measurement on a given machine.
     FUSION_PARALLEL: bool = True
 
-    # Score each prompt under a per-attack-class fusion policy rather than a
-    # single global one, taking the most severe verdict. Measured out-of-fold
-    # at matched union FPR (scripts/analyze_per_class_thresholds.py):
-    # harmful_content recall 28.7% -> 31.5%, overall 82.8% -> 83.3%. A real
-    # but modest gain — it does NOT solve harmful-content detection, which
-    # needs a better instrument rather than better thresholds. Costs three
-    # dot products over features already computed, so runtime impact is
-    # negligible. Falls back to the global policy automatically when the
-    # artifact has no per_class section (v1 artifacts).
     FUSION_PER_CLASS: bool = True
 
-    # May a judge's SAFE verdict fully clear a prompt the deterministic layer
-    # already flagged?
-    #
-    # FALSE (default) means no: the arbiter can confirm danger (HIGH) or
-    # reduce to MEDIUM, but never returns a flagged prompt to LOW. This is the
-    # "deterministic arbiter" posture — the LLM advises, the policy decides.
-    #
-    # This is a MEASURED default, not a philosophical one. On the 546-prompt
-    # deepset benchmark the judge used its clear-authority 17 times: it cleared
-    # 13 genuine attacks and 4 genuine benign prompts — a 3.25:1 losing trade.
-    # Removing that authority moves recall 55.67% -> 62.07% and F1 0.671 ->
-    # 0.712, for +1.17pp FPR (6.12% -> 7.29%).
-    #
-    # Historical note, because the code here is easy to misread: an earlier
-    # `threat_present` tautology (§1n) made this cap unconditional by accident.
-    # Fixing the tautology was correct — the expression really was always True
-    # — but it silently handed the judge clear-authority and cost ~6 points of
-    # recall. The cap is now an explicit, measured policy rather than an
-    # accident, and `_in_upper_ambiguous_band` still governs which of the two
-    # override sources is recorded for audit.
     JUDGE_MAY_CLEAR_TO_LOW: bool = False
 
-    # Domain (topicality) guardrail posture.
-    #   "off"       — do not evaluate topicality at all (default).
-    #   "advisory"  — report topicality in the response; does not affect risk.
-    #   "enforcing" — off-domain prompts are escalated to MEDIUM risk.
-    #
-    # Defaults to "off" because the shipped domain corpus describes THIS
-    # project's subject area.  A third-party deployment must supply its own
-    # corpus before enabling enforcement, otherwise every benign prompt
-    # outside ML/security topics is flagged.  Leaving this on by default was
-    # the cause of the 98% false-positive rate in the pre-calibration
-    # benchmark — see docs/ENGINEERING_ASSESSMENT.md §1.
     DOMAIN_GUARDRAIL_MODE: str = "off"
 
     @field_validator("DOMAIN_GUARDRAIL_MODE")
@@ -114,18 +37,6 @@ class Settings(BaseSettings):
             )
         return normalized
 
-    # Output hallucination check (core.output_guardrails.check_semantic_grounding).
-    # Defaults OFF: a live pentest (docs/ROADMAP_V2.md's Phase 8 findings)
-    # found it compares OUTPUT text against `educational_store`'s centroid --
-    # which is actually the INPUT-side educational-context anchor set
-    # (core/risk.py's EDUCATIONAL_CONTEXT_ANCHORS, populated as a side
-    # effect of prior /assess calls), a category error. Once that store is
-    # warm, any legitimate response that isn't itself educational-content-
-    # shaped -- a support reply, code, a factual answer -- risks a false
-    # "hallucination" BLOCK. Same shape of mistake as DOMAIN_GUARDRAIL_MODE
-    # above: a real check, wired to the wrong reference corpus, left
-    # disabled until a real "acceptable assistant output" corpus exists to
-    # replace the borrowed one.
     HALLUCINATION_CHECK_ENABLED: bool = False
 
     # The optional local toxicity fallback improves availability when the
@@ -141,18 +52,12 @@ class Settings(BaseSettings):
 
     # Execution Environment
     OLLAMA_API_URL: str = "http://localhost:11434/api/generate"
-    # "mistral" was the original default, stale since Llama Guard 3 became
-    # the validated judge (docs/ENGINEERING_ASSESSMENT.md sections 1g/1j) --
-    # docker-compose.yml already overrides this to "llama-guard3" for
-    # container deployments, but the native/local default (no .env, no env
-    # var override) was never updated to match, so a fresh local run silently
-    # asked Ollama for a model this project stopped validating against.
     OLLAMA_MODEL: str = "llama-guard3"
     EMBEDDING_MODEL: str = "all-mpnet-base-v2"
     # Default encoder pin; custom encoders must supply their own revision.
     EMBEDDING_MODEL_REVISION: str | None = None
 
-    # --- Phase 5 (Real LLM Gateway), scoped down to provider abstraction
+    # --- (Real LLM Gateway), scoped down to provider abstraction
     # only for this pass — core/llm_providers.py. No request-forwarding
     # endpoint consumes these yet; they exist so a provider can be
     # constructed from configuration rather than only via explicit
@@ -175,7 +80,7 @@ class Settings(BaseSettings):
     POLICY_RULES_FILE: str = "policy_rules.json"
 
     # Where core/policy_versioning.py stores snapshots taken before each
-    # policy deploy (Phase 3, Policy-as-Code: versioning and rollback).
+    # policy deploy (, Policy-as-Code: versioning and rollback).
     # Relative to cwd by default, matching AUDIT_LOG_PATH's own convention —
     # a container deployment should point this at the same mounted volume,
     # since a snapshot taken right before a container recreation is exactly
@@ -183,18 +88,20 @@ class Settings(BaseSettings):
     POLICY_VERSIONS_DIR: str = "policy_versions"
 
     # Where local/private benchmark run results live for the Developer UI's
-    # Benchmarks view (Phase 7). Read-only from the API's side -- nothing in
+    # Benchmarks view (). Read-only from the API's side -- nothing in
     # this codebase writes here at request time. The public repo keeps summaries
     # in docs/ rather than committing raw _evidence artifacts.
     EVIDENCE_DIR: str = "_evidence"
 
-    # core/review_queue.py's storage (Phase 4: Human Review). A single
+    # core/review_queue.py's storage (Human Review). A single
     # mutable JSON file, not the audit log's append-only convention — see
     # that module's docstring for why. Same mounted-volume guidance as
     # AUDIT_LOG_PATH and POLICY_VERSIONS_DIR applies for a container
     # deployment: a pending review lost on container recreation is a review
     # that silently never gets resolved.
     REVIEW_QUEUE_FILE: str = "review_queue.json"
+    REVIEW_MAX_RECORDS: int = 10000
+    REVIEW_MAX_BYTES: int = 16777216
 
     # Path to the JSONL audit log. Relative to cwd by default — unchanged
     # from before this setting existed. A container deployment should point
@@ -261,17 +168,6 @@ class Settings(BaseSettings):
     # are only enabled when this is NOT a wildcard.
     CORS_ORIGINS: str = "*"
 
-    # --- Rate limiting (core/rate_limit.py) ---
-    #
-    # Authenticated callers are bucketed by their verified key_id; anonymous
-    # callers by transport peer address. Anonymous gets a much smaller
-    # allowance because it is unattributable, not because it is untrusted:
-    # abuse from an anonymous caller cannot be traced to a revocable key.
-    #
-    # The defaults assume the measured cold-path cost of an assessment
-    # (multi-second p95 — §1p). 120/min authenticated is roughly one request
-    # every 500ms sustained, which a legitimate integration will not exceed
-    # while a retry storm will.
     RATE_LIMIT_ENABLED: bool = True
     RATE_LIMIT_AUTHENTICATED_RPM: float = 120.0
     RATE_LIMIT_ANONYMOUS_RPM: float = 20.0
@@ -293,31 +189,8 @@ class Settings(BaseSettings):
     # caller mint unlimited identities and bypass the limit entirely.
     RATE_LIMIT_TRUST_FORWARDED_FOR: bool = False
 
-    # --- Assessment execution bounds (api/main.py) ---
-    #
-    # asyncio.to_thread uses the default executor, which sizes itself to
-    # min(32, cpu_count + 4). That is badly wrong here: each concurrent
-    # assessment runs three transformer detectors, and PyTorch already
-    # parallelises WITHIN each forward pass (§1m measured oversubscription at
-    # only 3 concurrent models). Sixteen concurrent assessments would thrash
-    # the CPU into uselessness rather than serving sixteen users. A small
-    # bounded pool converts overload into queueing, which the timeout below
-    # then bounds.
     ASSESS_MAX_CONCURRENCY: int = 4
 
-    # G1 finding (docs/perf/01-baseline-analysis.md): torch was never
-    # explicitly threaded -- it defaulted to intra_op=6/inter_op=6 on this
-    # 12-core box. Each assessment already dispatches 8 detectors in
-    # parallel (core/fusion.py's own ThreadPoolExecutor); with
-    # ASSESS_MAX_CONCURRENCY concurrent assessments, that is up to
-    # ASSESS_MAX_CONCURRENCY * 8 threads each independently trying to claim
-    # 6 torch threads -- the exact oversubscription the comment above
-    # already predicted, now measured. Pinning each to 1 intra-op thread
-    # makes the OUTER thread pool (already correctly sized) the only source
-    # of parallelism, instead of two layers of parallelism fighting the
-    # same core count. Pure performance -- does not change any score or
-    # decision, so the existing decision-replay gate is the correctness
-    # guard (docs/perf/02-optimisations.md).
     TORCH_INTRA_OP_THREADS: int = 1
     TORCH_INTER_OP_THREADS: int = 1
 
@@ -326,7 +199,7 @@ class Settings(BaseSettings):
     # than a fabricated verdict — see the rationale at the call site.
     ASSESS_TIMEOUT_SECONDS: float = 30.0
 
-    # --- Gateway execution bounds (api/main.py, Phase 5: request forwarding) ---
+    # --- Gateway execution bounds (api/main.py, request forwarding) ---
     #
     # A SEPARATE pool from ASSESS_MAX_CONCURRENCY, deliberately — an LLM
     # completion is network I/O to an external provider, not local
@@ -350,8 +223,7 @@ class Settings(BaseSettings):
     LLM_GATEWAY_DEFAULT_PROVIDER: str = "ollama"
 
     # Ordered, comma-separated fallback providers tried in sequence when the
-    # one actually selected for this call fails or times out (Phase 5:
-    # "Timeout/failure handling, fallback"). Same comma-separated-string
+    # one actually selected for this call fails or times out (    # "Timeout/failure handling, fallback"). Same comma-separated-string
     # convention as CORS_ORIGINS, parsed the same way at the call site.
     #
     # Applies ONLY when the caller did not explicitly name a provider. A
@@ -363,7 +235,7 @@ class Settings(BaseSettings):
     # path, where "some working provider" is what the caller actually wants.
     GATEWAY_FALLBACK_PROVIDERS: str = ""
 
-    # --- Token accounting (Phase 5: "Token accounting, model selection") ---
+    # --- Token accounting ("Token accounting, model selection") ---
     #
     # Enforced PAST the fact, not predicted ahead of it: a provider's own
     # response is the only place token usage is known, so this can only ever
@@ -380,15 +252,6 @@ class Settings(BaseSettings):
     # with a huge number" convention as the rate limiter's own settings.
     GATEWAY_TOKEN_QUOTA_DAILY_DEFAULT: int = 0
 
-    # Load every model during startup instead of on the first request.
-    #
-    # This is NOT an optimisation, it is a correctness fix for the timeout
-    # above. Cold model loading measured ~35s on the reference machine
-    # (§1p's benchmark spent 34.6s on its first item), which is longer than
-    # ASSESS_TIMEOUT_SECONDS — so with lazy loading the FIRST request after
-    # every deploy is guaranteed to 503, and so is every request that arrives
-    # while it is still loading. Warming up front moves that cost to boot,
-    # where an orchestrator's readiness probe is designed to wait for it.
     WARM_MODELS_ON_STARTUP: bool = True
 
     # Registers core/demo_tools.py's four sandboxed demo tools at
@@ -399,18 +262,6 @@ class Settings(BaseSettings):
     # contract core/demo_tools.py::register_demo_tools already documents.
     REGISTER_DEMO_TOOLS: bool = False
 
-    # Registers core/real_tools.py's "http.get" -- the only REAL (non-
-    # sandboxed, live-network-calling) tool this project ships -- into the
-    # tool registry at startup. Defaults OFF, same opt-in contract as
-    # REGISTER_DEMO_TOOLS above and as register_real_tools()'s own
-    # docstring already states. HONEST NOTE: this flag was ADDED during a
-    # live pentest (docs/ROADMAP_V2.md's Phase 8 findings) after
-    # discovering register_real_tools() existed, was fully tested
-    # (tests/test_real_tools.py, tests/test_real_tools_edge_cases.py --
-    # including real SSRF-protection coverage), and was STILL NEVER WIRED
-    # UP anywhere -- no setting gated it, no startup call invoked it, so
-    # the tool was unreachable in every real deployment despite being
-    # production-ready. This is the fix for that gap, not a new feature.
     REGISTER_REAL_TOOLS: bool = False
 
     # Exact-match hostname allowlist for core/real_tools.py's "http.get"

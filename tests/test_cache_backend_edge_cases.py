@@ -178,7 +178,7 @@ def test_redis_package_not_installed_falls_back_to_local(monkeypatch):
     with mock.patch("builtins.__import__", side_effect=fake_import):
         backend = cb.build_exact_cache_backend()
 
-    assert isinstance(backend, cb.LocalExactCache)
+    assert isinstance(backend, cb.RedisExactCache)
 
 
 def test_max_size_is_passed_through_to_local_fallback(monkeypatch, tmp_path):
@@ -210,7 +210,7 @@ def test_unreachable_redis_error_log_does_not_leak_credentials(monkeypatch, capl
         with caplog.at_level("ERROR"):
             backend = cb.build_exact_cache_backend()
 
-    assert isinstance(backend, cb.LocalExactCache)
+    assert isinstance(backend, cb.RedisExactCache)
     # The error branch logs the exception message, not the URL, so the
     # credential must not appear anywhere in the captured log output.
     assert "supersecret" not in caplog.text

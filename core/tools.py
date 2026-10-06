@@ -1,46 +1,11 @@
-"""
-Tool registry + access control (Phase 6, Tool/Agent Gateway — roadmap
-items "Tool registry + schemas" and "Allow/deny, argument validation").
+"""Tool registration, schema/capability checks, review and audited execution.
 
-SCOPE, DELIBERATELY NARROW
---------------------------
-This covers the registry, schema declaration, structural argument
-validation (required fields present, declared types match), and
-capability-based allow/deny (`check_tool_access`). It does NOT cover
-risk-based approval requirements, sandboxed execution, or audit events —
-those are separate, explicitly listed roadmap items, and semantic
-argument validation ("this table name must exist") is inherently
-per-tool, deferred until a real tool needs it. Building the remaining
-items here, before a single real tool is registered to exercise any of
-this, would repeat the exact mistake this project's evidence discipline
-has consistently avoided elsewhere: several new subsystems stacked
-before the first is used, none of them driven by a measured need. Ship
-this, let it be used, let the next item's real requirements surface
-from that.
-
-SCHEMA FORMAT: JSON-SCHEMA-SHAPED, ON PURPOSE
-------------------------------------------------
-`parameters` follows JSON Schema's object-with-properties shape (the same
-convention OpenAI function-calling and MCP's own tool schemas use). The
-roadmap explicitly defers MCP compatibility until after this item and
-"Allow/deny, argument validation" are solid — starting from a
-JSON-Schema-compatible shape now means that future step is a
-compatibility adapter, not a rewrite of every registered tool's schema.
-
-NOT A JSON SCHEMA VALIDATOR
-------------------------------
-`validate_arguments` checks required-field presence and declared
-top-level types (string/number/integer/boolean/array/object, plus
-`enum`) — not the full JSON Schema spec (nested schemas, `minimum`,
-`pattern`, `oneOf`, etc.). Pulling in a JSON Schema library for a
-type-and-required-fields check would be the same mistake `evaluation/
-metrics.py` avoided by hand-rolling its own bootstrap CI rather than
-adding scipy: correct depth for what has an actual caller today, not
-speculative completeness for validation rules no registered tool uses.
-"""
+Handlers are trusted Python code. HIGH execution requires bound approval;
+intent persists before effects and completion/failure afterward. This layer
+is shared by HTTP and MCP and is not a general execution sandbox."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Tuple
 
 from core.logger import get_logger
@@ -171,7 +136,7 @@ def validate_arguments(spec: ToolSpec, arguments: Dict[str, Any]) -> Tuple[bool,
         if enum is not None and value not in enum:
             return False, f"argument {key!r} must be one of {enum!r}, got {value!r}"
 
-        # Phase 8 hardening: JSON-Schema's own `maxLength` keyword, not
+        # JSON-Schema's own `maxLength` keyword, not
         # previously enforced here at all -- structural validation checked
         # required/type/enum but had no notion of size, so a tool spec
         # declaring maxLength (e.g. http.get's `url`) got no protection
@@ -225,46 +190,46 @@ VALID_TOOL_DECISIONS = ("BLOCK", "REVIEW", "ALLOW")
 
 def decide_tool_call(capability: str, spec: ToolSpec, arguments: Dict[str, Any]) -> Dict[str, Any]:
     """
-    The full pre-execution decision for one tool call: access control,
-    then structural validation, then risk-based approval — in that
-    order, cheapest and most decisive check first, same ordering
-    principle `api/main.py`'s own request handlers already follow
-    (rate limit before token quota before the expensive detection work).
+        The full pre-execution decision for one tool call: access control,
+        then structural validation, then risk-based approval — in that
+        order, cheapest and most decisive check first, same ordering
+        principle `api/main.py`'s own request handlers already follow
+        (rate limit before token quota before the expensive detection work).
 
-    HIGH-risk tools always require REVIEW, even for a caller whose
-    capability already clears `check_tool_access` — access control
-    answers "may this caller use this tool at all", approval answers "is
-    THIS SPECIFIC call safe enough to run without a human looking at it
-    first", and conflating them would mean an INTERNAL caller's HIGH-risk
-    call (e.g. a production delete) executes with no human in the loop
-    just because they're allowed to invoke the tool in general. This
-    mirrors Phase 4's own REVIEW semantics: "neither auto-allowed nor
-    auto-blocked."
+        HIGH-risk tools always require REVIEW, even for a caller whose
+        capability already clears `check_tool_access` — access control
+        answers "may this caller use this tool at all", approval answers "is
+        THIS SPECIFIC call safe enough to run without a human looking at it
+        first", and conflating them would mean an INTERNAL caller's HIGH-risk
+        call (e.g. a production delete) executes with no human in the loop
+        just because they're allowed to invoke the tool in general. This
+        mirrors implementation's own REVIEW semantics: "neither auto-allowed nor
+        auto-blocked."
 
-    Returns a dict, not a bare decision string, so a caller can log or
-    display `reason` and `tool` alongside `decision` without a second
-    lookup — the same reasoning `core/fusion.py`'s `fused_threat_score`
-    returns a dict rather than a bare score.
+        Returns a dict, not a bare decision string, so a caller can log or
+        display `reason` and `tool` alongside `decision` without a second
+        lookup — the same reasoning `core/fusion.py`'s `fused_threat_score`
+        returns a dict rather than a bare score.
 
-    NOT wired into an execution endpoint or the review queue yet — there
-    is no real tool call path to enforce this against, and forcing a
-    tool-call review into `core/review_queue.py`'s prompt-hash-shaped
-    `ReviewRecord` would be exactly the "one shape serving two different
-    questions" mistake `core/logger.py`'s three distinct audit-event
-    functions were built to avoid — that concern was about the AUDIT
-    LOG's shape specifically (a compliance record answering a fixed set
-    of questions), not the review QUEUE's, which already generalises: a
-    `ReviewRecord`'s `prompt_hash` field is documented as "an identifying
-    hash, never raw content" — a tool call's name+arguments hash fits
-    that same contract exactly, even though the field name is inherited
-    from Phase 4's prompt-oriented origin. `POST /api/v1/tools/call`
-    (added once this function had a real caller to wire it to) does
-    exactly that.
+        NOT wired into an execution endpoint or the review queue yet — there
+        is no real tool call path to enforce this against, and forcing a
+        tool-call review into `core/review_queue.py`'s prompt-hash-shaped
+        `ReviewRecord` would be exactly the "one shape serving two different
+        questions" mistake `core/logger.py`'s three distinct audit-event
+        functions were built to avoid — that concern was about the AUDIT
+        LOG's shape specifically (a compliance record answering a fixed set
+        of questions), not the review QUEUE's, which already generalises: a
+        `ReviewRecord`'s `prompt_hash` field is documented as "an identifying
+        hash, never raw content" — a tool call's name+arguments hash fits
+        that same contract exactly, even though the field name is inherited
+        from implementation's prompt-oriented origin. `POST /api/v1/tools/call`
+        (added once this function had a real caller to wire it to) does
+        exactly that.
 
-    `risk_level` is included in every returned dict — not just useful
-    context, but what a caller enqueuing a REVIEW needs to populate
-    `ReviewRecord.risk` without a second lookup against the registry.
-    """
+        `risk_level` is included in every returned dict — not just useful
+        context, but what a caller enqueuing a REVIEW needs to populate
+        `ReviewRecord.risk` without a second lookup against the registry.
+        """
     access_ok, access_detail = check_tool_access(capability, spec)
     if not access_ok:
         return {"decision": "BLOCK", "reason": access_detail, "tool": spec.name,
@@ -343,42 +308,43 @@ class ToolRegistry:
 
 def execute_tool(capability: str, name: str, arguments: Dict[str, Any],
                  registry: ToolRegistry | None = None,
-                 tenant: str = "unset", request_id: str = "unset") -> Dict[str, Any]:
+                 tenant: str = "unset", request_id: str = "unset",
+                 principal_id: str = "", approval_id: str | None = None) -> Dict[str, Any]:
     """
-    The full call path: look up the tool, decide (access + validation +
-    risk), and only invoke the handler if the decision is ALLOW. Every
-    outcome — BLOCK and REVIEW included, not only ALLOW — is audited via
-    `core.logger.log_tool_event` before returning; an unauthorized or
-    malformed call is itself a security event worth recording, arguably
-    more interesting than a routine successful one.
+        The full call path: look up the tool, decide (access + validation +
+        risk), and only invoke the handler if the decision is ALLOW. Every
+        outcome — BLOCK and REVIEW included, not only ALLOW — is audited via
+        `core.logger.log_tool_event` before returning; an unauthorized or
+        malformed call is itself a security event worth recording, arguably
+        more interesting than a routine successful one.
 
-    A handler NEVER runs for BLOCK or REVIEW — this is the actual
-    enforcement point Phase 6 exists to build, not just a decision
-    function nobody consults. "Sandboxed" for the demo tools registered
-    in `core/demo_tools.py` means what it should always mean for a
-    handler with unknown provenance: it operates on in-memory, fake data
-    only, with no filesystem, network, or real-database access — the
-    sandbox is a property of what a handler is ALLOWED to touch, not
-    something this function itself enforces at the process level (no
-    subprocess isolation, no seccomp, no container). A handler that
-    reached into real infrastructure would defeat the sandbox regardless
-    of what this function does; the safety property lives in which
-    handlers get registered, not in `execute_tool`'s own code.
+        A handler NEVER runs for BLOCK or REVIEW — this is the actual
+        enforcement point implementation exists to build, not just a decision
+        function nobody consults. "Sandboxed" for the demo tools registered
+        in `core/demo_tools.py` means what it should always mean for a
+        handler with unknown provenance: it operates on in-memory, fake data
+        only, with no filesystem, network, or real-database access — the
+        sandbox is a property of what a handler is ALLOWED to touch, not
+        something this function itself enforces at the process level (no
+        subprocess isolation, no seccomp, no container). A handler that
+        reached into real infrastructure would defeat the sandbox regardless
+        of what this function does; the safety property lives in which
+        handlers get registered, not in `execute_tool`'s own code.
 
-    A handler that raises is reported as an execution error, distinct
-    from a security decision — the tool call was ALLOWED to attempt
-    running, and failed on its own terms (bad input the schema didn't
-    catch, a downstream dependency down), not because Gatekeeper decided
-    against it. Conflating the two would make a flaky tool look like a
-    security block in the audit trail.
+        A handler that raises is reported as an execution error, distinct
+        from a security decision — the tool call was ALLOWED to attempt
+        running, and failed on its own terms (bad input the schema didn't
+        catch, a downstream dependency down), not because Gatekeeper decided
+        against it. Conflating the two would make a flaky tool look like a
+        security block in the audit trail.
 
-    `tenant`/`request_id` default to "unset" the same way every other
-    audit-emitting function in this codebase does — "unset" lets a query
-    distinguish "no request context existed" from "this caller resolved
-    to a default", same reasoning `core/logger.py::log_event`'s own
-    docstring gives for that field. `POST /api/v1/tools/call` supplies
-    real values for both.
-    """
+        `tenant`/`request_id` default to "unset" the same way every other
+        audit-emitting function in this codebase does — "unset" lets a query
+        distinguish "no request context existed" from "this caller resolved
+        to a default", same reasoning `core/logger.py::log_event`'s own
+        docstring gives for that field. `POST /api/v1/tools/call` supplies
+        real values for both.
+        """
     from core.logger import log_tool_event
 
     reg = registry if registry is not None else _registry
@@ -393,6 +359,26 @@ def execute_tool(capability: str, name: str, arguments: Dict[str, Any],
         return {"decision": "BLOCK", "reason": detail, "tool": name, "risk_level": None}
 
     result = decide_tool_call(capability, spec, arguments)
+    from core.policy import policy_decision
+    policy_action, _ = policy_decision(capability, spec.risk_level, tenant)
+    if result['decision'] in ('ALLOW', 'REVIEW') and policy_action == 'RESTRICT':
+        result = {**result, 'decision': 'BLOCK', 'reason': 'RESTRICT: tool operation denied by tenant policy'}
+    if approval_id and result['decision'] != 'REVIEW':
+        result = {**result, 'decision': 'BLOCK', 'reason': 'Approval does not match the current review decision'}
+    if result['decision'] == 'REVIEW' and approval_id:
+        from core.approval import approval_context
+        from core.auth import Principal
+        from core.review_queue import _queue
+        principal = Principal(capability=capability, tenant=tenant, key_id=principal_id,
+                              authenticated=bool(principal_id))
+        context = approval_context(principal, request_id, name,
+                                   {'arguments': arguments, 'spec': asdict(spec)}, result['reason'])
+        try:
+            _queue.consume(approval_id, context)
+        except (KeyError, ValueError):
+            result = {**result, 'decision': 'BLOCK', 'reason': 'Approval unavailable or security context changed'}
+        else:
+            result = {**result, 'decision': 'ALLOW', 'reason': 'Bound approval consumed'}
     if result["decision"] != "ALLOW":
         log_tool_event(capability, name, result["decision"], risk_level=spec.risk_level,
                        reason=result["reason"], arguments=arguments,

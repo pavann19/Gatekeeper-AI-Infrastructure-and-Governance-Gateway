@@ -1,6 +1,6 @@
 """
 Tests for combined input+output assessment on /api/v1/assess (Output Guard
-wired into the main request loop — closes the V2 Phase 0 gap where a caller
+wired into the main request loop — closes the V2 implementation gap where a caller
 had to remember to invoke /assess_output separately after generating a
 response).
 

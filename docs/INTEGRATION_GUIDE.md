@@ -1,573 +1,83 @@
-# Gatekeeper Integration Guide
+# Integration guide
 
-This is the external-facing guide for a team that wants to put Gatekeeper in
-front of their own LLM application. It covers running the stack, calling the
-API, reading the response, and the configuration knobs an operator (not a
-Gatekeeper contributor) actually needs to touch.
+Use the [deployment guide](DEPLOYMENT_RUNBOOK.md) to provision the service and credentials. Open `/docs` for schemas and `/openapi.json` for the current generated contract. The examples below are illustrative requests, not recorded model outcomes or latency measurements.
 
-For internal design rationale, measured numbers, and what's still open in the
-V2 architecture, see [`docs/ENGINEERING_ASSESSMENT.md`](ENGINEERING_ASSESSMENT.md)
-instead — this document assumes you're integrating, not modifying.
+## HTTP identity
 
----
+Send `Authorization: Bearer <key>` or `X-API-Key`. Capability and tenant come from the credential. Do not send a role/capability field to grant yourself permission. Required authentication returns 401 for anonymous callers; optional mode permits GENERAL access where allowed. Tenant suspension/unavailable admission denies requests. INTERNAL is a trusted administrative credential, not a standard application key.
 
-## 1. Run the stack
+For POSIX request examples, place the issued key in `GATEKEEPER_API_KEY`. On PowerShell use `$env:GATEKEEPER_API_KEY` and `Invoke-RestMethod` or `curl.exe` with the equivalent headers; shell quoting differs.
 
-```bash
-git clone <this repo>
-cd AI_Governance_Project
-cp .env.example .env   # edit GRAFANA_ADMIN_PASSWORD at minimum
-docker compose up -d
-```
+## Assessment and decisions
 
-This brings up six services: `redis`, `ollama` (+ a one-shot `model-pull`
-that fetches the `llama-guard3` judge model automatically), `gatekeeper-api`,
-`prometheus`, and `grafana`. First boot is slow — the judge
-model pull and the sentence-transformer model download both happen on a cold
-cache — subsequent restarts reuse the `hf_cache` and `ollama_data` volumes
-and come up fast.
-
-Once healthy:
-
-| Service | URL | Notes |
-|---|---|---|
-| Gatekeeper API | `http://localhost:8000` | the integration surface — see §3 |
-| Gatekeeper Client UI | `http://localhost:8000/ui/login/index.html` | served by the API itself, no separate service — see §3 |
-| API docs (Swagger) | `http://localhost:8000/docs` | auto-generated from the schemas in §3 |
-| Health check | `http://localhost:8000/health` | see §7 |
-| Grafana dashboard | `http://localhost:3000` | `admin` / whatever you set `GRAFANA_ADMIN_PASSWORD` to — see §6 |
-| Prometheus | `http://localhost:9090` | raw metrics, mainly for debugging the dashboard itself |
-
-`[SCREENSHOT: docker compose up output showing all services healthy]`
-
-`[SCREENSHOT: http://localhost:8000/docs — Swagger UI landing page]`
-
-If you don't need Docker (e.g. you're embedding Gatekeeper as a library
-rather than a network service), everything under `core/` is importable
-directly — `core.risk.assess_risk`, `core.policy.policy_decision`, etc. That
-path is not covered here; this guide is for the HTTP integration.
-
----
-
-## 2. Authentication
-
-Every request resolves to a **capability tier** server-side — `GENERAL`,
-`ELEVATED`, or `INTERNAL` — which controls how strict the policy is (§4).
-Capability is **never** something the client can assert in the request body;
-it's looked up from the API key you present.
-
-- **No key presented, `AUTH_MODE=optional` (the default):** request is served
-  anonymously at `GENERAL` (least privilege). Nothing breaks, but you get the
-  strictest policy tier.
-- **No key presented, `AUTH_MODE=required`:** `401 Unauthorized`.
-- **Valid key presented:** resolved to whatever capability/tenant that key
-  was provisioned with.
-
-Send the key as a standard bearer token:
-
-```
-Authorization: Bearer gk_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-```
-
-### Provisioning a key
-
-There's no self-serve key-creation endpoint in this MVP — keys are
-provisioned by an operator editing a JSON file the container reads at
-startup (hot-reloadable — see `core/auth.py`'s `KeyStore`). Mint one:
-
-```python
-from core.auth import generate_key, hash_key
-plaintext = generate_key()          # e.g. "gk_AbCdEf..." — give this to the caller, once
-print(plaintext)
-print(hash_key(plaintext))          # this is what goes in api_keys.json
-```
-
-Then add the **hash**, never the plaintext, to `config/api_keys.json`
-(bind-mounted into the container — see `config/README.md`):
-
-```json
-{
-  "<sha256 hash from above>": {
-    "capability": "ELEVATED",
-    "tenant": "acme",
-    "key_id": "acme-research-01"
-  }
-}
-```
-
-`key_id` is a non-secret label used in logs and metrics — it is not the key
-itself and is safe to put in a bug report.
-
----
-
-## 3. Making a request
-
-### 3a. Assess a prompt before you send it to your LLM
-
-```bash
-curl -X POST http://localhost:8000/api/v1/assess \
-  -H "Authorization: Bearer gk_..." \
+```sh
+curl -sS http://localhost:8000/api/v1/assess \
+  -H "Authorization: Bearer $GATEKEEPER_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"prompt": "How do I reset a user'\''s password in our admin panel?"}'
+  -d '{"prompt":"How do I reset my password?"}'
 ```
 
-```json
-{
-  "decision": "ALLOW",
-  "risk_level": "LOW",
-  "topicality": "UNKNOWN",
-  "capability": "ELEVATED",
-  "authenticated": true,
-  "details": { "...": "internal scores, policy_reason, request_id, tenant" },
-  "clean_prompt": "How do I reset a user's password in our admin panel?",
-  "redacted_items": [],
-  "process_time_ms": 42.7,
-  "output_decision": null,
-  "output_details": null
-}
-```
+The response includes `decision`, `risk_level`, `topicality`, `clean_prompt`, redaction metadata, details and request identity. Risk describes threat assessment; topicality describes subject-domain scope. Model-dependent verdicts are configuration-dependent.
 
-`decision` is `BLOCK`, `RESTRICT`, or `ALLOW` — this is the field your
-integration branches on (§5). Only proceed to call your own LLM if
-`decision != "BLOCK"`.
-
-### 3b. Assess input and output in one call (recommended)
-
-Rather than calling `/assess`, generating a response, then calling
-`/assess_output` separately, submit the response alongside the original
-prompt via the optional `response_text` field:
-
-```bash
-curl -X POST http://localhost:8000/api/v1/assess \
-  -H "Authorization: Bearer gk_..." \
-  -H "Content-Type: application/json" \
-  -d '{
-        "prompt": "How do I reset a user'\''s password?",
-        "response_text": "Go to Admin > Users, click the user, then Reset Password."
-      }'
-```
-
-The integration pattern is: **assess the prompt → if not BLOCKed, call your
-own LLM → submit both the prompt and the generated response back here in one
-call.** Gatekeeper does not call your LLM for you.
-
-The output check only runs if the input wasn't already BLOCKed — there's no
-point assessing the response to a prompt that never made it through. The
-final `decision` is the more severe of the two (`BLOCK` > `RESTRICT` >
-`ALLOW`): a clean prompt paired with a leaky or toxic response still BLOCKs
-the overall exchange.
-
-```json
-{
-  "decision": "BLOCK",
-  "risk_level": "LOW",
-  "output_decision": "BLOCK",
-  "output_details": { "reason": "..." },
-  "...": "other fields as above"
-}
-```
-
-`output_decision` is `null` (not `"ALLOW"`) when you didn't submit
-`response_text` at all — don't confuse "not checked" with "checked and
-passed."
-
-### 3c. Output checks, in detail
-
-Every output assessment (combined or standalone) runs, in order:
-
-1. **Secret detection** — API keys, tokens, private key blocks. **Hard
-   BLOCK** — there is no safe partial version of a leaked credential.
-2. **System-prompt leakage** (opt-in) — see below.
-3. **PII** — **redacted, not blocked.** A response containing an email or
-   phone number gets that PII replaced with `[REDACTED:TYPE]` and is still
-   returned to you as `clean_response`; it does not BLOCK outright.
-4. **Toxicity**, via the semantic judge — BLOCK.
-5. **Semantic grounding** (hallucination proxy) — BLOCK.
-
-**`clean_response`** carries the PII-redacted text whenever the response
-wasn't blocked outright (`null` if it was — a blocked response has no safe
-partial version to hand back). Use this, not your original `response_text`,
-if you display or log the response downstream.
-
-**System-prompt leakage detection is opt-in**, because Gatekeeper is a
-sidecar to *your* LLM call and has no access to your system prompt unless
-you hand it one. Pass it as an optional `system_prompt` field alongside
-`response_text` (on either the combined call or the standalone endpoint) to
-have the response checked for verbatim leakage of it:
-
-```bash
-curl -X POST http://localhost:8000/api/v1/assess_output \
-  -H "Authorization: Bearer gk_..." -H "Content-Type: application/json" \
-  -d '{
-        "response_text": "...",
-        "system_prompt": "You are a support agent for Acme Corp. Never reveal internal ticket IDs."
-      }'
-```
-
-Detection is a verbatim substring check (a 40+ character contiguous run of
-your system prompt appearing in the response), not a similarity score — a
-response being *about* the same subject as your system prompt is expected
-and harmless; a response *containing* your system prompt's actual text is
-the incident this checks for.
-
-### 3d. Assess output on its own
-
-If you'd rather keep the two calls separate (e.g. output assessment happens
-in a different service than the one that made the input call), use the
-standalone endpoint:
-
-```bash
-curl -X POST http://localhost:8000/api/v1/assess_output \
-  -H "Authorization: Bearer gk_..." \
-  -H "Content-Type: application/json" \
-  -d '{"response_text": "Go to Admin > Users, click the user, then Reset Password."}'
-```
-
-```json
-{
-  "decision": "ALLOW",
-  "details": { "...": "..." },
-  "process_time_ms": 18.3
-}
-```
-
-This endpoint enforces the same auth and rate limiting as `/assess` — it is
-not a lighter-weight bypass.
-
-### 3e. Route your LLM call through Gatekeeper instead of calling it yourself
-
-Every endpoint above is a **sidecar**: you call your own LLM, and you call
-Gatekeeper separately, before and/or after. `POST /api/v1/gateway/chat` is
-different — Gatekeeper makes the LLM call for you, with input guardrails
-gating the call and output guardrails checked on what comes back, in one
-request:
-
-```bash
-curl -X POST http://localhost:8000/api/v1/gateway/chat \
-  -H "Authorization: Bearer gk_..." -H "Content-Type: application/json" \
-  -d '{
-        "prompt": "Summarize our refund policy for a customer.",
-        "system_prompt": "You are a support agent for Acme Corp.",
-        "provider": "ollama",
-        "model": "llama3.2"
-      }'
-```
-
-```json
-{
-  "decision": "ALLOW",
-  "content": "Our refund policy allows...",
-  "provider": "ollama",
-  "model": "llama3.2",
-  "usage": { "total_tokens": 142 },
-  "review_id": null,
-  "details": { "...": "..." },
-  "process_time_ms": 812.4
-}
-```
-
-`provider` and `model` are both optional — they default to
-`LLM_GATEWAY_DEFAULT_PROVIDER` and that provider's own configured default
-model. Supported providers: `ollama`, `openai_compatible` (any backend
-speaking the OpenAI chat-completions wire format — real OpenAI, Groq,
-Together, a local vLLM/LM Studio server), `anthropic_compatible`. An
-unrecognized `provider` value returns `422` before any network call is
-attempted.
-
-`content` is `null` whenever `decision` is `BLOCK` or `REVIEW` — either
-your input was stopped before the LLM was ever called, or the LLM's own
-response was stopped after the call. There is no way to retrieve a
-blocked response's text; that is enforcement, not a bug.
-
-**Failure modes distinct from a guardrail decision**: a `502` means the
-provider itself failed (bad API key, provider-side error) — not
-Gatekeeper's fault, not yours. A `503` means the provider didn't respond
-within `GATEWAY_TIMEOUT_SECONDS`. A `429` means your tenant has already
-used up its daily token quota (see below) — the provider was not called.
-None of these fabricate a decision; all are retryable at your discretion.
-
-**Token quota**: if `GATEWAY_TOKEN_QUOTA_ENABLED` is on, each tenant has a
-daily token budget (`GATEWAY_TOKEN_QUOTA_DAILY_DEFAULT`, or a per-tenant
-override in `config/tenants.json`'s `token_quota_daily`). This is enforced
-against usage from calls that already completed, not a pre-flight
-estimate — there is no way to know a call's cost before making it, so the
-call that pushes you over the line always completes; only the *next* one
-is rejected. Usage is only tracked for providers that report it (OpenAI-
-and Anthropic-compatible do; Ollama does not).
-
-**Cross-provider fallback**: if `GATEWAY_FALLBACK_PROVIDERS` names an
-ordered list of backup providers and you did NOT set `provider` on your
-request, a failed or timed-out call automatically retries against the
-next provider in that list. If you DO set `provider` explicitly, fallback
-never applies — your choice is never silently overridden. A successful
-fallback shows up in the response as `details.gateway_fallback_used` and
-`details.gateway_fallback_from`.
-
-**Streaming is not supported, by design, not by omission**: this
-endpoint's guardrail checks (secrets detection, PII redaction, toxicity,
-system-prompt leakage) run against the complete response, because several
-of them are only meaningful over full text — a secret split across two
-chunks, or a leaked system prompt only recognisable once enough
-contiguous characters have arrived. Returning partial content before it
-has been checked would defeat the reason this endpoint exists. If your
-use case needs streaming, call your own LLM directly and use the sidecar
-pattern in §3a–§3d instead.
-
-If you already call your own LLM directly and only want Gatekeeper's
-guardrails around that call, use §3a–§3d instead — this endpoint is for
-the case where you want Gatekeeper to own the call itself.
-
----
-
-## 4. Interpreting the response
-
-| Field | Meaning |
+| Decision | Caller behavior |
 |---|---|
-| `decision` | What to do: `BLOCK` (stop, do not call your LLM / do not show the response), `RESTRICT` (proceed with caution — see your policy config), `ALLOW` (proceed), `REVIEW` (stop, a human must resolve this first — see §5a and `review_id`). |
-| `risk_level` | `HIGH` / `MEDIUM` / `LOW` — threat signal only. |
-| `topicality` | `IN_DOMAIN` / `OUT_OF_DOMAIN` / `UNKNOWN` — subject-domain scoping, independent of safety. `UNKNOWN` means the domain guardrail is disabled (`DOMAIN_GUARDRAIL_MODE=off`, the shipped default — see §8). |
-| `capability` | The tier your credential actually resolved to. Echoed back so you can verify your key is provisioned the way you expect. |
-| `authenticated` | `false` means this request was served anonymously — check this if `decision` looks stricter than expected. |
-| `clean_prompt` | Your prompt after PII redaction — use this, not your original, if you log or forward the prompt anywhere downstream. |
-| `redacted_items` | What was stripped from the prompt (e.g. emails, phone numbers). |
-| `clean_response` | `response_text` after PII redaction, when a response was submitted and not blocked outright — `null` if no `response_text` was sent, or if the output was blocked (a blocked response has no safe partial version). Use this, not your raw LLM output, if you display or log the response. |
-| `review_id` | Set only when `decision` is `REVIEW` — `null` otherwise. Poll `GET /api/v1/review/{review_id}` for the eventual human decision (§5a). |
-| `process_time_ms` | Server-side latency for this call. |
-| `details` | Internal scores and metadata — useful for debugging/audit, not something to branch application logic on (its shape isn't a stable contract). Notably includes `fusion_triggering_class` and `fusion_class_scores` — which attack category (e.g. `jailbreak`, `harmful_content`, `prompt_injection`) fusion believed a HIGH/MEDIUM verdict was, and its per-class probabilities. Both are `None`/`{}` when the request was decided by an earlier stage (cache, hard-ban, fast-path) that never reached fusion. |
+| ALLOW | Continue only with the assessed/privacy-processed content and required downstream checks |
+| BLOCK | Do not execute or forward |
+| RESTRICT | Do not treat as unrestricted permission; enforce the applicable restriction or withhold execution |
+| REVIEW | Hold execution; resolving a record is not general permission for a later action |
 
-**Integration rule of thumb:** branch only on `decision` (and `output_decision`
-when present). Treat everything else as diagnostic.
+For an application calling its own model, assess input first, enforce the decision, then assess generated output before releasing it. `/api/v1/assess` accepts optional `response_text` and reference `system_prompt` for combined assessment of an already generated exchange. `/api/v1/assess_output` checks output independently:
 
-**On a `503`:** this means the assessment did not complete within
-`ASSESS_TIMEOUT_SECONDS` (default 30s) — it is an availability failure, not a
-security verdict. The response was **not** assessed. Do not treat a timeout
-as an implicit ALLOW; retry (the response includes `Retry-After: 5`) or fail
-your own request closed.
-
----
-
-## 5. What decision should you actually do?
-
-```
-BLOCK    -> Do not call your LLM (input case) / do not show the response to
-            the user (output case). Show a generic refusal in your own UI.
-RESTRICT -> Proceed, but under whatever restriction your policy maps to for
-            this tier (e.g. a smaller/more constrained model, extra logging,
-            a disclaimer). What RESTRICT means operationally is up to your
-            integration — Gatekeeper tells you the tier, not the UX.
-ALLOW    -> Proceed normally.
-REVIEW   -> Do not proceed yet. A human must resolve this first — see §5a.
+```sh
+curl -sS http://localhost:8000/api/v1/assess_output \
+  -H "Authorization: Bearer $GATEKEEPER_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"response_text":"Use the account recovery page."}'
 ```
 
-The mapping from `(capability, risk_level) -> decision` is your **policy**,
-configured per-tenant (§6.3) — not hardcoded in the gateway. `REVIEW` is
-opt-in per tenant (the shipped default policy never produces it) — see
-`policy_rules.yaml`'s commented example for how a tenant opts in.
+Do not confuse absent output assessment (`output_decision` unset) with output acceptance. Secret/leak checks, PII processing and explicit SAFE toxicity judging apply. Unavailable required judging blocks output. The optional grounding check is not a general factuality guarantee.
 
-### 5a. Handling a REVIEW decision
+## Provider gateway
 
-`decision: "REVIEW"` comes with a `review_id`. Nothing was auto-decided —
-a human needs to look at it. Your integration has two things to do:
-
-1. **Don't proceed yet.** Treat REVIEW like BLOCK for the purposes of "can
-   I call my LLM / show this response" until it resolves.
-2. **Poll for the outcome:**
-
-```bash
-curl http://localhost:8000/api/v1/review/<review_id> \
-  -H "Authorization: Bearer gk_..."
+```sh
+curl -sS http://localhost:8000/api/v1/gateway/chat \
+  -H "Authorization: Bearer $GATEKEEPER_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt":"Explain password recovery.","provider":"ollama"}'
 ```
 
-```json
-{
-  "review_id": "a1b2c3...",
-  "status": "PENDING",
-  "reason": "Policy applied for GENERAL (Risk: MEDIUM, Tenant: acme)",
-  "capability": "GENERAL", "risk": "MEDIUM", "tenant": "acme",
-  "final_decision": null
-}
+Configure provider endpoints, credentials and models on the server. Input BLOCK/RESTRICT/REVIEW stops forwarding; output must pass before content is released. Provider usage supports token accounting, subject to provider reporting and concurrent quota limitations. Errors are not successful model responses. Gateway system prompts bypass the user-prompt screening path: source them from trusted application configuration rather than untrusted user input.
+
+## Tools and review
+
+Operators register tools with capability, risk, schema and a trusted handler. Demo/real tools are opt-in. Inspect `/api/v1/tools` and the generated schema for the current catalogue. An enabled demo example is:
+
+```sh
+curl -sS http://localhost:8000/api/v1/tools/call \
+  -H "Authorization: Bearer $GATEKEEPER_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"demo.echo","arguments":{"text":"hello"}}'
 ```
 
-Once a reviewer resolves it, `status` becomes `APPROVED`/`REJECTED` and
-`final_decision` becomes `ALLOW`/`BLOCK` — that final decision is what you
-should actually act on.
+HIGH tools return REVIEW before effects. Authenticated tenant owners can inspect records; ELEVATED/INTERNAL reviewers can resolve owned records. Use `GET /api/v1/review/{review_id}` and `POST /api/v1/review/{review_id}/resolve` with `{"outcome":"APPROVED"}` or `{"outcome":"REJECTED"}`. INTERNAL has deliberate cross-tenant administration.
 
-**Resolving a review** (for whoever builds your reviewer-facing tooling,
-not the original caller) requires `INTERNAL` capability:
+For approved tool continuation, resubmit the identical tool/schema/arguments using the same authenticated principal and original `X-Request-ID`, adding `review_id` to the tool request. Tenant, capability, policy/security identity and decision context must still match. Approval is consumed once before effects; changed requests, expired/conflicting records and previously consumed approvals do not authorize execution. Investigate uncertainty after a crash instead of retrying an effect blindly.
 
-```bash
-# List what needs attention right now:
-curl http://localhost:8000/api/v1/review -H "Authorization: Bearer <internal-key>"
+Prompt/provider reviews remain decision records; they have no continuation endpoint. Do not turn an approved record into a generic client-side ALLOW override. Registered handlers are trusted code, not a sandbox.
 
-# Resolve one:
-curl -X POST http://localhost:8000/api/v1/review/<review_id>/resolve \
-  -H "Authorization: Bearer <internal-key>" -H "Content-Type: application/json" \
-  -d '{"outcome": "APPROVED"}'
+## MCP
+
+MCP transports expose tool discovery/execution, not general prompt assessment:
+
+```sh
+python -m scripts.run_mcp_server --capability GENERAL --tenant default --demo-tools
+python -m scripts.run_mcp_http_server --host 127.0.0.1 --port 8001 --demo-tools
 ```
 
-**What this does not do:** resolving a review does not retroactively
-change how a future, similar prompt is handled — it only affects the one
-specific request that was queued. Gatekeeper does not store the raw prompt
-text in the review queue (only its hash), so there's nothing to
-automatically re-match a later request against.
+Stdio trusts its launcher and fixed principal. HTTP requires configured credentials and tenant admission even when the main API permits optional authentication. `/mcp/jsonrpc` returns stateless JSON-RPC responses. `/mcp/sse` establishes a credential-bound session; `/mcp/messages` relays through that session. Keep the same credentials and principal for session use. A session identifier alone does not grant access. Shared tool controls still apply; do not assume HTTP tool approval continuation is exposed as an equivalent MCP protocol feature.
 
----
+## Failure and operational handling
 
-## 6. Multi-tenancy
+Use `/live` for process liveness and `/ready` for readiness. `/health` is diagnostic. Treat 401/403, 429, body/schema errors, dependency failures and timeouts explicitly. A timed-out tool/provider operation is not proof that external execution never occurred. Preserve `X-Request-ID` for correlation and do not put credentials or raw sensitive content in support reports.
 
-If you're running one Gatekeeper deployment for multiple downstream
-customers/teams, each with their own risk tolerance, provision them as
-tenants rather than running separate deployments.
-
-### 6.1 Tenant identity (`config/tenants.json`)
-
-```json
-{
-  "acme": {
-    "display_name": "Acme Corp",
-    "status": "active",
-    "rate_limit_rpm": 500,
-    "token_quota_daily": 200000
-  },
-  "acme-trial": {
-    "display_name": "Acme Corp (trial)",
-    "status": "suspended"
-  }
-}
-```
-
-`status: "suspended"` rejects every request for that tenant with `403`
-before any detection work runs. `rate_limit_rpm` overrides the global
-default (`RATE_LIMIT_AUTHENTICATED_RPM` from `.env`) for that tenant only —
-omit it to inherit the global value. `token_quota_daily` (used only by
-`/api/v1/gateway/chat`, see §3e) similarly overrides
-`GATEWAY_TOKEN_QUOTA_DAILY_DEFAULT` for that tenant — omit it to inherit
-the global default, or set it to `0` explicitly to make that tenant
-unlimited regardless of the global setting. A tenant not listed here (or a
-missing file entirely) resolves to a safe default tenant at the global
-rate limit and token quota — nothing breaks if you never touch this file.
-
-A caller's tenant comes from their API key's `tenant` field (§2), never from
-anything in the request body.
-
-### 6.2 Rate limits
-
-Enforced per identity, before any detection work is scheduled:
-
-- Anonymous: `RATE_LIMIT_ANONYMOUS_RPM` (default 20/min)
-- Authenticated: `RATE_LIMIT_AUTHENTICATED_RPM` (default 120/min), or the
-  tenant's `rate_limit_rpm` override if set
-
-Exceeding the limit returns `429`. Set `RATE_LIMIT_ENABLED=false` in `.env`
-to disable entirely (not recommended for a shared deployment).
-
-### 6.3 Per-tenant policy (`policy_rules.json`)
-
-This is the file that decides what `decision` comes out for a given
-`(capability, risk_level)` pair. **Do not** point `POLICY_RULES_FILE` at the
-empty `config/` bind mount — an absent policy file fails closed to `BLOCK`
-for every request, by design (see `config/README.md` for the correct way to
-override it).
-
-```json
-{
-  "default_action": "BLOCK",
-  "tenants": {
-    "default": {
-      "policies": {
-        "GENERAL":  { "HIGH": "BLOCK", "MEDIUM": "RESTRICT", "LOW": "ALLOW" },
-        "ELEVATED": { "HIGH": "BLOCK", "MEDIUM": "ALLOW",    "LOW": "ALLOW" },
-        "INTERNAL": { "HIGH": "ALLOW", "MEDIUM": "ALLOW",    "LOW": "ALLOW" }
-      }
-    },
-    "acme": {
-      "policies": {
-        "GENERAL": { "HIGH": "BLOCK", "MEDIUM": "BLOCK", "LOW": "ALLOW" }
-      }
-    }
-  }
-}
-```
-
-A tenant without its own `policies` block falls back to `"default"`. This is
-the file you'd hand to a customer success / trust-and-safety team to tune
-per-customer strictness without touching detection code.
-
----
-
-## 7. Health and readiness
-
-```bash
-curl http://localhost:8000/health
-```
-
-Checks policy files, the domain classifier, and the embedding model are all
-loaded. Use this as your container orchestrator's readiness probe, not
-liveness — a Gatekeeper instance that's up but reports an unhealthy
-sub-check (e.g. missing policy file) is deliberately failing closed, not
-crash-looping.
-
----
-
-## 8. Things worth knowing before you go live
-
-- **`DOMAIN_GUARDRAIL_MODE=off` is the shipped default on purpose.** The
-  bundled domain corpus describes *this* project's own subject area. Turning
-  on `enforcing` without supplying your own corpus produces a measured ~98%
-  false-positive rate — see `docs/ENGINEERING_ASSESSMENT.md` §1 before
-  touching this.
-- **The judge model runs asynchronously when invoked.** A small fraction of
-  ambiguous requests (measured ~6.6% on the reference benchmark) escalate to
-  an LLM-judge arbitration step; the fast verdict is returned first and a
-  slower confirmatory judge pass (Llama Guard) runs after your response
-  completes, purely for audit/metrics — it does not change the decision you
-  already received.
-- **Change `GRAFANA_ADMIN_PASSWORD`.** The compose default (`changeme`) is a
-  placeholder, not a credential meant to survive to a real deployment.
-- **`/metrics` leaks operational detail** (traffic volume, block rates,
-  active tenants). Set `METRICS_REQUIRE_AUTH=true` if it's reachable from
-  outside your monitoring network.
-
----
-
-## 9. Monitoring
-
-`http://localhost:3000` (Grafana, auto-provisioned — no manual dashboard
-setup needed) gives you, out of the box: decision rate by outcome, which
-detection stage decided (cache / fast-path / fusion / judge), end-to-end and
-per-stage latency percentiles, in-flight assessments, rate-limit and timeout
-rates, judge invocation rate, circuit breaker state, and per-tenant traffic.
-
-`[SCREENSHOT: Grafana "Gatekeeper" dashboard overview — full page]`
-
-`[SCREENSHOT: Grafana panel — "Decisions per second, by outcome"]`
-
-`[SCREENSHOT: Grafana panel — "Decision source breakdown", showing fast-path vs fusion vs judge]`
-
-If a panel shows "Unrecognised decision sources" above zero, that's a
-metrics-instrumentation gap, not a gateway problem — see the panel
-description in the dashboard itself.
-
----
-
-## 10. Quick reference
-
-```bash
-# Health
-curl http://localhost:8000/health
-
-# Assess a prompt only
-curl -X POST http://localhost:8000/api/v1/assess \
-  -H "Authorization: Bearer $GATEKEEPER_KEY" -H "Content-Type: application/json" \
-  -d '{"prompt": "..."}'
-
-# Assess prompt + generated response together (recommended)
-curl -X POST http://localhost:8000/api/v1/assess \
-  -H "Authorization: Bearer $GATEKEEPER_KEY" -H "Content-Type: application/json" \
-  -d '{"prompt": "...", "response_text": "..."}'
-
-# Assess a response on its own
-curl -X POST http://localhost:8000/api/v1/assess_output \
-  -H "Authorization: Bearer $GATEKEEPER_KEY" -H "Content-Type: application/json" \
-  -d '{"response_text": "..."}'
-```
+Request deadlines and backend concurrency tests do not certify every synchronous/nested path or application replica configuration. Read [security](SECURITY.md) before enabling remote providers, real network tools or public access.

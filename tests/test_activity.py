@@ -219,9 +219,6 @@ def test_trace_spans_multiple_chunks(tmp_path, monkeypatch):
     assert [e["event_type"] for e in result["events"]] == ["input_assessment", "tool_call"]
 
 
-# --- Phase 8 hardening: a filter matching NOTHING must not repeatedly ---------
-# --- re-scan the file from scratch (real load test showed a ~45x latency
-# --- cliff for exactly this case -- see docs/ROADMAP_V2.md's Phase 8 entry)
 
 def test_no_matches_at_all_calls_tail_raw_lines_at_most_twice(tmp_path, monkeypatch):
     """Previously this escalated needed_raw by 4x per miss (limit, *4, *16,

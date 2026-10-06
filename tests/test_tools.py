@@ -1,10 +1,4 @@
-"""
-Tests for core/tools.py — Phase 6's first item, "Tool registry + schemas".
-
-Scope matches the module's own docstring: registry correctness and
-structural argument validation. No allow/deny, approval, sandboxing, or
-audit wiring here — those are separate, not-yet-built roadmap items.
-"""
+"""Tests for core/tools.py — implementation's first item, "Tool registry + schemas"."""
 import pytest
 
 from core.tools import (
@@ -166,7 +160,7 @@ def test_bool_is_accepted_as_boolean():
     assert ok is True
 
 
-# --- Phase 8 hardening: maxLength, previously unenforced --------------------
+# --- maxLength, previously unenforced --------------------
 
 def test_string_within_max_length_is_accepted():
     spec = make_spec(parameters={

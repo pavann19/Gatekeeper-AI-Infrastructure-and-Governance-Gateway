@@ -1,5 +1,5 @@
 """
-Tests for POST /api/v1/tools/call (Phase 6, Tool/Agent Gateway) -- the
+Tests for POST /api/v1/tools/call (implementation) -- the
 endpoint that gives core/tools.py::execute_tool a real caller, real
 tenant/request_id context, and a real REVIEW path via
 core/review_queue.py.
@@ -236,7 +236,7 @@ def test_extra_fields_in_request_are_rejected():
     assert response.status_code == 422
 
 
-# --- Phase 8 hardening: arguments/name size bounds, previously unenforced -----
+# --- arguments/name size bounds, previously unenforced -----
 
 def test_oversized_arguments_payload_is_rejected():
     """`arguments` was the one caller-supplied, structurally-unbounded

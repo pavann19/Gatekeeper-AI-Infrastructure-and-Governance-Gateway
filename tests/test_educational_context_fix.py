@@ -1,41 +1,9 @@
-"""
-Regression tests for a real bug found while investigating the "dead dynamic
-threat feed" Phase 1 item (docs/ROADMAP_V2.md; see
-docs/ENGINEERING_ASSESSMENT.md section 1z).
-
-THE BUG: `collect_semantic_signals` set `details["is_educational"]` by
-calling `check_dynamic_safe_harbors(prompt_vec)` directly — a function that
-only ever consults `DYNAMIC_SAFE_HARBORS`, a list nothing in the codebase
-ever populated. It always returned 0.0 (falsy), so `signals["is_educational"]`
-was always falsy regardless of how clearly a prompt was framed as authorized
-security research — silently disabling the entire educational-safe-harbor
-MEDIUM-downgrade path in `fuse_signals`. The correct function,
-`check_educational_context`, already existed, was already correctly
-implemented (checks the real, populated `educational_store` anchors against
-a threshold), and was simply never called from the live signal-collection
-path.
-
-Existing tests (tests/test_fusion.py etc.) only ever construct a fake
-`signals` dict with `is_educational` passed in directly, so they validate
-`fuse_signals`'s reaction to the flag but never validate that the flag
-itself gets computed correctly from a real prompt — which is exactly how
-this bug survived. These tests close that gap.
-"""
+"""Regression tests for educational-context signal collection and fusion."""
 from unittest.mock import patch
 
 from core.config import EDUCATIONAL_THRESHOLD
 from core.risk import check_educational_context, collect_semantic_signals
 
-# NOTE ON COVERAGE: this file's tests mock educational_store.get_max_similarity
-# rather than embedding real text — CI's requirements-ci.txt deliberately
-# excludes sentence-transformers (no ML model downloads for unit tests; see
-# that file's comment). check_educational_context's behaviour against the
-# REAL, populated educational_store was verified manually in development
-# (genuine anchor-matching text -> True, unrelated text -> False) before this
-# fix shipped — see docs/ENGINEERING_ASSESSMENT.md section 1z. What these
-# tests guard in CI is the pure threshold logic and, more importantly, the
-# WIRING (below) — that collect_semantic_signals actually calls this function
-# rather than the dead one that caused the original bug.
 
 
 # ---------------------------------------------------------------------------

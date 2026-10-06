@@ -194,6 +194,10 @@ class RedisExactCache(ExactCacheBackend):
             self._client.delete(k)
 
 
+class CacheDependencyUnavailable(RuntimeError):
+    """Configured shared cache authority could not be consulted or persisted."""
+
+
 def build_exact_cache_backend(client=None, max_size=5000) -> ExactCacheBackend:
     """
     Selects Redis if `client` is provided or if `REDIS_URL` is set AND
@@ -221,11 +225,8 @@ def build_exact_cache_backend(client=None, max_size=5000) -> ExactCacheBackend:
         return RedisExactCache(redis_client)
 
     if os.environ.get("REDIS_URL"):
-        logger.error(
-            "REDIS_URL is set but Redis is unreachable; falling back to the "
-            "local file-backed cache. Verdicts will NOT be shared across "
-            "gateway instances until this is fixed."
-        )
+        from core.redis_client import RequiredRedisClient
+        return RedisExactCache(RequiredRedisClient())
     else:
         logger.info("REDIS_URL not set; using local file-backed cache (single-node only).")
 

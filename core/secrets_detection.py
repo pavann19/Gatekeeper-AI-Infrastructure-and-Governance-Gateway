@@ -1,28 +1,5 @@
 # core/secrets_detection.py
-"""
-Detects credential-shaped strings (API keys, tokens, private key blocks) in
-LLM-generated output. Phase 2 (Output Security) roadmap item.
-
-WHY THIS IS SEPARATE FROM core/privacy.py's PII REDACTION
------------------------------------------------------------
-PII (an email, a name) is often incidental and conversationally useful --
-redacting it and letting the rest of the response through preserves utility.
-A live credential is categorically different: there is no "mostly safe"
-version of a response that contains a working API key. Detection here
-therefore reports a hard signal the caller (core/output_guardrails.py)
-treats as an unconditional BLOCK, not a redact-and-continue candidate.
-
-WHY REGEX, matching core/privacy.py's REGEX_PATTERNS approach: every pattern
-below matches a vendor-specific, structurally distinctive prefix (AKIA...,
-sk-..., ghp_..., xox?-..., a PEM header). These are the same class of
-high-precision, low-recall patterns public secret-scanners (gitleaks,
-trufflehog) lead with, chosen specifically to avoid the false-positive cost
-of a generic "looks like a random string" heuristic, which would flag
-ordinary hashes, UUIDs, and base64 data as "secrets" and make this
-unusable. A generic high-entropy scan is explicitly NOT attempted here for
-that reason -- narrower coverage, but every hit is a real, actionable
-finding rather than noise a deployment would learn to ignore.
-"""
+"""Detect credential-like secrets in untrusted input and generated output."""
 import re
 
 SECRET_PATTERNS = {

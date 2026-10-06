@@ -1,46 +1,10 @@
-"""
-Embedded-SQLite mirror of the audit trail.
+"""Queryable SQLite audit persistence alongside JSONL.
 
-The audit trail has always been append-only JSONL (`core/logger.py`), read
-by a byte-bounded reverse tail scan (`core/activity.py`). That scan is
-bounded but a full-budget sweep for a near-zero-match query is still real
-work under concurrency, and two deferred-tier items (compliance export,
-attack-campaign clustering) are close to unimplementable over a linear
-scan. This module adds a queryable, indexed store using **stdlib `sqlite3`
-only — no new service, no new deployment dependency**, which is the
-property that makes it acceptable given this project's infra reality.
-
-WHAT THIS INCREMENT DOES
-------------------------
-- `write(event_type, entry)` — mirror one audit record into SQLite. Called
-  by `core/logger.py` alongside the existing JSONL write (dual-write).
-- `recent(...)` / `by_request_id(...)` — read APIs returning the SAME shape
-  as `core/activity.py` so a later increment can swap the reader over with
-  no caller change.
-
-FAIL-MODE
--------------------------------------------
-The JSONL write stays AUTHORITATIVE for now. `core/logger.py` calls
-`write()` inside a `try/except` that logs CRITICAL and swallows — a SQLite
-mirror failure does NOT fail the request and does NOT trip
-`AUDIT_WRITE_FAILS_CLOSED` (that flag guards the JSONL write, which still
-succeeded). Only once reads move to SQLite does a write failure here become
-request-fatal.
-
-FOUR EVENT SHAPES STAY SEPARATE
-------------------------------
-One table per `event_type` — `input_assessment`, `output_assessment`,
-`gateway_call`, `tool_call` — for exactly the reason `core/logger.py` keeps
-the four functions separate: they answer different questions and carry
-non-overlapping fields. A pre-`event_type` JSONL line (migration only) goes
-to `legacy_event` with its raw JSON preserved, never dropped.
-
-PRIVACY
--------
-Hashes only. The schema has `prompt_hash` / `response_hash` /
-`arguments_hash` columns and NO column that could hold raw prompt,
-response, or argument text — same guarantee the JSONL trail already makes.
-"""
+Input, output, gateway and tool events have separate tables. Current records
+store content hashes rather than raw prompt, response or argument text.
+Migration preserves legacy rows as legacy events. SQLite writes are fatal
+when AUDIT_READ_FROM_SQLITE makes this store authoritative; otherwise the
+logger records a mirror failure. See docs/SECURITY.md."""
 from __future__ import annotations
 
 import json
@@ -100,7 +64,6 @@ CREATE TABLE IF NOT EXISTS legacy_event (
 );
 """
 
-# request_id / tenant / event_type / timestamp — the four the roadmap names.
 _INDEXES = [
     ("input_assessment", "request_id"), ("input_assessment", "tenant"),
     ("input_assessment", "timestamp"), ("input_assessment", "event_type"),

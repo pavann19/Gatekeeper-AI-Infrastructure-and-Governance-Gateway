@@ -1,26 +1,26 @@
-# Config directory
+# Deployment identity configuration
 
-Mounted read-only into the `gatekeeper-api` container at `/app/config`
-(see `docker-compose.yml`). Everything in here is optional — an operator
-who deploys without touching this directory gets exactly the same
-zero-trust defaults as running Gatekeeper outside Docker:
+Compose mounts this directory read-only at `/app/config`. It explicitly configures `api_keys.json` and `tenants.json`; provision both before startup. Missing/unreadable configured tenant state denies admission. These files are local credentials/configuration and must not be committed or copied into the image.
 
-| File | Absent means | See |
-|---|---|---|
-| `api_keys.json` | Every caller is anonymous, served at GENERAL (least privilege) | `core/auth.py` |
-| `tenants.json` | Every caller resolves to the active `DEFAULT_TENANT` | `core/tenancy.py` |
-Deliberately **not listed above**: `policy_rules.json`. Unlike the two
-files in the table, an absent policy file is not a safe default —
-`core/policy.py` fails closed to BLOCK for every single request without a
-usable `tenants.default` entry. `docker-compose.yml` therefore does NOT
-point `POLICY_RULES_FILE` at this directory; it keeps `core/config.py`'s
-default, which resolves to the copy the Dockerfile bakes in from the repo
-root (`COPY . .`) — already the correct, tenant-scoped policy this project
-ships with. To override the shipped policy, edit `POLICY_RULES_FILE` in
-`docker-compose.yml` yourself and place your replacement here; do not do
-it by just dropping a file in this directory, since nothing reads it from
-here by default.
+For a fresh local anonymous demo, both files can contain `{}`. Do not overwrite an existing store. Optional authentication then permits GENERAL access where allowed; required authentication denies anonymous callers.
 
-`api_keys.json` and `tenants.json` are not committed to this repo (see
-`.gitignore` / `.dockerignore`) — provisioning them is a deployment-time
-decision, not a build-time one.
+Provision a key with an installed API environment:
+
+```sh
+python -m scripts.manage_api_keys --file config/api_keys.json issue --capability GENERAL --tenant default
+```
+
+The CLI prints plaintext once and stores its hash. Protect the issued credential. An illustrative tenant record is:
+
+```json
+{
+  "default": {
+    "display_name": "Local application",
+    "status": "active"
+  }
+}
+```
+
+Operators can configure tenant rate/quota and privacy settings documented by `core/tenancy.py`. Admission identity comes from keys, not arbitrary request fields. Coordinate reload when changing or suspending identities.
+
+`canonical_replay.json` is the public offline replay profile, not a credential file. The default live policy is image-managed `policy_rules.json` at the repository root. Placing a policy in this directory does not select it: set `POLICY_RULES_FILE` explicitly and provision writable storage if dynamic deploy/rollback is needed. See [deployment](../docs/DEPLOYMENT_RUNBOOK.md) and [security](../docs/SECURITY.md).

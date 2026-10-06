@@ -1,45 +1,4 @@
-"""
-Per-tenant daily token accounting for the LLM Gateway (Phase 5: "Token
-accounting" roadmap item).
-
-WHY THIS ENFORCES PAST THE FACT, NOT AHEAD OF IT
--------------------------------------------------
-Token usage for a call is only known once the provider has answered — there
-is no way to ask "how many tokens will this cost" before making the call.
-So this tracker can only ever reject the NEXT call once a tenant's already-
-recorded usage has crossed its quota; the call that pushes a tenant over the
-line is always allowed to complete. This is the same shape every commercial
-LLM API's usage cap actually has, not a limitation specific to this gateway.
-
-DISTRIBUTED VS LOCAL BACKENDS
------------------------------
-1. Redis-backed (`RedisTokenQuotaTracker`): Shared state across all replicas.
-   Keys are per-tenant per-UTC-calendar-day (`gatekeeper:quota:<tenant_id>:<YYYY-MM-DD>`).
-   Uses atomic Redis increment operations (`INCRBY` / Lua script) with automatic
-   midnight-rollover TTL.
-2. Local fallback (`LocalTokenQuotaTracker` / `TokenQuotaTracker`): In-memory
-   thread-safe tracker with LRU cap. Used when REDIS_URL is unset or when Redis
-   is temporarily unavailable.
-
-WHY A DAILY WINDOW, PROCESS-LOCAL AS FALLBACK, MIRRORING core/rate_limit.py
----------------------------------------------------------------------------
-The local fallback uses the same bounded in-memory strategy as RateLimiter:
-an LRU-capped registry prevents unbounded tenant_id proliferation from becoming
-a memory exhaustion vector (though tenant_id is operator-provisioned via
-core/tenancy.py, this provides defensive bounding). In multi-replica deployments,
-RedisTokenQuotaTracker ensures exact global quota enforcement across all nodes.
-
-UNMETERED PROVIDERS AND USAGE SHAPES
-------------------------------------
-Usage that a provider does not report (Ollama's /api/chat returns none) adds
-zero to the tracked total for that call — there is nothing to count, and
-silently estimating a number would misrepresent actual spend as a metered
-fact. A tenant calling only Ollama will never be quota-limited by this
-module no matter how much they use it; that is a stated gap, not a bug, and
-sits alongside `LLMResponse.usage`'s own "not consumed by anything" note
-in core/llm_providers.py that this module is now the one place that DOES
-consume it.
-"""
+"""Implementation of token quota."""
 from __future__ import annotations
 
 import os
@@ -205,9 +164,9 @@ class RedisTokenQuotaTracker(TokenQuotaBackend):
         except Exception as e:
             logger.error(
                 f"Redis token quota would_exceed check failed ({type(e).__name__}: {e}); "
-                f"falling back to local tracker for tenant {tenant_id!r}."
+                f"denying operation for tenant {tenant_id!r}."
             )
-            return self._local_fallback.would_exceed(tenant_id, quota)
+            return True
 
     def usage_today(self, tenant_id: str) -> int:
         key = self._redis_key(tenant_id)
@@ -217,9 +176,9 @@ class RedisTokenQuotaTracker(TokenQuotaBackend):
         except Exception as e:
             logger.error(
                 f"Redis token quota usage_today check failed ({type(e).__name__}: {e}); "
-                f"falling back to local tracker for tenant {tenant_id!r}."
+                f"denying operation for tenant {tenant_id!r}."
             )
-            return self._local_fallback.usage_today(tenant_id)
+            raise ConnectionError('Distributed quota state unavailable') from None
 
     def record(self, tenant_id: str, tokens: int) -> None:
         if tokens <= 0:
@@ -237,9 +196,9 @@ class RedisTokenQuotaTracker(TokenQuotaBackend):
         except Exception as e:
             logger.error(
                 f"Redis token quota record failed ({type(e).__name__}: {e}); "
-                f"falling back to local tracker for tenant {tenant_id!r}."
+                f"denying operation for tenant {tenant_id!r}."
             )
-            self._local_fallback.record(tenant_id, tokens)
+            raise ConnectionError('Distributed quota persistence unavailable') from None
 
     def reset(self) -> None:
         self._local_fallback.reset()
@@ -255,7 +214,7 @@ def build_token_quota_tracker(client=None, max_tracked: int = 10_000) -> TokenQu
     """
     Selects Redis if `client` is provided or if `REDIS_URL` is set AND reachable,
     using the shared ConnectionPool in `core.redis_client`.
-    Falls back gracefully to the local in-memory tracker.
+    Configured Redis failure denies quota operations; local mode requires REDIS_URL unset.
     """
     if client is not None:
         return RedisTokenQuotaTracker(client, max_tracked=max_tracked)
@@ -268,14 +227,8 @@ def build_token_quota_tracker(client=None, max_tracked: int = 10_000) -> TokenQu
         return RedisTokenQuotaTracker(redis_client, max_tracked=max_tracked)
 
     if os.environ.get("REDIS_URL"):
-        logger.error(
-            "REDIS_URL is set but Redis is unreachable; falling back to local "
-            "in-memory token quota tracker. Quotas will NOT be shared across "
-            "gateway instances until this is fixed."
-        )
-    else:
-        logger.info("REDIS_URL not set; using local in-memory token quota tracker (single-node only).")
-
+        from core.redis_client import RequiredRedisClient
+        return RedisTokenQuotaTracker(RequiredRedisClient(), max_tracked=max_tracked)
     return LocalTokenQuotaTracker(max_tracked=max_tracked)
 
 

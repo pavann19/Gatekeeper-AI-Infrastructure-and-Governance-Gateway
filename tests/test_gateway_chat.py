@@ -1,5 +1,5 @@
 """
-Tests for POST /api/v1/gateway/chat (Phase 5: Real LLM Gateway — request
+Tests for POST /api/v1/gateway/chat (implementation: Real LLM Gateway — request
 forwarding + response interception). Every provider call is mocked; no
 live network or API key needed.
 """
@@ -225,7 +225,7 @@ def test_requires_auth_when_auth_mode_required(monkeypatch):
     assert response.status_code == 401
 
 
-# --- Phase 8 hardening: model/provider had no size bound before, unlike ---
+# --- model/provider had no size bound before, unlike ---
 # --- every other free-text field in this schema -----------------------------
 
 def test_oversized_model_name_is_rejected():
@@ -265,7 +265,7 @@ def test_valid_key_authenticates_the_call(mock_assess, key_store):
 
 
 # ---------------------------------------------------------------------------
-# Token accounting (Phase 5): enforced against usage already recorded from
+# Token accounting (): enforced against usage already recorded from
 # past calls, never a pre-flight estimate.
 # ---------------------------------------------------------------------------
 
@@ -320,7 +320,7 @@ def test_quota_disabled_by_default_even_with_prior_usage(mock_assess, monkeypatc
 
 
 # ---------------------------------------------------------------------------
-# Cross-provider fallback (Phase 5): only when the caller left `provider`
+# Cross-provider fallback (): only when the caller left `provider`
 # unset -- an explicit choice is never second-guessed.
 # ---------------------------------------------------------------------------
 

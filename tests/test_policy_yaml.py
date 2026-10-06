@@ -1,5 +1,5 @@
 """
-Tests for YAML policy file support (Phase 3, Policy-as-Code).
+Tests for YAML policy file support (implementation).
 core/policy.py::_parse_policy_file dispatches on extension.
 """
 import json

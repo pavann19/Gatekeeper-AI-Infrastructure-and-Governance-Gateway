@@ -1,28 +1,18 @@
-"""
-Metrics with uncertainty quantification.
-
-WHY BOOTSTRAP CONFIDENCE INTERVALS
-----------------------------------
-The original evaluation reported point estimates from 343 benign prompts. At
-that size the standard error on a false-positive rate near 5% is roughly 1.2
-percentage points, so a 95% interval spans about +/-2.3pp. Two configurations
-differing by 2pp are therefore indistinguishable, yet a point estimate presents
-them as different. Every comparison in this project reports an interval so that
-"A beats B" is a claim the data can actually support.
-
-Bootstrap is used rather than a closed form because the statistics of interest
-(ROC AUC, recall at a fixed FPR budget) have no convenient analytic variance,
-and because the same machinery then applies to every slice without special
-cases.
-
-No sklearn/scipy dependency: AUC, PR and the percentile bootstrap are all short
-enough to implement directly, which also keeps the CI install lean.
-"""
+"""Metrics with uncertainty quantification."""
 import math
 import random
 
 DEFAULT_BOOTSTRAP = 2000
 DEFAULT_ALPHA = 0.05
+
+
+def _validate(scores, labels):
+    if len(scores) != len(labels):
+        raise ValueError("scores and labels must have equal length")
+    if any(not math.isfinite(s) for s in scores):
+        raise ValueError("scores must be finite")
+    if any(lab not in (0, 1) for lab in labels):
+        raise ValueError("labels must be binary")
 
 
 # ---------------------------------------------------------------------------
@@ -35,6 +25,7 @@ def roc_auc(scores, labels):
     of tied scores. Ties matter here: a detector that returns 0.0 for every
     German prompt produces a large tie block, and ignoring it would inflate AUC.
     """
+    _validate(scores, labels)
     pairs = sorted(zip(scores, labels), key=lambda x: x[0])
     n = len(pairs)
     if n == 0:
@@ -62,6 +53,7 @@ def roc_auc(scores, labels):
 
 def roc_points(scores, labels):
     """Returns [(fpr, tpr, threshold)] sorted by descending threshold."""
+    _validate(scores, labels)
     ordered = sorted(zip(scores, labels), key=lambda x: -x[0])
     n_pos = sum(1 for _, lab in ordered if lab)
     n_neg = len(ordered) - n_pos
@@ -69,17 +61,21 @@ def roc_points(scores, labels):
         return []
     pts = [(0.0, 0.0, math.inf)]
     tp = fp = 0
-    for score, lab in ordered:
+    for i, (score, lab) in enumerate(ordered):
         if lab:
             tp += 1
         else:
             fp += 1
-        pts.append((fp / n_neg, tp / n_pos, score))
+        # A >= cutoff admits the entire tie group at once.
+        if i + 1 == len(ordered) or ordered[i + 1][0] != score:
+            pts.append((fp / n_neg, tp / n_pos, score))
     return pts
 
 
 def recall_at_fpr(scores, labels, budget=0.05):
     """Best achievable recall while keeping FPR at or below `budget`."""
+    if not 0 <= budget <= 1:
+        raise ValueError("FPR budget must be in [0, 1]")
     pts = roc_points(scores, labels)
     if not pts:
         return float("nan")
@@ -88,6 +84,8 @@ def recall_at_fpr(scores, labels, budget=0.05):
 
 def threshold_at_fpr(scores, labels, budget=0.05):
     """The score cutoff achieving `recall_at_fpr`."""
+    if not 0 <= budget <= 1:
+        raise ValueError("FPR budget must be in [0, 1]")
     pts = roc_points(scores, labels)
     feasible = [(tpr, thr) for fpr, tpr, thr in pts if fpr <= budget]
     if not feasible:
@@ -96,6 +94,9 @@ def threshold_at_fpr(scores, labels, budget=0.05):
 
 
 def confusion(scores, labels, threshold):
+    _validate(scores, labels)
+    if math.isnan(threshold):
+        raise ValueError("threshold must not be NaN")
     tp = fp = tn = fn = 0
     for s, lab in zip(scores, labels):
         pred = s >= threshold
@@ -139,6 +140,9 @@ def bootstrap_ci(scores, labels, statistic, n_boot=DEFAULT_BOOTSTRAP,
 
     Returns {point, lo, hi, n_boot_effective, ...}.
     """
+    _validate(scores, labels)
+    if n_boot < 1 or not 0 < alpha < 1:
+        raise ValueError("positive bootstrap count and alpha in (0, 1) required")
     point = statistic(scores, labels)
     n = len(scores)
     if n == 0:
@@ -175,13 +179,7 @@ def bootstrap_ci(scores, labels, statistic, n_boot=DEFAULT_BOOTSTRAP,
 
 
 def fmt_ci(ci, pct=True, decimals=None):
-    """
-    '74.5% [70.1, 78.9]' — the format used in printed tables.
-
-    Proportions default to 1 decimal; ratios (AUC) default to 3, because at 1
-    decimal an AUC interval renders as "0.9 [0.9, 0.9]", which hides both the
-    estimate and its width.
-    """
+    """Implementation of fmt ci."""
     if ci is None or (isinstance(ci.get("point"), float) and math.isnan(ci["point"])):
         return "n/a"
     scale, suffix = (100, "%") if pct else (1, "")
@@ -198,6 +196,7 @@ def fmt_ci(ci, pct=True, decimals=None):
 def evaluate_slice(scores, labels, fpr_budget=0.05, n_boot=DEFAULT_BOOTSTRAP,
                    threshold=None):
     """Full metric bundle for one slice, with CIs on AUC and recall@FPR."""
+    _validate(scores, labels)
     n_pos = sum(1 for lab in labels if lab)
     n_neg = len(labels) - n_pos
     out = {

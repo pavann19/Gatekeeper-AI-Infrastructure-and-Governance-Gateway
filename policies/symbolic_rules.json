@@ -1,13 +1,6 @@
 {
     "_comment": [
-        "TAXONOMY NOTE (2026-08-14): 'jailbreak_patterns' previously held a mix",
-        "of genuine jailbreak (persona/roleplay hijack, e.g. 'dan mode') and",
-        "prompt-injection (instruction override, e.g. 'ignore previous') regexes",
-        "under one name -- an audit hit on any of them was reported as",
-        "JAILBREAK_DETECTED regardless of which kind actually matched. Split",
-        "into two lists so the returned detail string is accurate. No coverage",
-        "was removed or added, only re-labelled -- see",
-        "docs/ENGINEERING_ASSESSMENT.md section 1y."
+        "Separate instruction-override and persona/jailbreak rules so audit reasons reflect the matched taxonomy. See docs/SECURITY.md."
     ],
     "suspicious_phrases": [
         "ignore safety",

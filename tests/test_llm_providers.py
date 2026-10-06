@@ -1,9 +1,4 @@
-"""
-Tests for core.llm_providers (Phase 5, Real LLM Gateway — provider
-abstraction only, per the roadmap's own item breakdown). Every test mocks
-requests.post; none needs a live network call or a real API key, matching
-this project's existing convention for core.semantic_judge's tests.
-"""
+"""Tests for llm providers."""
 from unittest.mock import patch
 
 import pytest

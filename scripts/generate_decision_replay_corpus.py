@@ -59,7 +59,6 @@ def sample_stratified_rows(source_path: str = SOURCE_SUITE, target_total: int = 
     for key in sorted(strata.keys()):
         group = strata[key]
         n_sample = min(allocations[key], len(group))
-        # Deterministic sample from sorted group for 100% reproducibility
         sorted_group = sorted(group, key=lambda r: r["id"])
         chosen = rng.sample(sorted_group, n_sample)
         sampled_rows.extend(chosen)

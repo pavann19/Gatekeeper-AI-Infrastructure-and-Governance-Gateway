@@ -1,28 +1,4 @@
-"""
-Canonical evaluation harness for the Gatekeeper risk pipeline.
-
-This is the single source of truth for published metrics.  Two methodological
-rules are enforced here, both of which the previous harness violated:
-
-1. SAFETY IS SCORED, SCOPING IS NOT.
-   `risk_level` answers "is this an attack?".  `topicality` answers "is this
-   about my product's subject area?".  The old harness counted an off-domain
-   MEDIUM as a malice prediction, so a benign question about cooking was
-   recorded as a false positive.  With a 5-document domain corpus, that alone
-   produced FPR ~98% (79 of 80 sampled benign prompts).  Topicality is now
-   reported in its own confusion-independent section.
-
-2. AN OFFLINE JUDGE INVALIDATES THE RUN.
-   `judge_arbitration` fails closed to HIGH when the judge is unreachable.
-   Benchmarking in that state measures sidecar uptime, not classifier quality,
-   so the run aborts unless --allow-offline-judge is passed (in which case the
-   output is explicitly stamped as methodologically invalid).
-
-Usage:
-    python -m tests.benchmark
-    python -m tests.benchmark --limit 100
-    python -m tests.benchmark --allow-offline-judge   # produces INVALID output
-"""
+"""Legacy live/cache evaluation utility; not the strict canonical replay."""
 import argparse
 import json
 import sys

@@ -1,40 +1,8 @@
-"""
-Authentication and capability resolution.
+"""Credential-derived capability and tenant resolution.
 
-THE VULNERABILITY THIS REPLACES
--------------------------------
-The previous implementation compared a token against two string literals that
-were committed to the repository:
-
-    if token == "<admin-token-literal>":     # redacted; see git history
-        return CAPABILITY_INTERNAL
-
-Worse, `api/main.py` never called it. The `/api/v1/assess` endpoint read the
-capability tier directly from the request body, so any client could send
-`{"role": "INTERNAL"}` and, per policy_rules.json, INTERNAL maps HIGH -> ALLOW.
-The entire policy layer was bypassable with one JSON field. Every other control
-in this system — risk scoring, semantic judging, safe harbors — was downstream
-of a decision the attacker controlled.
-
-THE RULE
---------
-Capability is derived from a VERIFIED CREDENTIAL, server-side, and never from
-anything the caller can assert about themselves. A client may present a key; it
-may not declare its own privilege.
-
-DESIGN
-------
-- Keys are stored as SHA-256 hashes. The plaintext exists only at generation
-  time and is never written to disk or logs by this module.
-- Lookup is by hash, so an attacker cannot learn a valid key from response
-  timing on a per-character basis.
-- Zero trust default: an absent, malformed, or unknown credential resolves to
-  GENERAL (least privilege) rather than raising. This keeps the gateway usable
-  for anonymous traffic while making privilege escalation impossible.
-- AUTH_MODE="required" turns anonymous access into a 401 for deployments that
-  need every request attributed.
-- Logs record `key_id` (a non-secret label), never the key or its hash.
-"""
+API keys are stored as SHA-256 hashes. Optional authentication resolves
+unauthenticated callers to GENERAL; required authentication denies them at
+admission. Request bodies cannot grant privilege. Logs use non-secret key IDs."""
 from __future__ import annotations
 
 import hashlib
@@ -127,20 +95,6 @@ class KeyStore:
         self.path = path or settings.API_KEYS_FILE
         self._keys = {}
         self._loaded = False
-        # BUG FIX (Phase 8, live load test): `load()` used to set
-        # `self._loaded = True` immediately, then repopulate `self._keys`
-        # entry by entry (including a file-I/O gap before the loop even
-        # starts). A concurrent `lookup()` from another thread — real
-        # concurrency, since FastAPI dispatches sync endpoints like
-        # `whoami` to a thread pool — could see `_loaded=True` but
-        # `self._keys` still empty or half-populated, and a perfectly
-        # valid key would resolve to a false 401. Measured live: ~4% of
-        # concurrent whoami calls immediately after a fresh load failed
-        # this way (scripts/load_test.py, see docs/ROADMAP_V2.md). Fixed
-        # by building the new key dict in a local variable and swapping
-        # `self._keys` in one atomic assignment only after it's complete,
-        # with a lock serializing concurrent loads so they can't race each
-        # other into a half-built intermediate state either.
         self._lock = threading.Lock()
 
     def load(self, force=False):

@@ -65,3 +65,24 @@ def test_mid_replay_detector_failure_cannot_become_canonical_fallback(details):
 
 def test_symbolic_and_fast_path_do_not_require_per_row_fusion_scores():
     canonical.validate_decision_tier({"fusion_tier": "nine_feature"}, {}, "case")
+
+
+def test_public_replay_pins_consumed_inputs_without_private_training_dependency():
+    profile = canonical.load_profile()
+    assert "data/eval_suite.jsonl" not in profile["artifacts"]
+    assert "tests/fixtures/decision_replay_corpus.jsonl" in profile["artifacts"]
+    assert profile["training_provenance"]["artifacts"] == {
+        "data/eval_suite.jsonl": "d6532f645982531a4ffa13ba7ec0bb4d13cce32dc458b9e4efad55c2ece7ef1d"
+    }
+    canonical.validate_artifacts(profile)
+
+
+def test_explicit_training_provenance_rejects_missing_or_corrupt_input(tmp_path, monkeypatch):
+    provenance = canonical.load_profile()["training_provenance"]
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(canonical.CanonicalEnvironmentError, match="data/eval_suite.jsonl"):
+        canonical.validate_artifacts(provenance)
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data/eval_suite.jsonl").write_text("{}\n", encoding="utf-8")
+    with pytest.raises(canonical.CanonicalEnvironmentError, match="data/eval_suite.jsonl"):
+        canonical.validate_artifacts(provenance)

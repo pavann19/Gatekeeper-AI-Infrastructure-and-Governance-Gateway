@@ -1,22 +1,4 @@
-"""
-Tests for the threat taxonomy cleanup (docs/ROADMAP_V2.md Phase 1 —
-"clean threat taxonomy"; see docs/ENGINEERING_ASSESSMENT.md section 1y).
-
-Two independent fixes, tested separately:
-
-1. `policies/threat_anchors.json`'s anchor layer previously modeled only 2 of the 3 attack
-   classes (harmful_content, prompt_injection) — no jailbreak anchors
-   existed at all, despite jailbreak being 36% of attacks in the eval
-   suite and having its own per-class fusion policy. A `jailbreak` class
-   was added and measured (out-of-fold, no regression, jailbreak
-   recall@5%FPR 74.7% -> 80.6%) before being kept.
-2. `policies/symbolic_rules.json`'s `jailbreak_patterns` list previously
-   mixed genuine jailbreak (persona/roleplay hijack) regexes with
-   instruction-override (prompt-injection) regexes under one name, so
-   every symbolic-veto hit was reported as "JAILBREAK_DETECTED" regardless
-   of which kind actually matched. Split into `jailbreak_patterns` and
-   `instruction_override_patterns`, each reporting its own detail string.
-"""
+"""Tests for attack-class taxonomy and accurate symbolic rule reasons."""
 import json
 import os
 

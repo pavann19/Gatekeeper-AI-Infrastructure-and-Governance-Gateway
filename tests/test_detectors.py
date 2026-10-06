@@ -68,10 +68,7 @@ def test_every_detector_declares_targets_and_description():
 
 
 def test_all_three_attack_classes_are_covered_by_some_detector():
-    """
-    Measurement showed the anchor detector catches only 24.4% of harmful
-    content. If no detector targets a class, that class is unmonitored.
-    """
+    """Tests for detectors."""
     covered = set()
     for detector in get_registry().values():
         covered.update(detector.targets)

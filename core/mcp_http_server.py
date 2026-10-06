@@ -1,25 +1,8 @@
-"""
-MCP HTTP and SSE transport server (Phase 6, Tool/Agent Gateway extension).
-Provides a networked, HTTP/SSE transport for MCP clients with per-request
-API key authentication, dynamic capability resolution, tenant isolation,
-request size bounding, and distributed/local rate limiting.
+"""Authenticated MCP HTTP/SSE and stateless JSON-RPC transport.
 
-ARCHITECTURE & PROTOCOL CONFORMANCE
-------------------------------------
-Implements the Model Context Protocol (MCP) 2024-11-05 SSE transport specification:
-1. SSE Handshake (`GET /mcp/sse`):
-   - Opens a persistent text/event-stream connection.
-   - Emits an initial `endpoint` event advertising `/mcp/messages?sessionId=<uuid>`.
-   - Relays JSON-RPC responses and server events asynchronously over the SSE stream (`event: message`).
-2. Session-Relayed Message Endpoint (`POST /mcp/messages?sessionId=<uuid>`):
-   - Accepts client JSON-RPC requests up to 100KB.
-   - Validates session, checks per-tenant rate limits, and routes the execution through `core.mcp_server.handle_request`.
-   - Enqueues the JSON-RPC response to the corresponding session's SSE stream and returns HTTP 202 Accepted.
-   - Returns HTTP 404 if the session ID is missing from active connections or expired.
-   - Falls back to returning the response directly in the HTTP body if `sessionId` is omitted.
-3. Direct JSON-RPC Endpoint (`POST /mcp/jsonrpc`):
-   - Stateless HTTP POST endpoint returning JSON-RPC responses directly (HTTP 200).
-"""
+Sessions bind verified credentials and principal context. Admission, bodies,
+session lifetime, queues and pending dispatch are bounded. Tool execution
+uses shared capability/risk/review/audit controls."""
 from __future__ import annotations
 
 import hashlib
@@ -45,7 +28,7 @@ from core.tools import ToolRegistry, get_tool_registry
 
 logger = get_logger(__name__)
 
-# Max request payload size: 100KB (matches Phase 8 schema hardening)
+# Max request payload size: 100KB (matches schema hardening)
 MAX_PAYLOAD_BYTES = 100 * 1024
 
 # Defense-in-depth backstop for a leaked SSE session (§7 finding, this
@@ -103,11 +86,7 @@ def create_mcp_app(registry: Optional[ToolRegistry] = None) -> FastAPI:
 
     @app.get("/mcp/sse")
     async def mcp_sse(request: Request):
-        """
-        SSE transport handshake per MCP specification:
-        Sends an initial `endpoint` event containing the relative URI to post messages to,
-        then streams all JSON-RPC responses enqueued for this session.
-        """
+        """Implementation of mcp sse."""
         principal = _admit(request)
         if len(sessions) >= MAX_SESSIONS:
             raise HTTPException(503, "MCP session capacity exhausted")

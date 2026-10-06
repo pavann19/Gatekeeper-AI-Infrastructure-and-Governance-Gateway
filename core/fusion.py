@@ -1,73 +1,11 @@
-"""
-Applies the trained multi-detector fusion policy to a live prompt.
+"""Learned threat-score fusion from plain JSON policy artifacts.
 
-WHY THIS FILE EXISTS
---------------------
-`scripts.ensemble_analysis` proved that a learned fusion over several
-specialised detectors beats any single detector, and — more importantly — that
-it closes coverage gaps a single detector leaves open (adopting the best single
-injection detector alone would have dropped harmful-content detection to 2%).
-Until this file existed, none of that was true of the DEPLOYED gateway: the
-live pipeline in `core/risk.py` only ever consulted the anchor detector. This
-module is what lets the request path actually use the validated ensemble.
-
-WHAT IT LOADS
--------------
-`models/fusion_policy.json`, produced by `scripts.train_fusion_policy` — a
-StandardScaler + LogisticRegression over four detectors chosen because they are
-(a) not gated behind an external licence and (b) fast enough for synchronous
-request handling: anchors, protectai_injection, madhurjindal_jailbreak,
-toxic_bert. Llama Guard is far too slow for a live request (seconds, not
-milliseconds, on CPU) and remains a valid opt-in upgrade, not part of this
-default path.
-
-Prompt Guard 2 was originally tested (2026-08-14, on the 6,933-row suite)
-and rejected as a 5th feature: it moved pooled AUC but not German AUC, and
-since a missing REQUIRED feature dropped the whole ensemble to anchors-only,
-a Meta-gated addition for an undecided gain looked like the wrong trade.
-That verdict has since been REVISED — see "UPGRADE TIERS" below — once two
-things changed: the suite grew to 13,011 rows with real German volume
-(previously 234 rows, now 4,221), and this module gained the ability to
-degrade gracefully PER FEATURE rather than all-or-nothing, which removes
-the exact cost the original rejection was weighing against.
-
-UPGRADE TIERS (added 2026-08-24, docs/ENGINEERING_ASSESSMENT.md §1ab)
------------------------------------------------------------------------
-The artifact may declare `upgrade_tiers`: a list of additional, RICHER
-feature sets, ordered best-first, each a complete self-contained policy
-(own scaler/coefficients/thresholds/per_class). The top-level fields
-(unchanged in shape from before this existed) are always the FLOOR — the
-tier every deployment can reach with no external licence, and the tier
-this module falls back to if every upgrade tier is unreachable.
-
-At request time, EVERY detector referenced by ANY tier is scored once
-(so trying tiers does not mean re-scoring), then the RICHEST tier whose
-required detectors all returned a real score is selected. A `deepset_
-injection` outage or a `prompt_guard_2` licence not yet accepted degrades
-to the next tier down — never straight to the pre-fusion anchors-only path,
-which the old all-or-nothing design forced even for one optional feature
-going dark. Measured (out-of-fold, full suite, `scripts.sweep_fusion_
-variants`): base 4-feature pooled AUC 0.846 / German 0.813 (this figure
-excludes the German OFFENSIVE-CONTENT rows the suite also carries — see
-`scripts.analyze_german_by_task` for why "German AUC" without that split
-is misleading); 5-feature (+deepset_injection, no licence needed) pooled
-0.866 / German injection 0.971; 6-feature (+prompt_guard_2 too) pooled
-0.908 / German injection 0.987. Every delta here is non-overlapping-CI
-decisive, unlike the 2026-08-14 measurement this section revises.
-
-FAIL-CLOSED, BUT NOT TO A CRASH
---------------------------------
-If a transformer detector fails to load (disk issue, first-run download
-failure, an ungated licence not accepted), this module does NOT block every
-request, and it does NOT silently score the missing feature as zero — an
-imputed zero would understate risk exactly when a detector is unavailable,
-which is the wrong direction to fail. A required feature going dark degrades
-to the next tier down (see above); if even the floor tier's requirements
-cannot be met, `fused_threat_score` reports unavailability explicitly and the
-caller (`core/risk.py`) falls back to the pre-fusion anchors-only decision
-path, which is the behaviour this project shipped and validated before fusion
-existed. A documented, tested fallback beats either a crash or a wrong number.
-"""
+Each artifact tier declares its own feature set, scaler, coefficients and
+thresholds. Detectors are scored once; the richest fully available tier is
+selected. Missing features are not imputed as zero. If no tier is usable,
+unavailability is explicit and the caller applies its documented fallback.
+Per-class threat scores remain separate from domain/topicality. Fit metadata
+is not independent accuracy evidence; see docs/EVALUATION.md."""
 import json
 import math
 import os
@@ -387,21 +325,8 @@ def _union_required_features():
 
 
 def warm_up():
-    """
-    Loads the policy and every live detector, so the first real request does
-    not pay for it.
-
-    Exists as a public entry point because a caller that wants warm-up should
-    not have to know which detectors the current policy artifact happens to
-    declare, nor reach into module privates to find out. api/main.py's startup
-    hook is the intended caller: cold loading measured ~35s, which exceeds the
-    request deadline, so without this the first request after a deploy is
-    guaranteed to time out.
-
-    Returns (warmed: bool, detail: str). Never raises — a gateway that cannot
-    warm up should still start and report itself degraded via /health, since
-    the pipeline already handles unavailable detectors safely.
-    """
+    """Loads the policy and every live detector, so the first real request does
+        not pay for it."""
     ok, detail = policy_available()
     if not ok:
         return False, f"policy unavailable, nothing warmed: {detail}"

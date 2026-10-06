@@ -232,7 +232,7 @@ def test_stdio_loop_survives_a_handler_bug_and_keeps_serving(registry, monkeypat
     assert "result" in responses[1]  # the loop kept going after the crash
 
 
-# --- Phase 8 hardening: bounded line length ------------------------------------
+# --- bounded line length ------------------------------------
 #
 # `for line in stream` (the original implementation) buffers an entire
 # line into memory before yielding it -- a single line with no newline

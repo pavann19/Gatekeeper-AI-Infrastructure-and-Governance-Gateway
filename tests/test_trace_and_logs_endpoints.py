@@ -1,6 +1,6 @@
 """
 Tests for GET /api/v1/activity/trace/{request_id} and GET /api/v1/logs
-(Phase 7, Developer UI) -- both read the same audit.jsonl the activity
+(implementation) -- both read the same audit.jsonl the activity
 feed does, so these focus on what's DIFFERENT about them: trace's
 request_id correlation and chronological ordering, and logs' INTERNAL-only
 cross-tenant-by-default gate.

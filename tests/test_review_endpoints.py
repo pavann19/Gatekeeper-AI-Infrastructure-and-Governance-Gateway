@@ -1,5 +1,5 @@
 """
-API-level tests for Phase 4 (Human Review): the REVIEW decision outcome,
+API-level tests for implementation (Human Review): the REVIEW decision outcome,
 its wiring into /api/v1/assess, and the three review endpoints.
 """
 import json

@@ -1,5 +1,5 @@
 """
-Tests for the tool-call audit event (Phase 6, "Audit events" roadmap
+Tests for the tool-call audit event (implementation
 item): core.logger.log_tool_event as its own function, and its wiring
 into core.tools.execute_tool for every decision branch.
 

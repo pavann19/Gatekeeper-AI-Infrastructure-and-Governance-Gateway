@@ -207,10 +207,6 @@ def test_cosine_similarity_returns_python_float():
     assert isinstance(result, float)
 
 
-# --- Integration: real cached all-mpnet-base-v2 model -------------------------
-# EMBEDDING_MODEL's default is already present in this machine's HF cache
-# (no network download needed), so these exercise the real encode() path
-# rather than only the fake stand-in above.
 
 def test_real_model_produces_768_dim_vector_for_mpnet(monkeypatch):
     _reset_model_cache(monkeypatch)

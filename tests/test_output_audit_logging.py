@@ -1,5 +1,5 @@
 """
-Tests for the output audit event (Phase 2, Output Security).
+Tests for the output audit event (implementation).
 
 THE GAP THIS CLOSES: /api/v1/assess_output previously called log_event
 NOWHERE in its body -- a response could be BLOCKed for a leaked secret,

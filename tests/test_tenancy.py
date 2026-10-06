@@ -146,7 +146,7 @@ def test_invalid_rate_limit_override_is_dropped_not_applied(tmp_path, monkeypatc
     assert result.rate_limit_rpm is None
 
 
-# --- token_quota_daily (Phase 5 token accounting override) -----------------
+# --- token_quota_daily (token accounting override) -----------------
 
 def test_no_token_quota_override_means_none(tenant_store):
     tenant_store("acme", status="active")

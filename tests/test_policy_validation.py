@@ -1,5 +1,5 @@
 """
-Tests for core.policy.validate_policy_file (Phase 3, Policy-as-Code:
+Tests for core.policy.validate_policy_file (implementation
 "Validation step"). Unlike PolicyStore.load(), which silently drops one
 malformed tenant to keep serving its siblings, this reports EVERY problem
 at once for an operator checking a file before deploying it.

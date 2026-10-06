@@ -122,7 +122,7 @@ def test_redis_rate_limiter_registration_failure_falls_back_to_eval():
 # Resilience & Runtime Error Fallback
 # ---------------------------------------------------------------------------
 
-def test_redis_rate_limiter_runtime_error_falls_back_to_local_limiter(fake_redis, caplog):
+def test_redis_rate_limiter_runtime_error_denies_on_distributed_state_failure(fake_redis, caplog):
     """When Redis has a runtime glitch or disconnects, it falls back to the in-memory limiter."""
     limiter = rl.RedisRateLimiter(fake_redis, name="assess")
     limiter._script.side_effect = ConnectionError("Redis connection lost")
@@ -135,8 +135,8 @@ def test_redis_rate_limiter_runtime_error_falls_back_to_local_limiter(fake_redis
         # Third call on local fallback exceeds capacity 2 -> denied
         allowed3, retry3 = limiter.check("tenant-a", capacity=2.0, refill_per_second=0.0001, now=10.0)
 
-    assert allowed1 is True and retry1 == 0.0
-    assert allowed2 is True and retry2 == 0.0
+    assert allowed1 is False and retry1 > 0.0
+    assert allowed2 is False and retry2 > 0.0
     assert allowed3 is False and retry3 > 0.0
     assert "Redis rate limiter check failed" in caplog.text
 
@@ -215,18 +215,18 @@ def test_build_rate_limiter_reachable_redis_selects_redis(monkeypatch):
     assert limiter.name == "assess"
 
 
-def test_build_rate_limiter_unreachable_redis_falls_back_to_local(monkeypatch, caplog):
+def test_build_rate_limiter_unreachable_redis_retains_distributed_authority(monkeypatch, caplog):
     monkeypatch.setenv("REDIS_URL", "redis://unreachable:6379/0")
 
     with mock.patch("redis.from_url", side_effect=ConnectionError("refused")):
         with caplog.at_level("ERROR"):
             limiter = rl.build_rate_limiter("assess")
 
-    assert isinstance(limiter, rl.LocalRateLimiter)
-    assert "falling back to local in-memory rate limiter" in caplog.text
+    assert isinstance(limiter, rl.RedisRateLimiter)
+    assert limiter._local_fallback.check("probe", 1, 1)[0] is True
 
 
-def test_build_rate_limiter_ping_timeout_falls_back_to_local(monkeypatch, caplog):
+def test_build_rate_limiter_ping_timeout_retains_distributed_authority(monkeypatch, caplog):
     monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
     fake_client = mock.MagicMock()
     fake_client.ping.side_effect = TimeoutError("ping timeout")
@@ -235,11 +235,11 @@ def test_build_rate_limiter_ping_timeout_falls_back_to_local(monkeypatch, caplog
         with caplog.at_level("ERROR"):
             limiter = rl.build_rate_limiter("assess")
 
-    assert isinstance(limiter, rl.LocalRateLimiter)
-    assert "falling back to local in-memory rate limiter" in caplog.text
+    assert isinstance(limiter, rl.RedisRateLimiter)
+    assert limiter._local_fallback.check("probe", 1, 1)[0] is True
 
 
-def test_build_rate_limiter_missing_redis_package_falls_back_to_local(monkeypatch):
+def test_build_rate_limiter_missing_redis_package_denies(monkeypatch):
     monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
 
     real_import = __import__
@@ -252,7 +252,7 @@ def test_build_rate_limiter_missing_redis_package_falls_back_to_local(monkeypatc
     with mock.patch("builtins.__import__", side_effect=fake_import):
         limiter = rl.build_rate_limiter("assess")
 
-    assert isinstance(limiter, rl.LocalRateLimiter)
+    assert isinstance(limiter, rl.RedisRateLimiter)
 
 
 def test_build_rate_limiter_startup_log_redacts_credentials(monkeypatch, caplog):

@@ -1,7 +1,7 @@
 """
 Read access over the audit log (`AUDIT_LOG_PATH`, one JSON object per line,
 written by core/logger.py's four log_*_event functions) for the client
-UI's activity feed (Phase 7).
+UI's activity feed (implementation).
 
 This module only READS. Nothing here writes to the audit log or changes
 what gets recorded -- it exists purely to answer "what happened recently",
@@ -150,7 +150,7 @@ def get_recent_activity(limit=DEFAULT_LIMIT, tenant=None, event_types=None, path
     event_type_filter = set(event_types) if event_types else None
 
     events = []
-    
+
     # Pass 1: Cheap attempt reading just enough lines for the requested limit
     raw_lines, truncated, exhausted, pos, carry = _tail_raw_lines(
         audit_path, needed=limit, max_bytes=MAX_BYTES_SCANNED, return_state=True

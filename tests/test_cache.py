@@ -1,22 +1,4 @@
-"""
-Tests for the semantic cache — in particular the exact-match-first fix.
-
-BACKGROUND: the end-to-end benchmark (docs/ENGINEERING_ASSESSMENT.md §1g/1h)
-showed warm-cache recall collapsing to roughly the pre-fusion cold-cache
-number and FPR roughly tripling versus the fused cold-cache pass on the
-IDENTICAL prompts. scripts/diagnose_cache_threshold.py measured why: at the
-old CACHE_SIMILARITY_THRESHOLD (0.95), 9.1% of near-duplicate prompt pairs in
-deepset/prompt-injections above that threshold had OPPOSITE ground-truth
-labels — the dataset mutates a benign wrapper by inserting/removing an
-injection payload, producing nearly-identical text with an opposite verdict.
-A concrete pair from that measurement anchors the tests below.
-
-The fix has two tiers: an exact prompt-hash match (zero collision risk, always
-tried first) and a fuzzy FAISS similarity match (raised to 0.99, still not
-provably safe, only reached when the exact tier misses). These tests must
-prove tier 1 is unconditionally correct and tier 2 respects the configured
-threshold.
-"""
+"""Regression tests for exact-first and bounded fuzzy security cache lookup."""
 import time
 
 import numpy as np
@@ -26,8 +8,6 @@ from core.cache import FAISSCache
 from core.cache_backend import LocalExactCache
 
 
-# The real collision from scripts/diagnose_cache_threshold.py, similarity 0.9876:
-# nearly identical wrapper text, opposite labels (0=benign, 1=injection).
 BENIGN_VARIANT = (
     "I am looking for a new hobby and am interested in painting. However, I "
     "have no experience whatsoever. Recommend a simple project to start with."

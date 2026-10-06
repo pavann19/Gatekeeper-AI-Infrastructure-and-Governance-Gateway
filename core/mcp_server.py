@@ -1,46 +1,8 @@
-"""
-MCP stdio transport server (Phase 6, Tool/Agent Gateway's "real MCP
-transport server" follow-up to `core/mcp_compat.py`'s protocol-shape
-adapter).
+"""MCP stdio dispatch for registered tools.
 
-WHY HAND-ROLLED, NOT THE OFFICIAL `mcp` SDK
-------------------------------------------------
-Tried the SDK first. Installing it pulled in a `starlette` major-version
-bump (0.38.6 -> 1.6.0) incompatible with this project's pinned FastAPI
-(`starlette<0.39.0`), cascading into `pydantic`/`uvicorn`/`h11` conflicts
-that broke every API test module on contact. Reverted immediately,
-confirmed the suite back to green before writing a line of this file.
-MCP's stdio transport is JSON-RPC 2.0 over newline-delimited JSON on
-stdin/stdout — a small, well-specified protocol subset — and `core/
-mcp_compat.py` already has every piece of actual logic (list tools, call
-a tool). What was missing is only message framing and method dispatch,
-which is genuinely less code, and zero new dependencies, than working
-around the SDK's conflicting dependency tree.
-
-SCOPE: THE STDIO TRANSPORT, TOOLS ONLY
--------------------------------------------
-Implements `initialize`, `notifications/initialized`, `tools/list`, and
-`tools/call` — the subset MCP calls the "tools" capability, which is all
-`core/mcp_compat.py` ever adapted. Resources, prompts, sampling, and any
-other MCP capability are out of scope; nothing here claims to be a
-general-purpose MCP server, only a tools-capable one.
-
-CALLER IDENTITY: A FIXED CAPABILITY PER SERVER PROCESS
-------------------------------------------------------------
-MCP has no notion of Gatekeeper's own API-key-based capability
-resolution — an MCP client (typically a trusted local process, e.g. a
-desktop AI assistant) connects over stdio with no request-level
-authentication at all. This server therefore runs at ONE fixed
-capability for its entire process lifetime, set at startup
-(`run_stdio_server(capability=...)`), the same trust-boundary shape
-every real-world local MCP server already has: the process itself is
-the security boundary, not each individual call within it. This is a
-stated, deliberate scope decision, not an oversight — a deployment
-wanting per-caller capability differentiation over MCP would need a
-different transport (MCP's HTTP/SSE transport, with its own auth story),
-which is explicitly not built here (see `core/mcp_compat.py`'s own
-docstring on why a transport server was deferred until this exact point).
-"""
+The trusted launcher supplies fixed capability and tenant context. Discovery
+and execution share the tool registry; per-caller HTTP admission belongs to
+the HTTP transport. Malformed input and failures are sanitized and bounded."""
 from __future__ import annotations
 
 import json
@@ -58,7 +20,7 @@ PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "gatekeeper"
 SERVER_VERSION = "1.0.0"
 
-# Phase 8 hardening: `for line in stream` buffers an entire line into
+# `for line in stream` buffers an entire line into
 # memory before yielding it, so one line with no newline is an unbounded
 # read. This module's stated trust model (a stdio MCP client is a trusted
 # local process, the process IS the security boundary) is why this was
@@ -107,11 +69,13 @@ def handle_request(msg: Dict[str, Any], capability: str, registry: ToolRegistry 
 
     if not isinstance(method, str):
         if not has_id:
-            logger.warning(f"Dropping malformed notification (no valid method): {msg}")
+            logger.warning("Dropping malformed notification (no valid method)")
             return None
         return _error_response(msg_id, INVALID_REQUEST, "Request must have a string 'method'.")
 
     params = msg.get("params") or {}
+    if not isinstance(params, dict):
+        return _error_response(msg_id, INVALID_PARAMS, "'params' must be an object") if has_id else None
 
     if method == "initialize":
         return _result_response(msg_id, {
@@ -147,7 +111,7 @@ def handle_request(msg: Dict[str, Any], capability: str, registry: ToolRegistry 
         return _result_response(msg_id, result)
 
     if not has_id:
-        logger.warning(f"Dropping notification for unknown method {method!r}.")
+        logger.warning("Dropping notification for unknown method")
         return None
     return _error_response(msg_id, METHOD_NOT_FOUND, f"Unknown method: {method!r}")
 

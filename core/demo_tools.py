@@ -1,5 +1,5 @@
 """
-Sandboxed demo tools (Phase 6, Tool/Agent Gateway roadmap item
+Sandboxed demo tools (implementation
 "Sandboxed demo tools") — the first real tools registered against
 `core/tools.py`'s registry, existing to exercise the whole pipeline
 (access control, structural validation, risk-based approval, execution)

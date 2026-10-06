@@ -1,19 +1,8 @@
-"""
-Real load test against a running Gatekeeper instance (Phase 8: "Load
-testing"). Opens real HTTP connections to a real running server with real
-concurrent threads and reports real latency percentiles, throughput, and
-status-code distribution -- not a simulated or mocked estimate.
+"""HTTP endpoint load utility for an already running owned service.
 
-Usage:
-    python -m scripts.load_test --url http://127.0.0.1:8000 \
-        --endpoint /api/v1/activity --concurrency 20 --requests 500 \
-        --api-key gk_... [--out _evidence/load_test_results.json]
-
-Defaults to a read-only endpoint (the activity feed) so running this
-against a real deployment by default cannot mutate state or trigger the
-detection pipeline's real (and deliberately rate-limited) cost. Pointing
-it at a write/assess endpoint is opt-in via --method/--body.
-"""
+Reports latency, throughput and status distribution. Defaults to a read-only
+activity endpoint; write/assessment requests are explicit. This is not the
+fixed-workload canonical model benchmark."""
 from __future__ import annotations
 
 import argparse

@@ -1,17 +1,4 @@
-"""
-Regression coverage for a real concurrency bug found by live load testing
-(Phase 8): core.auth.KeyStore.load() used to set `self._loaded = True`
-before finishing repopulating `self._keys`, so a concurrent lookup()
-racing a fresh load() could see an empty or half-built dict and return a
-false negative for a perfectly valid key -- measured live as ~4% of
-concurrent /api/v1/whoami calls returning 401 immediately after a server
-restart (scripts/load_test.py, docs/ROADMAP_V2.md's Phase 8 findings).
-
-These tests force the exact race window a real thread scheduler would
-only sometimes hit, so they fail reliably against the old implementation
-and pass reliably against the fix (atomic dict swap after the new dict is
-fully built, serialized by a lock).
-"""
+"""Concurrent credential-store snapshot regression tests."""
 import json
 import threading
 import time

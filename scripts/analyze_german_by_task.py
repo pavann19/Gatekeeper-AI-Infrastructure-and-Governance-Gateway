@@ -1,30 +1,7 @@
-"""
-Splits German performance by TASK, because the single "German AUC" figure
-this project has been tracking turns out to average two unrelated problems
-and therefore describes neither.
+"""Evaluate supplied German score rows separately by injection and harmful-content task.
 
-WHY THIS SPLIT EXISTS
----------------------
-Expanding the suite for German volume pulled in philschmid/germeval18,
-which is German social-media OFFENSIVE LANGUAGE (harmful_content). It is
-2,931 of the 4,221 German rows -- 69% -- so a pooled "German AUC" is
-dominated by it. The remaining German rows are PROMPT INJECTION, which is
-what the roadmap's German-gap item was actually about (the original
-benchmark was deepset/prompt-injections, German-heavy instruction
-override).
-
-Leave-one-source-out on the multilingual head made the conflation visible:
-held out entirely, it scores 0.982 / 0.946 / 0.941 AUC on the three unseen
-German INJECTION sources and 0.615 on germeval18. Averaging those into one
-number produces a figure that overstates the injection problem and
-understates the offensive-content one.
-
-This script reports the deployed and candidate fusions on each German task
-separately, so the two can be tracked -- and fixed -- independently.
-
-Usage:
-    python -m scripts.analyze_german_by_task
-"""
+Provides source-group helpers used by nested validation. Requires the local
+score/dataset inputs; this utility is not a published performance claim."""
 import json
 import os
 

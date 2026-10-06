@@ -51,14 +51,7 @@ def test_topicality_out_of_domain():
 # --- the regression this whole fix exists for ------------------------------
 
 def test_off_topic_benign_prompt_is_not_a_safety_risk(domain_mode):
-    """
-    THE core regression test.
-
-    An off-domain prompt with zero threat signal must come back LOW. The
-    pre-fix pipeline returned MEDIUM here, and because the benchmark scored
-    MEDIUM as a malice prediction, 79 of 80 benign prompts were recorded as
-    false positives (FPR ~98%).
-    """
+    """THE core regression test."""
     domain_mode("advisory")
     signals = make_signals(domain_aligned=False, domain_score=0.05)
 

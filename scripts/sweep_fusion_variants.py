@@ -1,41 +1,8 @@
-"""
-Sweeps fusion variants against the full suite, out-of-fold, reporting
-per-language -- the experiment that actually tries to CLOSE the German gap
-rather than measure it again.
+"""Evaluate declared fusion feature variants with out-of-fold predictions.
 
-Variants, each a fresh 5-fold OOF logistic regression (same seed/folds as
-scripts.ensemble_analysis, so numbers are comparable to every prior
-ensemble result in this project):
-
-  deployed_4      the live feature set, baseline to beat
-  plus_deepset_5  + deepset_injection as a FIFTH feature (NOT a swap --
-                  the swap was tested and decisively rejected; the fusion
-                  had learned correlation structure specific to
-                  protectai_injection, so substituting it unretrained
-                  destroyed pooled and English performance)
-  de_conditional  the deployed 4 features, but the logistic regression is
-                  FIT ONLY ON GERMAN ROWS and applied only to German rows.
-                  Directly targets the finding that one global weighting
-                  cannot serve two populations whose feature reliability
-                  differs -- toxic_bert is near-useless on German while
-                  carrying real signal on English, and a single set of
-                  coefficients has to compromise between those.
-  de_conditional_5  the same, with deepset_injection added.
-
-WHY LANGUAGE-CONDITIONAL IS THE INTERESTING ONE
-------------------------------------------------
-Every earlier attempt treated the German gap as a THRESHOLD problem (move
-the cut) or a FEATURE problem (swap the detector). Both failed. The
-measured evidence points at neither: German OOF AUC 0.671 vs English 0.927
-on identical features means the fusion's WEIGHTS -- not its inputs, not its
-cutoff -- are fit to a population German traffic isn't drawn from. A
-per-language weighting is the first variant here that addresses that
-directly, and it costs nothing extra at inference time: the language tag is
-already computed, and it selects between two tiny coefficient vectors.
-
-Usage:
-    python -m scripts.sweep_fusion_variants
-"""
+Provides feature/source helpers used by nested multilingual validation.
+Requires local scores; stacking and source contamination must be assessed
+separately before interpreting any result."""
 import json
 import os
 
@@ -88,11 +55,6 @@ SHIPPED_6 = DEPLOYED_4 + ["deepset_injection", "prompt_guard_2"]
 GERMAN_TOX_FEATURES = ["german_toxicity_eistakovskii", "german_toxicity_ankekat"]
 PLUS_GERMAN_TOX_8 = SHIPPED_6 + GERMAN_TOX_FEATURES
 
-# toxic_bert is English-trained and separately measured as severely
-# miscalibrated on German standalone (48.6% FPR against a 5% budget,
-# docs/ENGINEERING_ASSESSMENT.md §1aa) -- this variant asks whether it is
-# net NOISE once two German-native toxicity signals are present, not just
-# redundant.
 NO_TOXIC_BERT_PLUS_GERMAN_TOX_7 = [
     f for f in SHIPPED_6 if f != "toxic_bert"
 ] + GERMAN_TOX_FEATURES

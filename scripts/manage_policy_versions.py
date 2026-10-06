@@ -1,12 +1,7 @@
-"""
-Operator CLI for policy versioning and rollback (Phase 3, Policy-as-Code).
-See core/policy_versioning.py for the design rationale.
+"""Operator CLI for validated policy deploy, snapshot listing and rollback.
 
-Usage:
-    python -m scripts.manage_policy_versions list
-    python -m scripts.manage_policy_versions deploy candidate_policy_rules.yaml
-    python -m scripts.manage_policy_versions rollback 20260821T140000Z__ab12cd34ef56.json
-"""
+Requires a writable configured live policy path. Reload serving processes
+consistently after a policy change."""
 import sys
 
 from core.policy import validate_policy_file

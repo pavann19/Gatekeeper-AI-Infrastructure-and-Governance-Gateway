@@ -201,7 +201,7 @@ def test_log_gateway_event_never_logs_prompt_or_response_content(audit_file):
     allowed_keys = {
         "timestamp", "event_type", "request_id", "tenant", "capability",
         "provider", "model", "success", "latency_ms", "decision", "usage",
-        "error", "level", "name", "message",
+        "error", "level", "name", "message", "policy_digest",
     }
     assert set(r.keys()) <= allowed_keys
     assert r["error"] == "rate_limited"

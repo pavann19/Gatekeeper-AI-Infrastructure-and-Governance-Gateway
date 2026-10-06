@@ -93,12 +93,6 @@ STAGE_KEYS = {
     "fusion_ms": "fusion",
 }
 
-# Stage timings span three orders of magnitude — sub-millisecond symbolic
-# checks through multi-second judge calls (§1p measured p99 ~19s end to end),
-# so the default buckets (which top out at 10s) would lump the entire tail
-# into +Inf and make the worst case invisible. These are chosen to keep
-# resolution where the decisions are: single-digit ms for the fast path,
-# and real buckets past 10s for the judge.
 _LATENCY_BUCKETS = (
     0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5,
     1.0, 2.5, 5.0, 10.0, 20.0, 30.0, 60.0,
@@ -181,12 +175,6 @@ judge_invocations_total = Counter(
     "Ambiguous-zone arbitrations that actually reached a judge backend.",
 )
 
-# --- Load-test baseline instrumentation (docs/perf/01-baseline-analysis.md) --
-# `assessments_in_flight` above conflates two different waits: time queued
-# behind ASSESS_MAX_CONCURRENCY and time actually executing. Under load these
-# have opposite fixes (queueing -> raise concurrency or shed load; execution
-# -> make the pipeline faster), so a single gauge cannot tell you which one is
-# happening. api.main._run_bounded records both ends of the same call here.
 queue_wait_seconds = Histogram(
     "gatekeeper_assess_queue_wait_seconds",
     "Time an assessment spent waiting for a free worker in the bounded pool, "
@@ -224,7 +212,7 @@ detector_duration_seconds = Histogram(
     buckets=_LATENCY_BUCKETS,
 )
 
-# --- Phase 5 (Real LLM Gateway): the proxied call, kept separate from the
+# --- (Real LLM Gateway): the proxied call, kept separate from the
 # assessment metrics above -- a slow or failing external provider is a
 # different failure mode than a slow local assessment, and conflating them
 # would hide which one is actually degraded.
@@ -266,7 +254,7 @@ circuit_breaker_open = Gauge(
     ["backend"],
 )
 
-# --- Phase 7 (Policy Editor) / Phase 8 hardening: a live policy change is
+# --- (Policy Editor) / a live policy change is
 # a distinct, security-relevant event -- "how many times did the ENFORCED
 # policy actually change, and did the attempt succeed" is a question worth
 # answering without joining generic HTTP request logs, the same reasoning

@@ -146,7 +146,7 @@ def test_redis_url_set_but_unreachable_falls_back_to_local(monkeypatch):
     with mock.patch("redis.from_url", side_effect=ConnectionError("refused")):
         backend = cb.build_exact_cache_backend()
 
-    assert isinstance(backend, cb.LocalExactCache)
+    assert isinstance(backend, cb.RedisExactCache)
 
 
 def test_redis_ping_failure_falls_back_to_local(monkeypatch):
@@ -157,4 +157,4 @@ def test_redis_ping_failure_falls_back_to_local(monkeypatch):
     with mock.patch("redis.from_url", return_value=fake_client):
         backend = cb.build_exact_cache_backend()
 
-    assert isinstance(backend, cb.LocalExactCache)
+    assert isinstance(backend, cb.RedisExactCache)

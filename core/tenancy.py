@@ -1,39 +1,9 @@
-"""
-Tenant resolution — the "Tenant Resolver" box in the V2 reference
-architecture (API Gateway -> Auth -> Tenant Resolver -> Policy Context -> ...).
+"""Tenant configuration and admission state.
 
-SCOPE, DELIBERATELY NARROW
----------------------------
-This module resolves WHO the tenant is and whether they may proceed at all
-(active vs suspended) and their SLA parameters (rate limit). It does NOT
-decide policy — no risk-threshold overrides, no per-tenant BLOCK/RESTRICT/
-ALLOW mapping. That is "Policy Context", the next box in the diagram, and a
-separate piece of work: conflating identity resolution with policy would
-make it impossible to reason about either independently, and would repeat
-the exact mistake core/auth.py's docstring documents fixing (capability
-being asserted by the request instead of resolved from a verified source).
-
-WHY THIS EXISTS NOW, SPECIFICALLY
-----------------------------------
-`Principal.tenant` (core/auth.py) has existed since auth was rebuilt, but
-nothing has ever read it — confirmed in the Phase 0 component audit
-(docs/ENGINEERING_ASSESSMENT.md, "Tenant Resolver" row: "`Principal.tenant`
-is threaded through but nothing branches on it"). A resolver that only
-echoes a field back is not a resolver, it is dead code with an audit trail.
-This module makes the field load-bearing: unknown tenants in a valid store
-use defaults, while suspended tenants and unavailable configured state reject
-admission before detection work. Tenant SLA settings change the rate limit.
-
-DESIGN, MIRRORING core/auth.py's KeyStore ON PURPOSE
-------------------------------------------------------
-Same shape as the API key store: JSON file, loaded once and cached, a
-force-reload hook for after provisioning, per-entry validation so one
-malformed tenant doesn't take down the others, and a safe default when the
-optional store has never been configured. A missing configured store is
-unavailable, and malformed tenant entries remain explicit denial entries. Consistency with the
-existing auth module matters more here than any abstract preference,
-because whoever operates one will need to operate the other.
-"""
+Tenant identity comes from verified principal context. Unconfigured optional
+stores use defaults; unavailable configured stores deny admission. Reload
+publishes one complete snapshot. Operators control suspension, limits and
+privacy overrides."""
 from __future__ import annotations
 
 import json
@@ -66,14 +36,13 @@ class TenantConfig:
     status: str = "active"
     rate_limit_rpm: float | None = None
 
-    # Phase 5 token accounting (core/token_quota.py). None means "use
+    # token accounting (core/token_quota.py). None means "use
     # settings.GATEWAY_TOKEN_QUOTA_DAILY_DEFAULT for this tenant", mirroring
     # rate_limit_rpm=None's "use the tier default" convention exactly. 0 is
     # an explicit override to unlimited for this specific tenant, distinct
     # from None's "no override, inherit the default".
     token_quota_daily: int | None = None
 
-    # Phase 7 / Roadmap V2: optional per-tenant privacy overrides
     privacy_disabled_patterns: tuple[str, ...] | None = None
     privacy_ner_labels: tuple[str, ...] | None = None
 

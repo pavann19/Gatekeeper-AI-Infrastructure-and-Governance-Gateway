@@ -49,17 +49,7 @@ def _fallback_output_judge(response_text: str) -> str:
 
 
 def judge_available() -> tuple:
-    """
-    Probes the local judge backend for reachability.
-
-    Evaluation harnesses MUST call this before measuring classifier quality.
-    `judge_arbitration` fails closed to HIGH when the judge is unreachable,
-    so benchmarking against an offline judge silently measures sidecar
-    availability rather than detection accuracy — which is exactly how the
-    pre-fix benchmark produced an uninterpretable 98% false-positive rate.
-
-    Returns (available: bool, detail: str).
-    """
+    """Probes the local judge backend for reachability."""
     try:
         # OLLAMA_API_URL ends in ".../api/generate"; the model list lives at
         # ".../api/tags". Drop only the final segment ("generate") so the "api"
@@ -184,7 +174,7 @@ def semantic_judge(prompt: str) -> str:
             ollama_judge_breaker.record_failure()
             return "JUDGE_OFFLINE"
 
-    # Phase 8 hardening: the text between the <user_prompt> tags is
+    # the text between the <user_prompt> tags is
     # untrusted and reaches this f-string via plain concatenation, with
     # no protocol-level separation from the instruction above it (unlike
     # _judge_via_llama_guard's proper user/assistant role split, which
@@ -251,21 +241,10 @@ def semantic_judge(prompt: str) -> str:
         return "JUDGE_OFFLINE"
 
 def output_judge(response_text: str) -> str:
-    """
-    Asks a local LLM to classify an LLM-generated response for toxicity,
-    harmful content, or hallucinated dangerous instructions.
+    """Judge generated output for toxicity and harmful instructions.
 
-    BUG FIX (Phase 2, Output Security): this previously always sent the
-    generic instructable-chat prompt below, regardless of OLLAMA_MODEL. Once
-    OLLAMA_MODEL's default became a Llama Guard variant (see core/config.py's
-    OLLAMA_MODEL fix), every call here hit exactly the failure
-    `_judge_via_llama_guard`'s own docstring already documents for the input
-    path: Llama Guard ignores output-format instructions and always replies
-    `safe`/`unsafe`, so `json.loads()` on its raw text raises and this
-    function failed closed to DANGEROUS on every single response — a judge
-    that blocks everything is not a working judge. Same dispatch as
-    `semantic_judge` fixes it the same way.
-    """
+    Uses the configured safety judge and optional local fallback. Callers must
+    require explicit SAFE acceptance; missing/invalid results are not permission."""
     if uses_llama_guard_protocol(OLLAMA_MODEL):
         try:
             return _judge_via_llama_guard(response_text)

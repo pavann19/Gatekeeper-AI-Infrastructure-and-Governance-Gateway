@@ -1,45 +1,7 @@
-"""
-MCP compatibility adapter (Phase 6, Tool/Agent Gateway — the final
-roadmap item, explicitly listed as "deferred to after the above is
-solid"). Now that registry/schemas, allow/deny, risk-based approval,
-sandboxed demo tools, and audit events all exist and are tested, this is
-what makes them speak the Model Context Protocol's shape.
+"""Map registered tool specifications and execution into MCP request/response shapes.
 
-SCOPE: PROTOCOL-SHAPE COMPATIBILITY, NOT A TRANSPORT SERVER
-----------------------------------------------------------------
-This module translates between `core/tools.py`'s registry/`ToolSpec` and
-MCP's own `Tool`/`CallToolResult` JSON shapes, and nothing else. It does
-NOT implement an MCP server (no stdio transport, no JSON-RPC framing, no
-SSE) — that is a real, separate piece of infrastructure with its own
-integration surface (a process boundary, a wire protocol, a client
-handshake) and belongs to whichever deployment actually needs to expose
-Gatekeeper-governed tools over MCP, not to a compatibility layer built
-speculatively ahead of one. This is the same "don't build the next thing
-before something needs it" discipline every other item in this phase
-already followed — `core/tools.py`'s own module docstring made the exact
-same call about allow/deny and audit events before a real tool existed.
-
-WHY THIS WAS ALREADY CHEAP
-------------------------------
-`core/tools.py::ToolSpec.parameters` was JSON-Schema-shaped from the very
-first commit in this phase specifically so this step would be an
-adapter, not a rewrite (see `ToolSpec`'s own docstring). MCP's `Tool.
-inputSchema` is that same JSON Schema shape — `tool_spec_to_mcp` is
-close to a field rename, not a translation layer with real logic in it.
-
-MCP SHAPES REPRODUCED HERE (subset actually used)
-------------------------------------------------------
-    Tool:            {"name": str, "description": str, "inputSchema": <JSON Schema>}
-    CallToolResult:  {"content": [{"type": "text", "text": str}], "isError": bool}
-
-Gatekeeper's own decision vocabulary (BLOCK/REVIEW/ALLOW) has no MCP
-equivalent — MCP's `CallToolResult` only distinguishes success from
-error, nothing in between. A BLOCK or REVIEW is therefore reported as
-`isError: true` with the reason as the content text; an MCP client has
-no protocol-level way to distinguish "denied by policy" from "the tool
-itself failed" without reading that text, which is a real, stated
-limitation of MCP's shape, not something this adapter can paper over.
-"""
+Transport-specific admission remains outside this compatibility layer; shared
+tool capability, risk, review and audit controls are enforced on execution."""
 from __future__ import annotations
 
 from typing import Any, Dict, List

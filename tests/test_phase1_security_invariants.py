@@ -1,4 +1,4 @@
-"""Negative controls for the Phase 1 security boundaries."""
+"""Negative controls for the implementation security boundaries."""
 import json
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch

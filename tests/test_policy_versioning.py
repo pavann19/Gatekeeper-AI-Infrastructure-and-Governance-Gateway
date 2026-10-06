@@ -1,5 +1,5 @@
 """
-Tests for core.policy_versioning (Phase 3, Policy-as-Code: "versioning and
+Tests for core.policy_versioning (implementation
 rollback"). Filesystem-based, separate from git — see the module docstring
 for why: this versions the LIVE policy file a running deployment is
 actually enforcing, which may have no git access at all.
@@ -78,12 +78,12 @@ def test_rollback_to_nonexistent_version_raises(live_policy):
         rollback_to("nonexistent-version.json", path=live_policy)
 
 
-# --- Phase 8 hardening: path traversal via version_name -----------------------
+# --- path traversal via version_name -----------------------
 #
 # rollback_to's only caller used to be a local CLI operator who already had
 # full filesystem access, so os.path.join(_versions_dir(), version_name)
 # happily resolving an absolute path or a `../` traversal was never
-# exploitable. Phase 7 exposed this function over HTTP
+# exploitable. exposed this function over HTTP
 # (POST /api/v1/policy/rollback, INTERNAL capability) -- without a guard,
 # any INTERNAL API key could roll back to an arbitrary readable file and
 # then read its content back via GET /api/v1/policy, an arbitrary-file-read

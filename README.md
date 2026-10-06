@@ -1,108 +1,88 @@
 # Gatekeeper
 
-[![CI](https://github.com/pavann19/Gatekeeper-AI-Infrastructure-and-Governance-Gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/pavann19/Gatekeeper-AI-Infrastructure-and-Governance-Gateway/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](https://opensource.org/licenses/MIT)
+Gatekeeper is a security and governance gateway for AI requests and registered tools. It combines privacy processing, threat detection, tenant policy, human review, output guardrails and audit persistence behind a FastAPI API.
 
-A governance gateway that sits in front of LLM calls: it screens prompts for
-prompt injection and jailbreak attempts, redacts PII, enforces policy, and
-fails closed when a dependency is unhealthy.
+It can assess input before an application calls its own model, proxy requests through configured providers, or authorize a registered tool. HTTP and stdio MCP expose the tool registry. The operator UI is served by the API; Prometheus and Grafana provide operational visibility.
 
-## Problem
-
-Raw LLM prompts are non-deterministic and relying on a system prompt for
-safety is a known, bypassable pattern (jailbreaks, obfuscation, injection).
-Gatekeeper is backend infrastructure that intercepts a prompt before it
-reaches the model, makes a policy decision (allow / restrict / block), and
-writes an auditable record of that decision — for prompt-injection defense,
-PII handling, and policy enforcement in front of an LLM, not as a chat UI.
-
-## Architecture
-
-A modular monolith: one FastAPI process plus Redis and Ollama. Everything in
-the request path — symbolic rules, FAISS anchor search, the 8-detector
-fusion ensemble, PII redaction, the audit writer — runs in-process; Redis
-backs the circuit breaker and rate limiter, Ollama serves the optional
-judge model.
+## How it works
 
 ```mermaid
 flowchart LR
-    Client -->|prompt| API[FastAPI: Gatekeeper]
-    API --> Symbolic[Symbolic rules + PII/NER]
-    API --> Fusion[8-detector fusion ensemble]
-    Fusion --> FAISS[FAISS anchor search]
-    API -->|ambiguous zone only| Judge[Ollama: llama-guard3]
-    API --> Redis[(Redis: circuit breaker, rate limit)]
-    API --> Audit[(SQLite audit mirror + JSONL)]
-    API -->|decision| Client
+    A[HTTP request] --> B[Credential and tenant admission]
+    B --> C[Privacy processing]
+    C --> D[Symbolic veto and scoped cache]
+    D --> E[Detectors, fusion and optional judge]
+    E --> F[Tenant policy]
+    F --> G[Decision or review]
+    G --> H[Provider or registered tool]
+    H --> I[Output guardrails and audit]
 ```
 
-## How to run
+The assessment API returns a decision; the integrating application must enforce it. Provider and tool paths enforce their own execution controls. See [architecture](docs/ARCHITECTURE.md) for the actual paths and failure boundaries.
 
-```bash
+## Security boundaries
+
+- Credentials determine capability and tenant. `AUTH_MODE=required` denies anonymous access. INTERNAL is a trusted administrative tier with explicit cross-tenant access.
+- Tenant admission checks suspension and configured-store availability. Rate limits and quotas are process local without Redis and shared when configured; configured Redis failure denies controlled operations.
+- Privacy processing redacts personal data; required NER failure denies assessment. Local classifiers can inspect the original prompt.
+- Current symbolic vetoes precede HIGH-only cache reuse. Security identity scopes reuse by tenant, input, source, policy, models and runtime.
+- Tenant policy returns ALLOW, RESTRICT, BLOCK or REVIEW. HIGH tools require review. Capability/schema checks and one-use bound approval reservation precede execution.
+- Output checks block secrets and detected system-prompt leakage, redact PII, and require explicit SAFE toxicity acceptance. Tool intent must persist before effects; later audit failure cannot undo an effect.
+- MCP HTTP requires authentication and credential-bound sessions, with bounded ingress/dispatch. Stdio trusts its launcher and fixed process identity.
+
+Detection is probabilistic. Registered Python handlers are trusted code, not a general sandbox. Read the [security contract](docs/SECURITY.md) and [threat model](docs/THREAT_MODEL.md).
+
+## Run locally
+
+Docker Compose starts the API, Redis, Ollama, a judge-model pull job, Prometheus and Grafana. Model downloads require network access, sufficient memory and applicable model access/license approval.
+
+```sh
 git clone https://github.com/pavann19/Gatekeeper-AI-Infrastructure-and-Governance-Gateway.git
-cd Gatekeeper-AI-Infrastructure-and-Governance-Gateway && cp .env.example .env
+cd Gatekeeper-AI-Infrastructure-and-Governance-Gateway
+cp .env.example .env
+python -c "from pathlib import Path; Path('config/api_keys.json').write_text('{}'); Path('config/tenants.json').write_text('{}')"
 docker compose up --build
 ```
 
-Swagger docs at `http://localhost:8000/docs`, health at `/health`. `make verify`
-runs unit tests, downloads the pinned detector weights, and runs a smoke
-eval + short benchmark against a live instance (see [`scripts/verify.sh`](scripts/verify.sh)).
+Create the empty identity files only in a fresh checkout; do not overwrite provisioned stores. On PowerShell, use `Copy-Item .env.example .env` for the copy. Empty keys permit anonymous GENERAL access under default optional authentication. Provision keys and require authentication before exposing the service. Set a private Grafana password in `.env` and restrict access to published ports. [Deployment](docs/DEPLOYMENT_RUNBOOK.md) covers provisioning, native Python setup, persistent state and models.
 
-## Benchmark results
+| Surface | Local URL |
+|---|---|
+| API documentation | `http://localhost:8000/docs` |
+| Operator UI | `http://localhost:8000/ui/login/index.html` |
+| Liveness / readiness | `http://localhost:8000/live` / `http://localhost:8000/ready` |
+| Grafana / Prometheus | `http://localhost:3000` / `http://localhost:9090` |
 
-Public benchmark summaries are kept in
-[`docs/BENCHMARK_SUMMARY.md`](docs/BENCHMARK_SUMMARY.md) and the deeper
-performance notes under [`docs/perf/`](docs/perf/). Raw run artifacts
-(`_evidence/`, CSV rows, logs, JSONL, and flamegraphs) are local/private by
-default and are not part of the public repository.
+Readiness can return 503 when required models or dependencies are unavailable. `/health` is diagnostic; HTTP 200 there does not establish readiness. See [integration](docs/INTEGRATION_GUIDE.md) for requests and decision handling.
 
-## Policy files
+## Test and verify
 
-The live decision policy is [`policy_rules.json`](policy_rules.json).
-[`policy_rules.yaml`](policy_rules.yaml) is the same schema as a commented
-operator example for Policy-as-Code workflows. Threat taxonomy anchors are
-separate data, not the live policy file, and live under
-[`policies/threat_anchors.json`](policies/threat_anchors.json). See
-[`docs/POLICY_FILES.md`](docs/POLICY_FILES.md) for the exact split.
+Use Python 3.10 and a separate source-test environment:
 
-## Security model
+```sh
+python -m venv .venv
+# Activate .venv before installing; see below.
+python -m pip install -r requirements-ci.txt
+python -m spacy download en_core_web_sm
+python -m scripts.verify --profile unit --output _evidence/unit
+```
 
-Fail-closed: if a dependency required for a decision is unavailable (embedding
-model, judge, cache), the request is restricted rather than silently allowed.
-Trust boundary is the `/api/v1/assess` request body — everything past that
-line (symbolic rules, detectors, judge) treats the prompt as untrusted input.
-What's covered: prompt injection, jailbreak attempts, PII in the prompt text,
-policy-scoped access via capability tokens. What isn't: output-side filtering
-of the downstream LLM's own response, and multi-turn/context-carried attacks
-across separate requests (each request is scored independently).
+Activate with `source .venv/bin/activate` on POSIX or `.venv\Scripts\Activate.ps1` on PowerShell. CI dependencies omit downloaded detector models; related cases use mocks or conditional skips. The verifier isolates mutable state and runs lint, types and tests with a coverage floor. Direct commands are:
 
-## Evaluation
+```sh
+python -m ruff check core/ api/
+python -m mypy core/ api/ --ignore-missing-imports --explicit-package-bases
+python -m pytest tests/ --cov=core --cov=api --cov-fail-under=65
+```
 
-Detector and fusion AUC, with 1,000-resample bootstrap confidence intervals,
-on a 6,933-prompt suite from 7 sources: learned fusion reaches
-**0.952 [0.945, 0.958]** AUC / 86.1% recall @ 5% FPR, against 0.949 for the
-single best detector (Prompt Guard 2) — not a statistically decisive gain on
-pooled AUC, but a real one on per-class coverage (the best single detector
-scores 2.0% on harmful-content prompts; fusion + judge reaches 62.6%
-offline). Full breakdown and the script: [`docs/ENGINEERING_ASSESSMENT.md`](docs/ENGINEERING_ASSESSMENT.md),
-`benchmarks/evaluate_accuracy.py`.
+The default selection excludes slow replay. Full selection and strict replay require the separate pinned runtime and matching assets in [evaluation](docs/EVALUATION.md). Missing required assets fail the gate. CI also audits dependencies, builds/scans the image, produces an SBOM and tests real Redis backend contracts.
 
-## Limitations
+## Evaluation and limitations
 
-- Concurrent-throughput numbers are from one dev machine, not a production
-  host; see the baseline doc for a documented cache-warmth methodology gap
-  in the first capture.
-- Llama Guard (harmful-content judge) is evaluated offline only — too slow
-  (17-27s/prompt on CPU) for synchronous serving today; live harmful-content
-  detection sits near the anchor-only baseline until it's wired in as an
-  ambiguous-zone arbiter.
-- `llama_guard_3_8b` isn't hash-pinned in the model manifest (sharded
-  weights don't fit the current single-file schema) and isn't in the live
-  detector set.
-- Secondary, present but not the resume story: MCP servers, the review
-  queue UI, the policy editor, tenancy, and token quotas. The core is the
-  detection pipeline plus the fail-closed gateway plus measured performance
-  — see [`docs/DECISIONS.md`](docs/DECISIONS.md) for why.
+No current accuracy, throughput or latency headline is published. Frozen offline replay checks agreement with a decision oracle; it is not an accuracy estimate. Detector-only, cached, live-judge, synthetic and deployment profiles must be reported separately.
 
-Full prior README (architecture deep-dive, full API reference, project
-history) is preserved at [`docs/archive/README_v1_full.md`](docs/archive/README_v1_full.md).
+Strict replay uses the public hash-pinned frozen corpus and requires separately provisioned pinned model assets and runtime. The historical training suite and synthetic load workload remain local with expected hashes; their reconstruction is not established by the public source. Deployment dependency ranges differ from the canonical runtime. Full application replica acceptance and production operation are unverified.
+
+Request budgets do not bound all synchronous or nested work. Policy reload is per process. Review storage requires a local filesystem with advisory locks. Tool approvals support one-use continuation; prompt/provider review records do not provide an execution continuation endpoint. Gateway system prompts bypass the user-prompt privacy/assessment path and must be trusted application configuration. These are deployment limitations, not a production-readiness claim.
+
+[Architecture](docs/ARCHITECTURE.md) Â· [Security](docs/SECURITY.md) Â· [Threat model](docs/THREAT_MODEL.md) Â· [Evaluation](docs/EVALUATION.md) Â· [Deployment](docs/DEPLOYMENT_RUNBOOK.md) Â· [Integration](docs/INTEGRATION_GUIDE.md)

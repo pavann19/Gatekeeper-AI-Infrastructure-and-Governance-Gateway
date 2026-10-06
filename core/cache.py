@@ -11,7 +11,7 @@ from collections import OrderedDict
 from datetime import datetime, timezone
 import threading
 from core.config import CACHE_SIMILARITY_THRESHOLD
-from core.cache_backend import build_exact_cache_backend
+from core.cache_backend import build_exact_cache_backend, RedisExactCache, CacheDependencyUnavailable
 from core.logger import get_logger
 import numpy as np
 
@@ -36,7 +36,7 @@ class FAISSCache:
         # the fuzzy FAISS index (Tier 2) regardless of which exact backend is
         # active.
         self._exact = build_exact_cache_backend(max_size=MAX_CACHE_SIZE)
-        
+
     def _get_index(self):
         if self._index is None:
             import faiss  # noqa: PLC0415
@@ -51,11 +51,11 @@ class FAISSCache:
         self._index = faiss.IndexFlatIP(self.dimension)
         if not self.cache_data:
             return
-            
+
         vectors = []
         for key, entry in self.cache_data.items():
             vectors.append(entry["vector"])
-            
+
         vec_matrix = np.array(vectors).astype('float32')
         faiss.normalize_L2(vec_matrix)
         self._index.add(vec_matrix)
@@ -65,14 +65,14 @@ class FAISSCache:
             try:
                 with open(CACHE_FILE, 'r') as f:
                     data = json.load(f)
-                
+
                 now = time.time()
                 for entry in data:
                     # Apply TTL on load
                     entry_time = entry.get("timestamp_epoch", 0)
                     if now - entry_time < TTL_SECONDS:
                         self.cache_data[entry["prompt_hash"]] = entry
-                
+
                 logger.info(f"Semantic Cache Loaded ({len(self.cache_data)} active entries)")
             except Exception as e:
                 logger.error(f"Cache Load Error: {e}")
@@ -138,6 +138,8 @@ class FAISSCache:
         except Exception as e:
             logger.error(f"Exact-cache backend write failed ({type(e).__name__}: {e}); "
                         f"this instance's local cache still has the entry.")
+            if isinstance(self._exact, RedisExactCache):
+                raise CacheDependencyUnavailable('Distributed cache persistence unavailable') from None
 
         # Trigger non-blocking save of the local fuzzy-index snapshot
         self.save_async()
@@ -158,6 +160,8 @@ class FAISSCache:
         except Exception as e:
             logger.error(f"Exact-cache backend read failed ({type(e).__name__}: {e}); "
                         f"treating as a miss and falling through to fuzzy match.")
+            if isinstance(self._exact, RedisExactCache):
+                raise CacheDependencyUnavailable('Distributed cache lookup unavailable') from None
             entry = None
         if entry is not None and entry.get("risk") == "HIGH":
             return entry.get("risk"), entry.get("score")
@@ -204,7 +208,7 @@ class FAISSCache:
                     self._rebuild_faiss()
 
         return None, None
-        
+
     def flush(self):
         with self._lock:
             self.cache_data = OrderedDict()
@@ -236,6 +240,8 @@ _CACHE_SCOPE = ContextVar("security_cache_scope", default="direct-v2")
 def security_cache_scope(raw_prompt, tenant):
     # Raw identity is hashed in memory; it is never persisted as text.
     digest = hashlib.sha256(b"gatekeeper-security-cache-v2")
+    from core.policy import policy_identity
+    digest.update(policy_identity().encode())
     # Runtime interpretation can change scores with identical pinned weights.
     # A model-library change must create a new assessment version.
     for package in ("torch", "transformers", "sentence-transformers", "huggingface-hub", "numpy", "tokenizers", "safetensors"):

@@ -4,7 +4,7 @@ Tests for the evaluation metrics.
 These matter more than typical test code: every number in the technical report
 comes out of this module. A silent bug here does not crash anything, it just
 produces a confidently wrong result — which is the failure mode this whole
-Phase 1 effort exists to eliminate.
+implementation effort exists to eliminate.
 """
 import math
 
@@ -89,7 +89,6 @@ def test_recall_at_fpr_respects_budget():
     labels = [0] * 5 + [1] * 5
     # Zero FPR allowed -> only attacks scoring above every benign count.
     assert recall_at_fpr(scores, labels, budget=0.0) == pytest.approx(0.8)
-    # Allowing 20% FPR (1 of 5 benign) lets the 0.35 attack through too.
     assert recall_at_fpr(scores, labels, budget=0.2) == pytest.approx(1.0)
 
 

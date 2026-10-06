@@ -1,6 +1,6 @@
 """
 Tests for GET /api/v1/settings/privacy and GET /api/v1/settings/protection
-(Phase 7, Client UI remainder). Both read REAL running configuration --
+(implementation). Both read REAL running configuration --
 core/privacy.py's actual regex/NER config, and core/tenancy.py +
 core/policy.py's actual tenant SLA and policy mapping -- not a hand-written
 description of them.

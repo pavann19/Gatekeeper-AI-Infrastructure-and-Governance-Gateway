@@ -22,15 +22,15 @@ def test_assess_output_clean(mock_judge, _grounding):
 @patch("core.output_guardrails.output_judge")
 def test_assess_output_pii_is_redacted_not_blocked(mock_judge, _grounding):
     """
-    BEHAVIOUR CHANGE (Phase 2, Output Security): PII in a response used to
-    BLOCK the entire response outright, discarding the redaction
-    redact_pii() had already computed. It now redacts and lets the response
-    through, mirroring how the INPUT side always redacts-and-continues
-    rather than refusing the whole request over one PII match. A leaked
-    email is not remotely as severe as a leaked secret (see the BLOCK case
-    below) and blocking loses real conversational utility for no safety gain
-    the redaction doesn't already provide.
-    """
+        BEHAVIOUR CHANGE (implementation): PII in a response used to
+        BLOCK the entire response outright, discarding the redaction
+        redact_pii() had already computed. It now redacts and lets the response
+        through, mirroring how the INPUT side always redacts-and-continues
+        rather than refusing the whole request over one PII match. A leaked
+        email is not remotely as severe as a leaked secret (see the BLOCK case
+        below) and blocking loses real conversational utility for no safety gain
+        the redaction doesn't already provide.
+        """
     mock_judge.return_value = "SAFE"
 
     response_text = "Contact john.doe@example.com for the report."

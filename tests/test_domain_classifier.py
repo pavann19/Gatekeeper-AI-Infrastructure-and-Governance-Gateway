@@ -1,13 +1,4 @@
-"""
-Tests for core/domain_classifier.py — the topicality (domain alignment)
-signal used by core/risk.py's fuse_signals() and surfaced via api's
-`topicality` field. NOT a safety signal (see docs/EVALUATION_METHODOLOGY.md).
-
-These tests mock core.embeddings.get_embedding/cosine_similarity so they
-run fast and deterministically without loading a real sentence-transformers
-model, while exercising the classifier's real corpus-loading, lazy-centroid,
-caching, and failure-handling logic.
-"""
+"""Tests for domain topicality independently of safety risk."""
 import json
 import logging
 

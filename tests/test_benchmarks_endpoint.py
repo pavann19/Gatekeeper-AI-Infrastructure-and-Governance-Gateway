@@ -1,4 +1,4 @@
-"""Tests for GET /api/v1/benchmarks (Phase 7, Developer UI)."""
+"""Tests for GET /api/v1/benchmarks (implementation)."""
 import json
 
 import pytest

@@ -1,6 +1,6 @@
 """
 Regression coverage for a real gap found by manual mutation testing
-(Phase 8 SDLC hardening pass): core/risk.py's `assess_risk` has a comment
+(implementation SDLC hardening pass): core/risk.py's `assess_risk` has a comment
 declaring "SAFETY: Never downgrade a HIGH-risk cached decision" guarding a
 `if cached_risk == "HIGH":` branch -- but until this file, NOTHING in the
 test suite actually asserted `risk == "HIGH"` for that path. The existing

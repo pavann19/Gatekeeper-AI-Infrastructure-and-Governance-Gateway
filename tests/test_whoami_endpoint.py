@@ -1,5 +1,5 @@
 """
-Tests for GET /api/v1/whoami (Phase 7) -- the identity-check endpoint the
+Tests for GET /api/v1/whoami (implementation) -- the identity-check endpoint the
 client UI's login page uses to verify a pasted API key against the real
 KeyStore before trusting it, rather than trusting whatever the browser
 happened to store.
