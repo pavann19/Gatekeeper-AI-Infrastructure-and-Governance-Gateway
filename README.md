@@ -92,10 +92,13 @@ offline). Full breakdown and the script: [`docs/ENGINEERING_ASSESSMENT.md`](docs
 - Concurrent-throughput numbers are from one dev machine, not a production
   host; see the baseline doc for a documented cache-warmth methodology gap
   in the first capture.
-- Llama Guard (harmful-content judge) is evaluated offline only — too slow
-  (17-27s/prompt on CPU) for synchronous serving today; live harmful-content
-  detection sits near the anchor-only baseline until it's wired in as an
-  ambiguous-zone arbiter.
+- Llama Guard 3 1B has now been exercised locally as a live harmful-content
+  judge and ambiguous-zone arbiter, including actual judge calls during the
+  sustained baseline. This clears the offline-only limitation for the tested
+  local 1B configuration; live harmful-content accuracy gains and production
+  latency remain unmeasured. The historical 17-27s/prompt CPU result does not
+  describe this new serving configuration.
+
 - `llama_guard_3_8b` isn't hash-pinned in the model manifest (sharded
   weights don't fit the current single-file schema) and isn't in the live
   detector set.
