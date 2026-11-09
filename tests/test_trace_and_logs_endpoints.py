@@ -14,6 +14,8 @@ from api.main import app
 from core import auth as auth_mod
 from core.auth import KeyStore, generate_key, hash_key
 
+pytestmark = pytest.mark.usefixtures("provisioned_tenants")
+
 client = TestClient(app)
 
 

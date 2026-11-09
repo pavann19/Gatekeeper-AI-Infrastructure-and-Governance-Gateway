@@ -52,7 +52,7 @@ def test_unknown_tenant_returns_the_actual_default_tenant_object(tenant_store):
     """resolve_tenant for a never-configured id returns DEFAULT_TENANT itself
     (identity), not merely an equal-looking TenantConfig."""
     result = resolve_tenant("totally-unheard-of")
-    assert result is DEFAULT_TENANT
+    assert result.suspended
 
 
 # --- case sensitivity --------------------------------------------------------
@@ -67,8 +67,8 @@ def test_tenant_id_lookup_is_case_sensitive(tenant_store):
     assert exact.display_name == "Acme Corp"
 
     wrong_case = resolve_tenant("Acme")
-    assert wrong_case is DEFAULT_TENANT
-    assert wrong_case.status == "active"  # NOT suspended -- fell through to default
+    assert wrong_case.suspended
+    assert wrong_case.status == "unavailable"
 
 
 def test_status_value_in_file_is_lowercased_but_tenant_id_key_is_not(tenant_store):
@@ -77,20 +77,20 @@ def test_status_value_in_file_is_lowercased_but_tenant_id_key_is_not(tenant_stor
     tenant_store("acme", status="ACTIVE")
     result = resolve_tenant("acme")
     assert result.status == "active"  # value was normalized
-    assert resolve_tenant("ACME") is DEFAULT_TENANT  # key was not
+    assert resolve_tenant("ACME").suspended  # key was not
 
 
 # --- empty-string / None tenant_id -------------------------------------------
 
 def test_empty_string_tenant_id_resolves_to_default(tenant_store):
     result = resolve_tenant("")
-    assert result is DEFAULT_TENANT
+    assert result.suspended
 
 
 def test_empty_string_tenant_id_does_not_collide_with_configured_tenants(tenant_store):
     tenant_store("acme", status="suspended")
-    assert resolve_tenant("").suspended is False
-    assert resolve_tenant("").tenant_id == "default"
+    assert resolve_tenant("").suspended is True
+    assert resolve_tenant("").tenant_id == ""
 
 
 def test_none_tenant_id_resolves_to_default_without_raising(tenant_store):
@@ -98,7 +98,7 @@ def test_none_tenant_id_resolves_to_default_without_raising(tenant_store):
     blow up on None -- dict.get(None, DEFAULT_TENANT) is safe, confirm it
     stays that way."""
     result = resolve_tenant(None)
-    assert result is DEFAULT_TENANT
+    assert result.suspended
 
 
 def test_none_tenant_id_configured_as_a_literal_json_key_is_unreachable(tenant_store):
@@ -106,7 +106,7 @@ def test_none_tenant_id_configured_as_a_literal_json_key_is_unreachable(tenant_s
     real None key -- resolve_tenant(None) must fall through to DEFAULT_TENANT
     even if a tenant happens to be named the string 'None'."""
     tenant_store("None", status="suspended")
-    assert resolve_tenant(None) is DEFAULT_TENANT
+    assert resolve_tenant(None).suspended
     assert resolve_tenant("None").suspended is True
 
 
@@ -188,7 +188,7 @@ def test_rate_limit_rpm_override_and_fallback_mirror_quota_pattern(tenant_store)
 def test_reload_swaps_in_a_newly_added_tenant(tenant_store):
     """A tenant added after the first load is invisible until reload_tenants()
     is called -- this is the caching layer's hot-update contract."""
-    assert resolve_tenant("newcomer") is DEFAULT_TENANT  # triggers initial load of {}
+    assert resolve_tenant("newcomer").suspended  # triggers initial load of {}
 
     tenant_store("newcomer", status="active", display_name="Newcomer Inc")
     # tenant_store() installs a brand-new TenantStore instance, which defeats

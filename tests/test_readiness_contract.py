@@ -7,6 +7,7 @@ from core.readiness import readiness_checks
 
 
 def test_liveness_is_distinct_from_failed_readiness(monkeypatch):
+    monkeypatch.setattr('core.readiness._probe_cache', (0., {}))
     monkeypatch.setattr('core.readiness.readiness_checks', lambda: {'policy': False})
     client = TestClient(app)
     assert client.get('/live').status_code == 200

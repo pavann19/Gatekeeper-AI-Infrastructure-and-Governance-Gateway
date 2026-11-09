@@ -12,13 +12,16 @@ import asyncio
 import json
 import time
 import uuid
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from typing import Dict, Optional
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from core.admission import require_admission
-from core.auth import auth_required, resolve_principal
+from core.auth import resolve_request_principal
 from core.config import settings
 from core.logger import get_logger
 from core.mcp_server import handle_request
@@ -47,6 +50,8 @@ MAX_SESSION_LIFETIME_SECONDS = 600
 MAX_SESSIONS = 128
 MAX_SESSION_QUEUE = 32
 MAX_PENDING_DISPATCHES = 8
+_admission_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="mcp-admission")
+_admission_slots = threading.BoundedSemaphore(8)
 
 
 @dataclass
@@ -80,6 +85,17 @@ def create_mcp_app(registry: Optional[ToolRegistry] = None) -> FastAPI:
     workers = asyncio.Semaphore(4)
     app.state.sessions = sessions
 
+    @app.on_event('startup')
+    async def state_preflight():
+        if settings.STATE_BACKEND == 'postgres':
+            from core.postgres_state import get_postgres_store
+            ready = await asyncio.wait_for(
+                asyncio.wrap_future(_admission_pool.submit(get_postgres_store().ready)),
+                timeout=settings.ASSESS_TIMEOUT_SECONDS,
+            )
+            if not ready:
+                raise RuntimeError('Required PostgreSQL state schema or runtime role is unavailable')
+
     @app.get("/health")
     def health():
         return {"status": "ok", "transport": "mcp_http_sse"}
@@ -87,7 +103,7 @@ def create_mcp_app(registry: Optional[ToolRegistry] = None) -> FastAPI:
     @app.get("/mcp/sse")
     async def mcp_sse(request: Request):
         """Implementation of mcp sse."""
-        principal = _admit(request)
+        principal = await _admit_bounded(request)
         if len(sessions) >= MAX_SESSIONS:
             raise HTTPException(503, "MCP session capacity exhausted")
         session_id = str(uuid.uuid4())
@@ -202,13 +218,9 @@ def create_mcp_app(registry: Optional[ToolRegistry] = None) -> FastAPI:
 
     def _admit(request: Request):
         # 1. Resolve authentication from Authorization header or X-API-Key
-        auth_header = request.headers.get("Authorization")
-        if not auth_header and request.headers.get("X-API-Key"):
-            auth_header = f"Bearer {request.headers.get('X-API-Key')}"
-
-        principal = resolve_principal(authorization=auth_header)
+        principal = resolve_request_principal(request)
         tenant_config = resolve_tenant(principal.tenant)
-        require_admission(principal, tenant_config, require_auth=auth_required())
+        require_admission(principal, tenant_config, require_auth=True)
 
         # 3. Check rate limits
         if settings.RATE_LIMIT_ENABLED:
@@ -232,6 +244,20 @@ def create_mcp_app(registry: Optional[ToolRegistry] = None) -> FastAPI:
                 )
 
         return principal
+
+    async def _admit_bounded(request):
+        if not _admission_slots.acquire(blocking=False):
+            raise HTTPException(503, "MCP admission capacity exhausted", headers={"Retry-After": "5"})
+        try:
+            task = _admission_pool.submit(copy_context().run, _admit, request)
+        except BaseException:
+            _admission_slots.release()
+            raise
+        task.add_done_callback(lambda _: _admission_slots.release())
+        try:
+            return await asyncio.wait_for(asyncio.wrap_future(task), timeout=settings.ASSESS_TIMEOUT_SECONDS)
+        except TimeoutError:
+            raise HTTPException(503, "MCP admission timed out", headers={"Retry-After": "5"}) from None
 
     async def _dispatch_rpc(principal, body):
         if len(dispatches) >= MAX_PENDING_DISPATCHES:
@@ -265,7 +291,7 @@ def create_mcp_app(registry: Optional[ToolRegistry] = None) -> FastAPI:
         - If sessionId is provided but unknown/expired: returns HTTP 404.
         - If sessionId is omitted: returns the JSON-RPC response directly (HTTP 200).
         """
-        principal = _admit(request)
+        principal = await _admit_bounded(request)
         body, error_response = await _read_and_validate_body(request)
         if error_response is not None:
             return error_response
@@ -298,7 +324,7 @@ def create_mcp_app(registry: Optional[ToolRegistry] = None) -> FastAPI:
     @app.post("/mcp/jsonrpc")
     async def mcp_jsonrpc(request: Request):
         """Direct stateless JSON-RPC POST endpoint."""
-        principal = _admit(request)
+        principal = await _admit_bounded(request)
         body, error_response = await _read_and_validate_body(request)
         if error_response is not None:
             return error_response

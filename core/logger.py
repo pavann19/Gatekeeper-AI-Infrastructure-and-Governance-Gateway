@@ -2,11 +2,13 @@
 import hashlib
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
+from uuid import uuid4
 import logging
 import threading
 
 from core.config import settings
+from core.state_lock import state_lock
 
 # --- CONFIGURE STRUCTURED LOGGING ---
 logger = logging.getLogger("gatekeeper")
@@ -69,31 +71,39 @@ class AuditPersistenceError(RuntimeError):
 _audit_lock = threading.Lock()
 
 
+def _persist_local_audit(event_type, entry):
+    sqlite_authority = settings.AUDIT_READ_FROM_SQLITE
+    if sqlite_authority:
+        if not settings.AUDIT_SQLITE_ENABLED:
+            raise AuditPersistenceError("SQLite audit authority is disabled")
+        _mirror_to_sqlite(event_type, entry)
+    payload = json.dumps(entry, ensure_ascii=True) + "\n"
+    try:
+        with _audit_lock, state_lock(settings.AUDIT_LOG_PATH):
+            path = settings.AUDIT_LOG_PATH
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            with open(path, "a", encoding="utf-8") as stream:
+                if stream.write(payload) != len(payload):
+                    raise OSError("Incomplete audit write")
+                stream.flush()
+                os.fsync(stream.fileno())
+    except Exception:
+        if not sqlite_authority:
+            raise
+        logger.critical("JSONL audit mirror failed after authoritative SQLite persistence")
+    if not sqlite_authority:
+        _mirror_to_sqlite(event_type, entry)
+
+
 def _persist_audit(event_type, entry):
     from core.policy import policy_identity
-    entry = {**entry, 'policy_digest': policy_identity()}
-    sqlite_authority = settings.AUDIT_READ_FROM_SQLITE
+    entry = {**entry, 'event_id': uuid4().hex, 'policy_digest': policy_identity()}
     try:
-        if sqlite_authority:
-            if not settings.AUDIT_SQLITE_ENABLED:
-                raise AuditPersistenceError("SQLite audit authority is disabled")
-            _mirror_to_sqlite(event_type, entry)
-        payload = json.dumps(entry, ensure_ascii=True) + "\n"
-        try:
-            with _audit_lock:
-                path = settings.AUDIT_LOG_PATH
-                os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-                with open(path, "a", encoding="utf-8") as stream:
-                    if stream.write(payload) != len(payload):
-                        raise OSError("Incomplete audit write")
-                    stream.flush()
-                    os.fsync(stream.fileno())
-        except Exception:
-            if not sqlite_authority:
-                raise
-            logger.critical("JSONL audit mirror failed after authoritative SQLite persistence")
-        if not sqlite_authority:
-            _mirror_to_sqlite(event_type, entry)
+        if settings.STATE_BACKEND == 'postgres':
+            from core.postgres_state import get_postgres_store
+            get_postgres_store().write_audit(entry)
+        else:
+            _persist_local_audit(event_type, entry)
     except Exception as exc:
         raise AuditPersistenceError("Authoritative audit persistence failed") from exc
     # Diagnostic observers run only after authoritative persistence succeeded.
@@ -103,11 +113,21 @@ def _persist_audit(event_type, entry):
         logger.warning("Diagnostic audit observer failed")
 
 
+def log_review_event(record, outcome, reviewer, phase):
+    """Append a content-free reviewer decision to the authoritative audit trail."""
+    _persist_audit("review_resolution", {
+        "event_type": "review_resolution", "timestamp": datetime.now(timezone.utc).isoformat(),
+        "request_id": record.get("request_id"), "tenant": record.get("tenant"),
+        "review_id": record["review_id"], "reviewer": reviewer, "outcome": outcome,
+        "phase": phase, "prompt_hash": record.get("prompt_hash"),
+    })
+
+
 def log_event(capability, prompt, risk, decision, metadata=None):
     if metadata is None:
         metadata = {}
 
-    timestamp = datetime.now().isoformat()
+    timestamp = datetime.now(timezone.utc).isoformat()
     prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
 
     log_entry = {
@@ -173,7 +193,7 @@ def log_output_event(capability, response_text, decision, metadata=None, tenant=
         metadata = {}
 
     log_entry = {
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "event_type": "output_assessment",
         "request_id": request_id,
         "tenant": tenant,
@@ -197,7 +217,7 @@ def log_gateway_event(capability, provider, model, success, latency_ms, decision
                       usage=None, error=None, tenant="unset", request_id="unset"):
     """Persist a distinct provider-gateway event with sanitized metadata."""
     log_entry = {
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "event_type": "gateway_call",
         "request_id": request_id,
         "tenant": tenant,
@@ -224,7 +244,7 @@ def log_tool_event(capability, tool_name, decision, risk_level, reason,
         arguments_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
     log_entry = {
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "event_type": "tool_call",
         "phase": phase,
         "request_id": request_id,

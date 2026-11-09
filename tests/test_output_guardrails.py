@@ -75,7 +75,7 @@ def test_toxicity_judge_runs_on_redacted_text_not_raw_text():
 def test_assess_output_blocks_on_secret_even_if_judge_and_grounding_pass():
     with patch("core.output_guardrails.output_judge", return_value="SAFE") as mock_judge, \
          patch("core.output_guardrails.check_semantic_grounding", return_value=True):
-        response_text = "Sure, here's your key: AKIAABCDEFGHIJKLMNOP"
+        response_text = "Sure, here's your key: AKIAABCDEFGHIJKLMNOP"  # Synthetic detector fixture; gitleaks:allow
         decision, details = assess_output(response_text)
 
         assert decision == "BLOCK"

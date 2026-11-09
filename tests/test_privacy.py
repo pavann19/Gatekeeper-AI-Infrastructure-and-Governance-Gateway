@@ -21,8 +21,10 @@ def test_redact_pii_short_local_phone():
     assert "555-0199" not in clean
     assert "[REDACTED:PHONE]" in clean
     assert "[REDACTED:PERSON]" in clean
-    assert "PHONE:555-0199" in metadata["items"]
-    assert "PERSON:John Doe" in metadata["items"]
+    assert "PHONE" in metadata["items"]
+    assert "PERSON" in metadata["items"]
+    assert "John Doe" not in str(metadata)
+    assert "555-0199" not in str(metadata)
 
 def test_redact_pii_aadhaar():
     prompt = "My ID is 1234 5678 9012"

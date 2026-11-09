@@ -149,7 +149,8 @@ def test_exact_match_is_lru_promoted(cache):
     cache.lookup("first", vecs[0])  # touch "first" -> moves to MRU end
 
     keys = list(cache._exact._data.keys())
-    first_hash = [k for k, v in cache._exact._data.items() if v["prompt"] == "first"][0]
+    from core.cache import _security_key
+    first_hash = _security_key("first")
     assert keys[-1] == first_hash
 
 

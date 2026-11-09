@@ -50,10 +50,50 @@ def check_system_prompt_leakage(response_text: str, system_prompt: str,
     (the actual incident). Sliding-window substring matching answers the
     second question directly.
     """
-    if not system_prompt or len(system_prompt) < min_run:
+    if min_run < 1:
+        raise ValueError("min_run must be positive")
+    if not system_prompt or min(len(system_prompt), len(response_text)) < min_run:
         return False
-    for i in range(len(system_prompt) - min_run + 1):
-        if system_prompt[i:i + min_run] in response_text:
+    # A suffix automaton finds the longest common substring in linear time
+    # and space. It avoids re-scanning a 50k response for each prompt window.
+    transitions: list[dict[str, int]] = [{}]
+    links = [-1]
+    lengths = [0]
+    last = 0
+    for char in system_prompt:
+        current = len(transitions)
+        transitions.append({})
+        lengths.append(lengths[last] + 1)
+        links.append(0)
+        previous = last
+        while previous >= 0 and char not in transitions[previous]:
+            transitions[previous][char] = current
+            previous = links[previous]
+        if previous >= 0:
+            target = transitions[previous][char]
+            if lengths[previous] + 1 == lengths[target]:
+                links[current] = target
+            else:
+                clone = len(transitions)
+                transitions.append(dict(transitions[target]))
+                lengths.append(lengths[previous] + 1)
+                links.append(links[target])
+                while previous >= 0 and transitions[previous].get(char) == target:
+                    transitions[previous][char] = clone
+                    previous = links[previous]
+                links[target] = links[current] = clone
+        last = current
+    state = matched = 0
+    for char in response_text:
+        while state and char not in transitions[state]:
+            state = links[state]
+            matched = lengths[state]
+        if char in transitions[state]:
+            state = transitions[state][char]
+            matched += 1
+        else:
+            matched = 0
+        if matched >= min_run:
             return True
     return False
 

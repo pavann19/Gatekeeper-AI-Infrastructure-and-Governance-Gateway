@@ -2,6 +2,11 @@
 
 Gatekeeper is a security and governance gateway for AI requests and registered tools. It combines privacy processing, threat detection, tenant policy, human review, output guardrails and audit persistence behind a FastAPI API.
 
+The current hardening candidate is not production-ready. See the
+[readiness review](docs/READINESS_REVIEW.md) for implemented fixes and remaining
+gates, and the [pilot preflight](docs/PILOT_PREFLIGHT.md) for isolated deployment
+requirements.
+
 It can assess input before an application calls its own model, proxy requests through configured providers, or authorize a registered tool. HTTP and stdio MCP expose the tool registry. The operator UI is served by the API; Prometheus and Grafana provide operational visibility.
 
 ## How it works

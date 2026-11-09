@@ -6,6 +6,7 @@ is shared by HTTP and MCP and is not a general execution sandbox."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field, asdict
+import json
 from typing import Any, Dict, List, Tuple
 
 from core.logger import get_logger
@@ -404,6 +405,20 @@ def execute_tool(capability: str, name: str, arguments: Dict[str, Any],
                        reason=result["reason"], arguments=arguments, success=False,
                        error=error, phase="execution_failed", tenant=tenant, request_id=request_id)
         return {**result, "error": error}
+
+    from core.config import settings
+    try:
+        size = 0
+        for chunk in json.JSONEncoder(ensure_ascii=False, allow_nan=False).iterencode(output):
+            size += len(chunk.encode('utf-8'))
+            if size > settings.TOOL_MAX_OUTPUT_BYTES:
+                raise ValueError("Tool output exceeds byte limit")
+    except (ValueError, TypeError, RecursionError):
+        reason = "Tool executed; output is oversized or not valid bounded JSON"
+        log_tool_event(capability, name, "BLOCK", risk_level=spec.risk_level,
+                       reason=reason, arguments=arguments, success=True,
+                       phase="execution_completed_output_blocked", tenant=tenant, request_id=request_id)
+        return {**result, "decision": "BLOCK", "reason": reason}
 
     log_tool_event(capability, name, "ALLOW", risk_level=spec.risk_level,
                    reason=result["reason"], arguments=arguments, success=True, phase="execution_completed",

@@ -1,5 +1,7 @@
 """Real Redis contracts using only a unique, owned key namespace."""
 import os
+import json
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
@@ -7,6 +9,7 @@ import pytest
 import redis
 
 from core.cache_backend import RedisExactCache
+from core.cache_backend import PERSISTED_FIELDS
 from core.rate_limit import RedisRateLimiter
 from core.token_quota import RedisTokenQuotaTracker
 
@@ -60,3 +63,27 @@ def test_real_quota_records_have_no_lost_updates(replicas):
         list(pool.map(lambda i: trackers[i % 2].record('tenant', 2), range(100)))
     assert trackers[0].usage_today('tenant') == trackers[1].usage_today('tenant') == 200
     assert trackers[0].would_exceed('tenant', 200)
+
+
+def test_real_cache_persists_only_metadata(replicas):
+    clients, prefix = replicas
+    backend = RedisExactCache(clients[0])
+    backend.KEY_PREFIX = prefix + RedisExactCache.KEY_PREFIX
+    backend.set('digest', {'risk': 'HIGH', 'score': .99, 'prompt': 'synthetic-private-fragment',
+                           'response': 'synthetic-private-output', 'vector': [1., 2.]}, 30)
+    raw = clients[1].get(backend.KEY_PREFIX + 'digest')
+    assert b'synthetic-private-fragment' not in raw
+    assert b'synthetic-private-output' not in raw
+    assert set(json.loads(raw)) <= PERSISTED_FIELDS
+
+
+def test_real_cache_expiry_removes_decision(replicas):
+    clients, prefix = replicas
+    backend = RedisExactCache(clients[0])
+    backend.KEY_PREFIX = prefix
+    backend.set('expiring', {'risk': 'HIGH'}, 1)
+    assert backend.get('expiring')['risk'] == 'HIGH'
+    deadline = time.monotonic() + 3
+    while backend.get('expiring') is not None and time.monotonic() < deadline:
+        time.sleep(.05)
+    assert backend.get('expiring') is None

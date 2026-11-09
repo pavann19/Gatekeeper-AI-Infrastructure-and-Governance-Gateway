@@ -107,14 +107,10 @@ def safe_source(source) -> str:
     because an unbounded label value is the one metrics mistake that takes the
     process down rather than merely reporting badly.
     """
-    if source in KNOWN_SOURCES:
+    if isinstance(source, str) and source in KNOWN_SOURCES:
         return source
-    unknown_source_total.labels(source=_truncate(str(source))).inc()
+    unknown_source_total.labels(source="unknown").inc()
     return "other"
-
-
-def _truncate(value: str, limit: int = 40) -> str:
-    return value if len(value) <= limit else value[:limit]
 
 
 # ---------------------------------------------------------------------------
@@ -246,6 +242,11 @@ gateway_quota_rejections_total = Counter(
     "Gateway calls rejected with 429 because the tenant's daily token quota "
     "was already exhausted BEFORE this call, by tenant.",
     ["tenant"],
+)
+
+gateway_accounting_failures_total = Counter(
+    "gatekeeper_gateway_accounting_failures_total",
+    "Completed provider calls whose token accounting could not be acknowledged.",
 )
 
 circuit_breaker_open = Gauge(

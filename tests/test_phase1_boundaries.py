@@ -137,15 +137,15 @@ def test_provider_errors_do_not_echo_private_payload(provider_name, failure_mode
 @pytest.mark.parametrize("endpoint", ["/mcp/sse", "/mcp/jsonrpc", "/mcp/messages"])
 def test_mcp_all_ingress_requires_configured_auth(endpoint):
     client = TestClient(create_mcp_app(ToolRegistry()))
-    with patch("core.mcp_http_server.auth_required", return_value=True):
-        response = client.get(endpoint) if endpoint.endswith("sse") else client.post(endpoint, json={})
+    response = client.get(endpoint) if endpoint.endswith("sse") else client.post(endpoint, json={})
     assert response.status_code == 401
 
 
 def test_mcp_foreign_session_is_opaque_and_never_dispatches():
     app = create_mcp_app(ToolRegistry())
     app.state.sessions["known"] = MCPSession("another identity", asyncio.Queue(maxsize=1))
-    with patch("core.mcp_http_server.handle_request") as dispatch:
+    with patch("core.mcp_http_server.handle_request") as dispatch, \
+         patch("core.mcp_http_server.resolve_request_principal", return_value=Principal(authenticated=True)):
         response = TestClient(app).post("/mcp/messages?sessionId=known", json={})
     assert response.status_code == 404
     dispatch.assert_not_called()
@@ -165,6 +165,7 @@ def test_session_identity_uses_verified_key_identity_across_header_formats():
     assert bearer == api_key and bearer != other
 
 
+@pytest.mark.usefixtures("authenticated_mcp_transport")
 def test_mcp_session_limit_blocks_allocation(monkeypatch):
     monkeypatch.setattr("core.mcp_http_server.MAX_SESSIONS", 0)
     app = create_mcp_app(ToolRegistry())
@@ -176,7 +177,7 @@ def test_mcp_session_limit_blocks_allocation(monkeypatch):
 def test_review_foreign_tenant_and_missing_are_indistinguishable():
     from api.main import app
     principal = Principal(tenant="owner-a", authenticated=True)
-    with patch("api.main.resolve_principal", return_value=principal), \
+    with patch("api.main.resolve_request_principal", return_value=principal), \
          patch("api.main._reject_suspended_and_rate_limit"), \
          patch("api.main.get_review", side_effect=[{"tenant": "owner-b"}, None]):
         client = TestClient(app)
@@ -188,7 +189,7 @@ def test_review_foreign_tenant_and_missing_are_indistinguishable():
 
 def test_review_needs_auth_even_in_optional_auth_mode():
     from api.main import app
-    with patch("api.main.resolve_principal", return_value=Principal()), \
+    with patch("api.main.resolve_request_principal", return_value=Principal()), \
          patch("api.main.auth_required", return_value=False):
         response = TestClient(app).get("/api/v1/review/known")
     assert response.status_code == 401
@@ -201,7 +202,7 @@ def test_authenticated_internal_can_read_and_resolve_across_tenants(tmp_path):
     record = queue.enqueue(reason="review", capability="GENERAL", risk="HIGH", tenant="victim",
                            prompt_hash="hash", request_id="request")
     admin = Principal(capability="INTERNAL", tenant="admin", key_id="reviewer", authenticated=True)
-    with patch("api.main.resolve_principal", return_value=admin), \
+    with patch("api.main.resolve_request_principal", return_value=admin), \
          patch("api.main._reject_suspended_and_rate_limit"), \
          patch("api.main.get_review", side_effect=queue.get), \
          patch("api.main.resolve_review", side_effect=queue.resolve):
@@ -325,6 +326,7 @@ def test_missing_ner_blocks_output_even_with_safe_toxicity():
     assert details["source"] == "privacy_unavailable_fail_closed"
 
 
+@pytest.mark.usefixtures("authenticated_mcp_transport")
 def test_mcp_full_response_queue_rejects_before_dispatch(monkeypatch):
     monkeypatch.setattr("core.mcp_http_server._session_identity", lambda *args: "owner")
     monkeypatch.setattr("core.mcp_http_server.MAX_SESSION_QUEUE", 1)
@@ -339,6 +341,7 @@ def test_mcp_full_response_queue_rejects_before_dispatch(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("authenticated_mcp_transport")
 async def test_mcp_slow_tool_does_not_block_event_loop():
     import httpx
     import threading
@@ -363,6 +366,7 @@ async def test_mcp_slow_tool_does_not_block_event_loop():
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("authenticated_mcp_transport")
 async def test_mcp_chunked_oversized_body_stops_reading_before_tail(monkeypatch):
     import httpx
     monkeypatch.setattr("core.mcp_http_server.MAX_PAYLOAD_BYTES", 8)

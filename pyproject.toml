@@ -8,7 +8,8 @@ select = ["E", "F"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-m 'not slow'"
+addopts = "-m 'not slow and not integration'"
 markers = [
     "slow: marks tests as slow (deselect with -m 'not slow')",
+    "integration: real installed model or service required; opt in explicitly",
 ]

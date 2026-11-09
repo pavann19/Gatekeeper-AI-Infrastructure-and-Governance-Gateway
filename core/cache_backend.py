@@ -39,6 +39,17 @@ logger = get_logger(__name__)
 
 DEFAULT_TTL_SECONDS = 86400  # 24 hours
 
+# Only decision metadata may cross a persistence boundary. In particular,
+# prompts, responses and embedding vectors must remain outside this store.
+PERSISTED_FIELDS = frozenset({
+    "risk", "score", "source", "timestamp_epoch", "ttl_seconds",
+    "model_version", "security_scope",
+})
+
+
+def cache_metadata(entry):
+    return {key: value for key, value in entry.items() if key in PERSISTED_FIELDS}
+
 
 class ExactCacheBackend:
     """Interface: get/set/delete a JSON-serialisable entry by prompt hash."""
@@ -62,7 +73,7 @@ class LocalExactCache(ExactCacheBackend):
     retained under the same lock used to publish all cache mutations.
     """
 
-    def __init__(self, path="semantic_cache_exact.json", max_size=5000):
+    def __init__(self, path="semantic_cache_metadata_v3.json", max_size=5000):
         self.path = path
         self.max_size = max_size
         self._data = OrderedDict()
@@ -82,7 +93,7 @@ class LocalExactCache(ExactCacheBackend):
             now = time.time()
             for key, entry in raw.items():
                 if now - entry.get("timestamp_epoch", 0) < entry.get("ttl_seconds", DEFAULT_TTL_SECONDS):
-                    self._data[key] = entry
+                    self._data[key] = cache_metadata(entry)
         except Exception as e:
             logger.error(f"Local exact-cache load error: {e}")
 
@@ -131,7 +142,7 @@ class LocalExactCache(ExactCacheBackend):
             if (existing and existing.get("risk") == "HIGH"
                     and time.time() - existing.get("timestamp_epoch", 0) < existing.get("ttl_seconds", DEFAULT_TTL_SECONDS)):
                 return dict(existing)
-            entry = dict(entry)
+            entry = cache_metadata(entry)
             entry["timestamp_epoch"] = time.time()
             entry["ttl_seconds"] = ttl_seconds
             if key in self._data:
@@ -157,7 +168,9 @@ class RedisExactCache(ExactCacheBackend):
     """Shared backend: every gateway instance reads and writes the SAME
     store. A Lua operation protects HIGH and writes with native Redis expiry."""
 
-    KEY_PREFIX = "gatekeeper:cache:"
+    # A fresh namespace prevents old content-bearing entries from being reused.
+    # Legacy namespaces require an operator-reviewed purge before deployment.
+    KEY_PREFIX = "gatekeeper:cache:v3:"
 
     def __init__(self, client):
         self._client = client
@@ -167,7 +180,8 @@ class RedisExactCache(ExactCacheBackend):
         if raw is None:
             return None
         try:
-            return json.loads(raw)
+            value = json.loads(raw)
+            return cache_metadata(value) if isinstance(value, dict) else None
         except (json.JSONDecodeError, TypeError):
             return None
 
@@ -181,8 +195,9 @@ class RedisExactCache(ExactCacheBackend):
         redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2])
         return ARGV[1]
         """
+        entry = cache_metadata(entry)
         effective = self._client.eval(script, 1, self.KEY_PREFIX + key, json.dumps(entry), ttl_seconds)
-        return json.loads(effective)
+        return cache_metadata(json.loads(effective))
 
     def delete(self, key):
         self._client.delete(self.KEY_PREFIX + key)
@@ -202,10 +217,9 @@ def build_exact_cache_backend(client=None, max_size=5000) -> ExactCacheBackend:
     """
     Selects Redis if `client` is provided or if `REDIS_URL` is set AND
     reachable, using the shared ConnectionPool in `core.redis_client`.
-    Falls back gracefully to the local file-backed store — logged clearly
-    either way, so a deployment that meant to run distributed but has a
-    silently-broken Redis connection sees it in the startup log, not via
-    mysteriously inconsistent verdicts across instances later.
+    An unset Redis URL selects local metadata persistence. A configured but
+    unavailable Redis retains a failing required client; it never creates an
+    independent local authority during an outage.
 
     `max_size` only applies to the local fallback — an in-process dict
     needs an explicit cap. Redis is left to its own TTL-based expiry;
@@ -230,6 +244,7 @@ def build_exact_cache_backend(client=None, max_size=5000) -> ExactCacheBackend:
     else:
         logger.info("REDIS_URL not set; using local file-backed cache (single-node only).")
 
-    return LocalExactCache(max_size=max_size)
+    from core.config import settings
+    return LocalExactCache(path=settings.CACHE_EXACT_FILE, max_size=max_size)
 
 

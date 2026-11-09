@@ -3,7 +3,6 @@ from contextlib import contextmanager
 from pathlib import Path
 import json
 import sys
-import os
 import hashlib
 from importlib.metadata import PackageNotFoundError, version as package_version
 import time
@@ -25,6 +24,7 @@ class FAISSCache:
     def __init__(self, dimension=768):
         self.dimension = dimension
         self.cache_data = OrderedDict()
+        self._recency = OrderedDict()
         self._index = None
         self._lock = threading.Lock()
         self._save_thread = None
@@ -61,37 +61,15 @@ class FAISSCache:
         self._index.add(vec_matrix)
 
     def load(self):
-        if os.path.exists(CACHE_FILE):
-            try:
-                with open(CACHE_FILE, 'r') as f:
-                    data = json.load(f)
-
-                now = time.time()
-                for entry in data:
-                    # Apply TTL on load
-                    entry_time = entry.get("timestamp_epoch", 0)
-                    if now - entry_time < TTL_SECONDS:
-                        self.cache_data[entry["prompt_hash"]] = entry
-
-                logger.info(f"Semantic Cache Loaded ({len(self.cache_data)} active entries)")
-            except Exception as e:
-                logger.error(f"Cache Load Error: {e}")
-                self.cache_data = OrderedDict()
-        else:
-            logger.info("Semantic Cache Initialized (Empty)")
+        # Fuzzy vectors are process-local only. Never load legacy prompt/vector
+        # snapshots; their deletion is a separate operator migration.
+        logger.info("Semantic cache initialized in memory; legacy snapshots are not loaded")
 
     def _save_to_disk(self):
-        try:
-            with open(CACHE_FILE, 'w') as f:
-                json.dump(list(self.cache_data.values()), f)
-        except Exception as e:
-            logger.error(f"Cache Save Error: {e}")
+        """Compatibility hook: fuzzy vectors are deliberately never persisted."""
 
     def save_async(self):
-        """Saves cache to disk in a background thread to prevent blocking the event loop."""
-        if self._save_thread is None or not self._save_thread.is_alive():
-            self._save_thread = threading.Thread(target=self._save_to_disk)
-            self._save_thread.start()
+        """Compatibility hook: only the metadata-only exact backend persists."""
 
     def add(self, prompt, vector, risk, score, source="unknown"):
         with self._lock:
@@ -102,7 +80,6 @@ class FAISSCache:
                 vector_list = vector
 
             entry = {
-                "prompt": prompt,
                 "security_scope": _CACHE_SCOPE.get(),
                 "vector": vector_list,
                 "risk": risk,
@@ -118,15 +95,27 @@ class FAISSCache:
             existing = self.cache_data.get(prompt_hash)
             if existing and existing.get("risk") == "HIGH" and time.time() - existing.get("timestamp_epoch", 0) < TTL_SECONDS:
                 entry = existing
+            rebuild = prompt_hash in self.cache_data or len(self.cache_data) >= MAX_CACHE_SIZE
             if prompt_hash in self.cache_data:
                 del self.cache_data[prompt_hash]
             elif len(self.cache_data) >= MAX_CACHE_SIZE:
-                self.cache_data.popitem(last=False)
+                evicted, _ = self._recency.popitem(last=False)
+                del self.cache_data[evicted]
 
             self.cache_data[prompt_hash] = entry
+            self._recency[prompt_hash] = None
+            self._recency.move_to_end(prompt_hash)
 
-            # Since we modify the OrderedDict, we must rebuild FAISS
-            self._rebuild_faiss()
+            # Append new vectors incrementally. Replacements/evictions change
+            # positional IDs and must rebuild. Build lazily on first search.
+            if self._index is not None:
+                if rebuild:
+                    self._rebuild_faiss()
+                else:
+                    import faiss
+                    matrix = np.array([entry["vector"]], dtype='float32')
+                    faiss.normalize_L2(matrix)
+                    self._index.add(matrix)
 
         # Write-through to the exact-match backend OUTSIDE the lock — this
         # may be a network call (Redis) and must not hold up the fuzzy-index
@@ -198,13 +187,13 @@ class FAISSCache:
                 # Check TTL
                 if (entry.get("risk") == "HIGH" and entry.get("security_scope") == _CACHE_SCOPE.get()
                         and time.time() - entry.get("timestamp_epoch", 0) < TTL_SECONDS):
-                    # LRU update
-                    prompt_hash = entry["prompt_hash"]
-                    self.cache_data.move_to_end(prompt_hash)
+                    # Preserve insertion order: positional FAISS IDs refer to it.
+                    self._recency.move_to_end(entry["prompt_hash"])
                     return entry.get("risk"), entry.get("score")
                 elif time.time() - entry.get("timestamp_epoch", 0) >= TTL_SECONDS:
                     # Expired
                     del self.cache_data[entry["prompt_hash"]]
+                    self._recency.pop(entry["prompt_hash"], None)
                     self._rebuild_faiss()
 
         return None, None
@@ -212,6 +201,7 @@ class FAISSCache:
     def flush(self):
         with self._lock:
             self.cache_data = OrderedDict()
+            self._recency = OrderedDict()
             self._rebuild_faiss()
             self._save_to_disk()
         try:
@@ -239,7 +229,7 @@ _CACHE_SCOPE = ContextVar("security_cache_scope", default="direct-v2")
 @contextmanager
 def security_cache_scope(raw_prompt, tenant):
     # Raw identity is hashed in memory; it is never persisted as text.
-    digest = hashlib.sha256(b"gatekeeper-security-cache-v2")
+    digest = hashlib.sha256(b"gatekeeper-security-cache-v3")
     from core.policy import policy_identity
     digest.update(policy_identity().encode())
     # Runtime interpretation can change scores with identical pinned weights.

@@ -208,6 +208,7 @@ def test_cosine_similarity_returns_python_float():
 
 
 
+@pytest.mark.integration
 def test_real_model_produces_768_dim_vector_for_mpnet(monkeypatch):
     _reset_model_cache(monkeypatch)
     vec = get_embedding("The quick brown fox jumps over the lazy dog.")
@@ -215,6 +216,7 @@ def test_real_model_produces_768_dim_vector_for_mpnet(monkeypatch):
     assert vec.shape == (768,)  # all-mpnet-base-v2's known output dimensionality
 
 
+@pytest.mark.integration
 def test_real_model_is_deterministic_across_calls(monkeypatch):
     _reset_model_cache(monkeypatch)
     v1 = get_embedding("Deterministic embedding check.")
@@ -222,6 +224,7 @@ def test_real_model_is_deterministic_across_calls(monkeypatch):
     assert torch.equal(v1, v2)
 
 
+@pytest.mark.integration
 def test_real_model_semantic_similarity_ranks_related_text_higher(monkeypatch):
     _reset_model_cache(monkeypatch)
     anchor = get_embedding("The cat sat on the mat.")
@@ -233,12 +236,14 @@ def test_real_model_semantic_similarity_ranks_related_text_higher(monkeypatch):
     assert sim_related > sim_unrelated
 
 
+@pytest.mark.integration
 def test_real_model_handles_empty_string_without_error(monkeypatch):
     _reset_model_cache(monkeypatch)
     vec = get_embedding("")
     assert vec.shape == (768,)
 
 
+@pytest.mark.integration
 def test_real_model_second_get_model_call_reuses_cached_instance(monkeypatch):
     _reset_model_cache(monkeypatch)
     m1 = embeddings_mod._get_model()

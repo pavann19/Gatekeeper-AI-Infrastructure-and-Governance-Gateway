@@ -137,7 +137,14 @@ function showBanner(message, isError) {
 function nextDestination(identity) {
   const params = new URLSearchParams(window.location.search);
   const requested = params.get('next');
-  if (requested) return requested;
+  if (requested) {
+    try {
+      const destination = new URL(requested, window.location.origin);
+      if (destination.origin === window.location.origin && destination.pathname.startsWith('/ui/')) {
+        return destination.pathname + destination.search + destination.hash;
+      }
+    } catch (_) { /* Use the default destination for malformed URLs. */ }
+  }
   // No explicit destination: the activity feed is every capability's home
   // page (it's scoped to the caller's own tenant regardless of
   // capability); INTERNAL callers can navigate to the review queue from
@@ -183,9 +190,9 @@ form.addEventListener('submit', async (e) => {
     const identity = await res.json();
     gkSetSession(key, identity);
 
-    identityPreview.innerHTML =
-      'Signed in as <b>' + identity.key_id + '</b> — ' +
-      identity.capability + ' capability, tenant <b>' + identity.tenant + '</b>.';
+    identityPreview.textContent =
+      'Signed in as ' + identity.key_id + ' — ' +
+      identity.capability + ' capability, tenant ' + identity.tenant + '.';
     identityPreview.className = 'gk-identity-preview visible';
     banner.className = 'gk-status-banner';
 

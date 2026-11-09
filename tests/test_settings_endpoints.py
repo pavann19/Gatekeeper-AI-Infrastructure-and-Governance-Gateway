@@ -41,6 +41,8 @@ def key_store(tmp_path, monkeypatch):
 def tenant_and_policy(tmp_path, monkeypatch):
     tenants_path = tmp_path / "tenants.json"
     tenants_path.write_text(json.dumps({
+        "default": {"status": "active"},
+        "ops": {"status": "active"},
         "acme": {"display_name": "Acme Corp", "status": "active",
                  "rate_limit_rpm": 500, "token_quota_daily": 200000},
     }), encoding="utf-8")
@@ -113,8 +115,7 @@ def test_internal_can_view_another_tenants_settings(key_store, tenant_and_policy
     assert response.json()["tenant"]["tenant_id"] == "acme"
 
 
-def test_unconfigured_tenant_falls_back_to_default_tenant_config(key_store):
+def test_unconfigured_tenant_is_rejected(key_store):
     key = key_store(capability="GENERAL", tenant="never-configured")
     response = client.get("/api/v1/settings/protection", headers={"Authorization": f"Bearer {key}"})
-    assert response.status_code == 200
-    assert response.json()["tenant"]["tenant_id"] == "default"
+    assert response.status_code == 403

@@ -133,7 +133,7 @@ def test_redis_key_prefix_isolates_from_raw_key_collisions():
     backend = cb.RedisExactCache(fake_redis)
     backend.get("gatekeeper:cache:already-prefixed-looking-key")
     fake_redis.get.assert_called_once_with(
-        "gatekeeper:cache:gatekeeper:cache:already-prefixed-looking-key"
+        "gatekeeper:cache:v3:gatekeeper:cache:already-prefixed-looking-key"
     )
 
 
@@ -150,7 +150,7 @@ def test_redis_set_serialises_complex_nested_entry():
     backend.set("hash1", complex_entry)
 
     args, _ = fake_redis.eval.call_args
-    assert json.loads(args[3]) == complex_entry
+    assert json.loads(args[3]) == {"risk": "HIGH", "score": .87}
 
 
 def test_redis_flush_with_no_matching_keys_deletes_nothing():

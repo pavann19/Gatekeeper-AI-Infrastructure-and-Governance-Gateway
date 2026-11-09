@@ -1,5 +1,5 @@
 """
-Tests for POST /api/v1/gateway/chat (implementation: Real LLM Gateway — request
+Tests for POST /api/v1/gateway/chat (implementation: Real LLM Gateway â€” request
 forwarding + response interception). Every provider call is mocked; no
 live network or API key needed.
 """
@@ -133,7 +133,7 @@ def test_review_decision_never_reaches_the_provider(mock_assess, review_policy):
 
 @patch("api.main.assess_risk", return_value=LOW_RISK)
 def test_output_guardrails_block_a_leaked_secret_from_the_provider(mock_assess):
-    mock_llm_response = LLMResponse(content="key: AKIAABCDEFGHIJKLMNOP", model="m", provider="ollama")
+    mock_llm_response = LLMResponse(content="key: AKIAABCDEFGHIJKLMNOP", model="m", provider="ollama")  # Synthetic detector fixture; gitleaks:allow
     with patch("core.llm_providers.OllamaProvider.complete", return_value=mock_llm_response), \
          patch("core.output_guardrails.assess_output", return_value=DIRTY_OUTPUT):
         response = client.post("/api/v1/gateway/chat", json={"prompt": "give me a key"})

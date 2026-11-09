@@ -25,6 +25,7 @@ audit.db-wal
 audit.db-shm
 semantic_cache.json
 semantic_cache_exact.json
+semantic_cache_metadata_v3.json
 evaluation_results.txt
 .pytest_cache/
 .coverage
@@ -40,6 +41,7 @@ debug-*.log
 # benchmark JSON stay local unless explicitly approved for a private evidence
 # handoff.
 _evidence/
+evidence/
 benchmark_rows.csv
 benchmark_results.json
 

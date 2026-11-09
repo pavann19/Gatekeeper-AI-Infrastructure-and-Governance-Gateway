@@ -206,7 +206,10 @@ def resolve_principal(authorization=None, api_key=None) -> Principal:
     credential is absent, malformed, or unknown. Callers that require
     authentication should check `principal.authenticated`.
     """
-    token = api_key or _extract_bearer(authorization)
+    bearer = _extract_bearer(authorization)
+    if api_key and authorization and (not bearer or not hmac.compare_digest(api_key.encode(), bearer.encode())):
+        return Principal(reason="conflicting credentials")
+    token = api_key or bearer
     if not token:
         return Principal(reason="no credential presented")
 
@@ -229,6 +232,12 @@ def resolve_principal(authorization=None, api_key=None) -> Principal:
 def auth_required() -> bool:
     """True when anonymous requests should be rejected outright."""
     return settings.AUTH_MODE == "required"
+
+
+def resolve_request_principal(request) -> Principal:
+    """One header interpretation for HTTP, MCP and operational endpoints."""
+    return resolve_principal(authorization=request.headers.get("Authorization"),
+                             api_key=request.headers.get("X-API-Key"))
 
 
 # ---------------------------------------------------------------------------

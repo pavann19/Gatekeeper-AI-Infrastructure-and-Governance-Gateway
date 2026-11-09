@@ -80,7 +80,8 @@ def suspended_tenant(tmp_path, monkeypatch):
     _reject_suspended_and_rate_limit / the inline equivalent."""
     path = tmp_path / "tenants.json"
     path.write_text(
-        json.dumps({"suspended-co": {"display_name": "Suspended Co", "status": "suspended"}}),
+        json.dumps({"default": {"status": "active"},
+                    "suspended-co": {"display_name": "Suspended Co", "status": "suspended"}}),
         encoding="utf-8",
     )
     monkeypatch.setattr(tenancy_mod, "_store", TenantStore(str(path)))
@@ -368,7 +369,7 @@ def test_review_resolve_general_key_is_403(key_store, review_queue):
 def test_review_resolve_internal_key_succeeds(key_store, review_queue):
     record = review_queue.enqueue(
         reason="test", capability="GENERAL", risk="HIGH", tenant="default",
-        prompt_hash="deadbeef", request_id="req-3",
+        prompt_hash="deadbeef", request_id="req-3", context={"principal": "independent-maker"},
     )
     key = key_store(capability="INTERNAL")
     response = client.post(

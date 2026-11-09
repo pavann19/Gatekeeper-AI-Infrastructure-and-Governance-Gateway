@@ -162,7 +162,7 @@ def test_assess_output_grounding_not_evaluated_if_toxicity_already_blocked():
 
 def test_secret_takes_priority_over_system_prompt_leakage():
     system_prompt = "z" * 50
-    response_text = f"key: AKIAABCDEFGHIJKLMNOP and also {system_prompt} leaked"
+    response_text = f"key: AKIAABCDEFGHIJKLMNOP and also {system_prompt} leaked"  # Synthetic detector fixture; gitleaks:allow
     decision, details = assess_output(response_text, system_prompt=system_prompt)
     assert decision == "BLOCK"
     assert details["secrets_detected"] is True

@@ -8,12 +8,15 @@ logger records a mirror failure. See docs/SECURITY.md."""
 from __future__ import annotations
 
 import json
+import os
+from contextlib import nullcontext
 import sqlite3
 import threading
 from typing import Any, Iterable
 
 from core.config import settings
 from core.logger import get_logger
+from core.state_lock import state_lock
 
 logger = get_logger("gatekeeper.audit_store")
 
@@ -21,6 +24,8 @@ logger = get_logger("gatekeeper.audit_store")
 # This lock only serialises the cheap schema-ensure + insert, so a burst of
 # concurrent audit writes cannot interleave a half-created schema.
 _write_lock = threading.Lock()
+_schema_lock = threading.Lock()
+_schema_identities: dict[str, tuple[int, int] | None] = {}
 
 KNOWN_EVENT_TYPES = ("input_assessment", "output_assessment", "gateway_call", "tool_call")
 
@@ -119,6 +124,9 @@ _BOOL_COLUMNS = {
     "system_prompt_leak_detected", "success", "toxicity_assessed",
 }
 
+for _event_type in _COLUMNS:
+    _COLUMNS[_event_type] += ("event_id", "policy_digest")
+
 
 def _db_path(path: str | None) -> str:
     return path or settings.AUDIT_DB_PATH
@@ -127,24 +135,38 @@ def _db_path(path: str | None) -> str:
 def _connect(path: str | None = None) -> sqlite3.Connection:
     conn = sqlite3.connect(_db_path(path), timeout=5.0)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=FULL")
-    conn.executescript(_SCHEMA)
-    for table, additions in {
-        "tool_call": {"phase": "TEXT"},
-        "output_assessment": {"toxicity_assessed": "INTEGER", "toxicity_status": "TEXT"},
-    }.items():
-        columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
-        for column, kind in additions.items():
-            if column not in columns:
-                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
-    conn.commit()
-    for table, col in _INDEXES:
-        conn.execute(
-            f"CREATE INDEX IF NOT EXISTS ix_{table}_{col} ON {table}({col})"
-        )
-    conn.executescript(_VIEW)
-    return conn
+    try:
+        conn.execute("PRAGMA synchronous=FULL")
+        database_path = _db_path(path)
+        with _schema_lock:
+            stat = os.stat(database_path) if database_path != ':memory:' else None
+            identity = (stat.st_dev, stat.st_ino) if stat else None
+            if identity is None or _schema_identities.get(os.path.abspath(database_path)) != identity:
+                with state_lock(database_path) if database_path != ':memory:' else nullcontext():
+                    conn.execute("PRAGMA journal_mode=WAL")
+                    conn.executescript(_SCHEMA)
+                    migrations = {
+                        "tool_call": {"phase": "TEXT"},
+                        "output_assessment": {"toxicity_assessed": "INTEGER", "toxicity_status": "TEXT"},
+                    }
+                    for table in _COLUMNS:
+                        migrations.setdefault(table, {}).update({"event_id": "TEXT", "policy_digest": "TEXT"})
+                    for table, additions in migrations.items():
+                        columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+                        for column, kind in additions.items():
+                            if column not in columns:
+                                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
+                    conn.commit()
+                    for table, col in _INDEXES:
+                        conn.execute(
+                            f"CREATE INDEX IF NOT EXISTS ix_{table}_{col} ON {table}({col})"
+                        )
+                    conn.executescript(_VIEW)
+                _schema_identities[os.path.abspath(database_path)] = identity
+        return conn
+    except BaseException:
+        conn.close()
+        raise
 
 
 def _coerce_row(event_type: str, entry: dict[str, Any]) -> list[Any]:

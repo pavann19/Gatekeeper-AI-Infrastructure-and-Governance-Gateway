@@ -58,13 +58,15 @@ def test_redis_unreachable_denies_without_local_authority():
 # 2. Judge backend unreachable -> fallback to toxic_bert, fail-closed if disabled
 # ---------------------------------------------------------------------------
 def test_judge_unreachable_fallback_and_fail_closed(monkeypatch):
-    pytest.importorskip("transformers")  # Case A exercises the real toxic_bert fallback
     """Safety Property: When the primary judge backend is unreachable, the system
     must fall back to the local toxic_bert inverter. If the fallback is also
     disabled or unavailable, governance decisions must fail CLOSED (BLOCK/REVIEW / HIGH),
     never fail open (ALLOW / SAFE).
     """
     ollama_judge_breaker.reset()
+    detector = mock.Mock()
+    detector.score_batch.return_value = [0.99]
+    monkeypatch.setattr("core.detectors.get_detector", lambda name: detector)
     try:
         # Mock requests.post to simulate primary Ollama judge failure
         monkeypatch.setattr(
@@ -106,6 +108,9 @@ def test_fusion_detector_failure_degrades_gracefully_never_false_allow(monkeypat
     and fall back to deterministic safety signals rather than emitting a false ALLOW.
     """
     fusion_mod._load_policy()
+    # This test injects detector scores; warming real models defeats isolation
+    # and can download weights before the injected scorer is reached.
+    monkeypatch.setattr(fusion_mod, "_warm_detectors", lambda names: None)
 
     # Case A: An upgrade-tier detector fails (e.g. multilingual_head)
     def fake_score_detector(name, prompt):
@@ -212,11 +217,8 @@ def test_audit_log_unwritable_fails_closed_503(_mock_assess, monkeypatch):
 
 
 @mock.patch("api.main.assess_risk", return_value=("LOW", {"semantic_score": 0.1, "source": "mock"}))
-def test_audit_log_unwritable_opt_out_serves_with_loud_log(_mock_assess, monkeypatch, caplog):
-    """An operator that has explicitly accepted un-audited traffic
-    (AUDIT_WRITE_FAILS_CLOSED=false) still gets served, but the failure is
-    logged at CRITICAL — it is never silent.
-    """
+def test_audit_log_unwritable_legacy_flag_still_fails_closed(_mock_assess, monkeypatch, caplog):
+    """The legacy flag cannot authorize decisions without authoritative audit."""
     import logging
     monkeypatch.setattr(settings, "AUDIT_WRITE_FAILS_CLOSED", False)
     monkeypatch.setattr("api.main.log_event", _raise_audit_error)

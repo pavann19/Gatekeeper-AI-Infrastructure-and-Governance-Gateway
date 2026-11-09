@@ -1,8 +1,12 @@
 # core/config.py
-from pydantic import field_validator
+from pydantic import Field, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings
+from urllib.parse import urlsplit, parse_qs
 
 class Settings(BaseSettings):
+    ENVIRONMENT: str = "development"
+    STATE_BACKEND: str = "local"
+    DATABASE_URL: str = Field(default="", repr=False)
     # Capability Tiers
     CAPABILITY_GENERAL: str = "GENERAL"       # Formerly 'student'
     CAPABILITY_ELEVATED: str = "ELEVATED"     # Formerly 'researcher'
@@ -102,6 +106,7 @@ class Settings(BaseSettings):
     REVIEW_QUEUE_FILE: str = "review_queue.json"
     REVIEW_MAX_RECORDS: int = 10000
     REVIEW_MAX_BYTES: int = 16777216
+    CACHE_EXACT_FILE: str = "semantic_cache_metadata_v3.json"
 
     # Path to the JSONL audit log. Relative to cwd by default — unchanged
     # from before this setting existed. A container deployment should point
@@ -190,6 +195,8 @@ class Settings(BaseSettings):
     RATE_LIMIT_TRUST_FORWARDED_FOR: bool = False
 
     ASSESS_MAX_CONCURRENCY: int = 4
+    IO_MAX_CONCURRENCY: int = 4
+    REQUEST_MAX_BODY_BYTES: int = 1_048_576
 
     TORCH_INTRA_OP_THREADS: int = 1
     TORCH_INTER_OP_THREADS: int = 1
@@ -253,6 +260,7 @@ class Settings(BaseSettings):
     GATEWAY_TOKEN_QUOTA_DAILY_DEFAULT: int = 0
 
     WARM_MODELS_ON_STARTUP: bool = True
+    STARTUP_WARMUP_TIMEOUT_SECONDS: float = 120.0
 
     # Registers core/demo_tools.py's four sandboxed demo tools at
     # startup, so POST /api/v1/tools/call has something real to call
@@ -263,6 +271,7 @@ class Settings(BaseSettings):
     REGISTER_DEMO_TOOLS: bool = False
 
     REGISTER_REAL_TOOLS: bool = False
+    TOOL_MAX_OUTPUT_BYTES: int = 100_000
 
     # Exact-match hostname allowlist for core/real_tools.py's "http.get"
     # tool -- the first REAL (non-sandboxed) tool this project ships,
@@ -308,14 +317,14 @@ class Settings(BaseSettings):
             )
         return v
 
-    @field_validator("ASSESS_MAX_CONCURRENCY")
+    @field_validator("ASSESS_MAX_CONCURRENCY", "IO_MAX_CONCURRENCY", "TOOL_MAX_OUTPUT_BYTES", "REQUEST_MAX_BODY_BYTES")
     @classmethod
-    def _validate_concurrency(cls, v: int) -> int:
+    def _validate_concurrency(cls, v: int, info: ValidationInfo) -> int:
         if v < 1:
-            raise ValueError("ASSESS_MAX_CONCURRENCY must be at least 1.")
+            raise ValueError(f"{info.field_name} must be at least 1.")
         return v
 
-    @field_validator("ASSESS_TIMEOUT_SECONDS")
+    @field_validator("ASSESS_TIMEOUT_SECONDS", "STARTUP_WARMUP_TIMEOUT_SECONDS")
     @classmethod
     def _validate_timeout(cls, v: float) -> float:
         if v <= 0:
@@ -361,9 +370,32 @@ class Settings(BaseSettings):
     # Detector Model Integrity Verification
     DETECTOR_VERIFY_HASHES: bool = False
 
+    @model_validator(mode="after")
+    def _production_security(self):
+        if self.STATE_BACKEND not in ('local', 'postgres'):
+            raise ValueError('STATE_BACKEND must be local or postgres')
+        if self.STATE_BACKEND == 'postgres' and not self.DATABASE_URL:
+            raise ValueError('PostgreSQL state requires DATABASE_URL')
+        if self.ENVIRONMENT not in ("development", "production"):
+            raise ValueError("ENVIRONMENT must be development or production")
+        if self.ENVIRONMENT == "production":
+            database = urlsplit(self.DATABASE_URL)
+            if (self.STATE_BACKEND != 'postgres' or database.scheme not in ('postgres', 'postgresql')
+                    or not database.hostname or parse_qs(database.query).get('sslmode') != ['verify-full']):
+                raise ValueError('Production requires PostgreSQL state with sslmode=verify-full')
+            origins = [origin.strip() for origin in self.CORS_ORIGINS.split(',') if origin.strip()]
+            if (self.AUTH_MODE != "required" or not self.METRICS_REQUIRE_AUTH
+                    or not origins or any('*' in origin or not origin.startswith('https://') for origin in origins)
+                    or self.REGISTER_DEMO_TOOLS or not self.DETECTOR_VERIFY_HASHES
+                    or not self.WARM_MODELS_ON_STARTUP):
+                raise ValueError("Production requires authentication, authenticated metrics, explicit HTTPS CORS, "
+                                 "verified model hashes, model warm-up and disabled demo tools")
+        return self
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
+        hide_input_in_errors = True
 
 settings = Settings()
 

@@ -1,7 +1,7 @@
 """Tenant configuration and admission state.
 
-Tenant identity comes from verified principal context. Unconfigured optional
-stores use defaults; unavailable configured stores deny admission. Reload
+Tenant identity comes from verified principal context. An unconfigured optional
+store permits only the literal default tenant; unknown tenants are denied. Reload
 publishes one complete snapshot. Operators control suspension, limits and
 privacy overrides."""
 from __future__ import annotations
@@ -51,11 +51,8 @@ class TenantConfig:
         return self.status != "active"
 
 
-# The tenant every caller resolves to when tenancy is unconfigured, or when
-# their tenant_id is not in the store. Matches core/auth.py's ANONYMOUS
-# pattern: a safe, fully-functional default rather than an error, so a
-# deployment that never touches tenants.json is unaffected by this module
-# existing at all.
+# Only the literal default tenant can use this when the store is unconfigured.
+# Unknown named tenants must be provisioned explicitly before admission.
 DEFAULT_TENANT = TenantConfig(tenant_id="default", display_name="Default", status="active")
 
 
@@ -218,7 +215,9 @@ class TenantStore:
             if previous is not None and previous.suspended:
                 return previous
             return TenantConfig(tenant_id=tenant_id, status="unavailable")
-        return tenants.get(tenant_id, DEFAULT_TENANT)
+        if state == "unconfigured" and tenant_id == "default":
+            return DEFAULT_TENANT
+        return tenants.get(tenant_id, TenantConfig(tenant_id=tenant_id, status="unavailable"))
 
     def __len__(self):
         self.load()
@@ -238,6 +237,6 @@ def resolve_tenant(tenant_id: str) -> TenantConfig:
     THE RESOLVER. Given the tenant_id off a verified Principal (never off
     anything the caller asserts directly — that boundary is core/auth.py's
     job, this function trusts its input the same way policy_decision()
-    trusts `capability`), returns that tenant's config or DEFAULT_TENANT.
+    trusts `capability`), returns that tenant's config or an unavailable record.
     """
     return _store.get(tenant_id)

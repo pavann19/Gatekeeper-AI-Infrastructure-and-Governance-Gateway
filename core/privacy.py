@@ -70,7 +70,7 @@ def redact_pii(text: str, tenant_config=None) -> tuple:
             for match in matches:
                 mask = f"[REDACTED:{label}]"
                 clean_text = clean_text.replace(match, mask)
-                detected_items.append(f"{label}:{match}")
+                detected_items.append(label)
 
     # --- STAGE 2: NEURAL (spaCy NER) ---
     # Always run, even after a regex hit: a prompt can carry both a
@@ -90,7 +90,7 @@ def redact_pii(text: str, tenant_config=None) -> tuple:
 
                 # Replace string slice safely
                 clean_text = clean_text[:ent.start_char] + mask + clean_text[ent.end_char:]
-                detected_items.append(f"{ent.label_}:{ent.text}")
+                detected_items.append(ent.label_)
 
         if ner_hit or regex_hit:
             return clean_text, {"pii_found": True, "source": detection_source, "items": detected_items}

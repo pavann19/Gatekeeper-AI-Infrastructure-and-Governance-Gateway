@@ -2,7 +2,7 @@ from core.secrets_detection import detect_secrets
 
 
 def test_detects_aws_access_key():
-    result = detect_secrets("Here is your key: AKIAABCDEFGHIJKLMNOP")
+    result = detect_secrets("Here is your key: AKIAABCDEFGHIJKLMNOP")  # Synthetic detector fixture; gitleaks:allow
     assert result["secrets_found"] is True
     assert any(item.startswith("AWS_ACCESS_KEY:") for item in result["items"])
 
@@ -26,7 +26,7 @@ def test_detects_openai_style_key():
 
 
 def test_detects_jwt():
-    fake_jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dQw4w9WgXcQ_dGVzdHNpZw"
+    fake_jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dQw4w9WgXcQ_dGVzdHNpZw"  # Synthetic detector fixture; gitleaks:allow
     result = detect_secrets(f"Your token is {fake_jwt}")
     assert result["secrets_found"] is True
     assert any(item.startswith("JWT:") for item in result["items"])
@@ -53,7 +53,7 @@ def test_ordinary_hash_or_uuid_is_not_flagged():
 
 
 def test_matches_are_never_returned_in_full():
-    key = "AKIAABCDEFGHIJKLMNOP"
+    key = "AKIAABCDEFGHIJKLMNOP"  # Synthetic detector fixture; gitleaks:allow
     result = detect_secrets(key)
     for item in result["items"]:
         assert key not in item

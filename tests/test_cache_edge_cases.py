@@ -85,7 +85,7 @@ def test_fuzzy_lru_evicts_the_actually_least_recently_used_entry(cache, monkeypa
     cache.add("p3", v3, "HIGH", 0.1)
 
     assert len(cache.cache_data) == 3
-    remaining_prompts = {e["prompt"] for e in cache.cache_data.values()}
+    remaining_prompts = {p for p in ("p0", "p1", "p2", "p3") if _hash_of(cache, p) in cache.cache_data}
     assert remaining_prompts == {"p2", "p0", "p3"}
     assert "p1" not in remaining_prompts
 
@@ -101,7 +101,7 @@ def test_fuzzy_lru_without_promotion_evicts_true_oldest(cache, monkeypatch):
     cache.add("p2", v2, "LOW", 0.1)
     cache.add("p3", v3, "LOW", 0.1)  # no hits in between -> evicts p0
 
-    remaining_prompts = {e["prompt"] for e in cache.cache_data.values()}
+    remaining_prompts = {p for p in ("p0", "p1", "p2", "p3") if _hash_of(cache, p) in cache.cache_data}
     assert remaining_prompts == {"p1", "p2", "p3"}
 
 
@@ -142,7 +142,7 @@ def test_fuzzy_hit_just_after_ttl_boundary_is_a_miss_and_evicts(cache, monkeypat
 
     # Expired fuzzy entries are actively evicted from cache_data, not just
     # ignored -- confirm it is actually gone rather than merely unreturned.
-    remaining_prompts = {e["prompt"] for e in cache.cache_data.values()}
+    remaining_prompts = {p for p in ("p0", "p1", "p2", "p3") if _hash_of(cache, p) in cache.cache_data}
     assert "aging prompt" not in remaining_prompts
 
 

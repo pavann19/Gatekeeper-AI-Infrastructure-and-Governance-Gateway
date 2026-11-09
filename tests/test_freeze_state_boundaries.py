@@ -10,7 +10,7 @@ from core.review_queue import ReviewQueue
 
 
 def enqueue(queue, i=0):
-    return queue.enqueue('reason', 'GENERAL', 'HIGH', 'tenant', f'h{i}', f'req{i}')
+    return queue.enqueue('reason', 'GENERAL', 'HIGH', 'tenant', f'h{i}', f'req{i}', context={'principal': 'maker'})
 
 
 def test_independent_instances_lose_no_concurrent_writes(tmp_path):

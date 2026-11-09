@@ -1,0 +1,77 @@
+# Standalone, deployment-review candidate. Requires existing isolated resources.
+# No services are started or external resources created by validating this file.
+services:
+  gatekeeper-api:
+    image: ${GATEKEEPER_IMAGE:?Set an independently verified image reference pinned by sha256}
+    restart: on-failure:5
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 256
+    mem_limit: 8g
+    cpus: 4
+    stop_grace_period: 45s
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    environment:
+      ENVIRONMENT: production
+      STATE_BACKEND: postgres
+      AUDIT_SQLITE_ENABLED: "false"
+      AUDIT_READ_FROM_SQLITE: "false"
+      DATABASE_URL: ${GATEKEEPER_DATABASE_URL:?Set restricted PostgreSQL credentials with sslmode=verify-full}
+      AUTH_MODE: required
+      CORS_ORIGINS: ${GATEKEEPER_CORS_ORIGINS:?Set explicit HTTPS application origins}
+      METRICS_REQUIRE_AUTH: "true"
+      DETECTOR_VERIFY_HASHES: "true"
+      REGISTER_DEMO_TOOLS: "false"
+      REGISTER_REAL_TOOLS: "false"
+      WARM_MODELS_ON_STARTUP: "true"
+      STARTUP_WARMUP_TIMEOUT_SECONDS: "120"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_DATASETS_OFFLINE: "1"
+      HF_HOME: /models/huggingface
+      REDIS_URL: ${GATEKEEPER_REDIS_TLS_URL:?Set the authenticated TLS Redis endpoint}
+      OLLAMA_API_URL: ${GATEKEEPER_JUDGE_URL:?Set the isolated judge generate endpoint}
+      OLLAMA_CHAT_URL: ${GATEKEEPER_CHAT_URL:?Set the isolated provider chat endpoint}
+      OLLAMA_MODEL: ${GATEKEEPER_JUDGE_MODEL:?Set the reviewed judge model identity}
+      API_KEYS_FILE: /run/secrets/api_keys
+      TENANTS_FILE: /run/secrets/tenants
+      AUDIT_LOG_PATH: /app/state/audit.jsonl
+      AUDIT_DB_PATH: /app/state/audit.db
+      REVIEW_QUEUE_FILE: /app/state/reviews.json
+      CACHE_EXACT_FILE: /app/state/cache-metadata.json
+      POLICY_VERSIONS_DIR: /app/state/policy_versions
+    secrets: [api_keys, tenants, postgres_ca]
+    volumes:
+      - verified_models:/models/huggingface:ro
+    networks: [pilot]
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, http://127.0.0.1:8000/live]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 130s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+secrets:
+  api_keys:
+    file: ${GATEKEEPER_KEYS_PATH:?Set the reviewed hashed credential-store path}
+  tenants:
+    file: ${GATEKEEPER_TENANTS_PATH:?Set the reviewed provisioned-tenant path}
+  postgres_ca:
+    file: ${GATEKEEPER_POSTGRES_CA_PATH:?Set the PostgreSQL CA and use sslrootcert=/run/secrets/postgres_ca in the DSN}
+
+volumes:
+  verified_models:
+    external: true
+    name: ${GATEKEEPER_MODEL_VOLUME:?Set a verified offline model volume}
+
+networks:
+  pilot:
+    external: true
+    name: ${GATEKEEPER_NETWORK:?Set an isolated network with an approved TLS ingress}

@@ -348,6 +348,8 @@ def validate_policy_file(path: str) -> list[str]:
 
     if not isinstance(raw, dict):
         return ["Top level must be an object/mapping."]
+    for key in raw.keys() - {'tenants', 'default_action'}:
+        errors.append(f"Unknown top-level field: {key!r}.")
     if "tenants" not in raw:
         errors.append("Missing required top-level key: 'tenants'.")
         return errors
@@ -371,6 +373,8 @@ def validate_policy_file(path: str) -> list[str]:
         if not isinstance(entry, dict):
             errors.append(f"{prefix}: must be an object, got {type(entry).__name__}.")
             continue
+        for key in entry.keys() - {'policies'}:
+            errors.append(f"{prefix}: unknown field {key!r}.")
 
         policies = entry.get("policies")
         if not isinstance(policies, dict) or not policies:
@@ -379,10 +383,16 @@ def validate_policy_file(path: str) -> list[str]:
 
         for capability, risk_map in policies.items():
             cap_prefix = f"{prefix}.policies.{capability}"
+            if str(capability).upper() not in (
+                settings.CAPABILITY_GENERAL, settings.CAPABILITY_ELEVATED, settings.CAPABILITY_INTERNAL,
+            ):
+                errors.append(f"{cap_prefix}: unknown capability.")
             if not isinstance(risk_map, dict) or not risk_map:
                 errors.append(f"{cap_prefix}: missing, empty, or not an object.")
                 continue
             for risk_level, action in risk_map.items():
+                if str(risk_level).upper() not in ('LOW', 'MEDIUM', 'HIGH'):
+                    errors.append(f"{cap_prefix}.{risk_level}: unknown risk level.")
                 action_str = str(action).upper()
                 if action_str not in VALID_ACTIONS:
                     errors.append(

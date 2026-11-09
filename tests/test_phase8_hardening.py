@@ -24,12 +24,14 @@ from api.main import app
 from core.auth import Principal
 from core.tenancy import TenantConfig
 
+pytestmark = pytest.mark.usefixtures("provisioned_tenants")
+
 client = TestClient(app)
 
 
 def authenticated_as(key_id, tenant="acme", capability="GENERAL"):
     return patch(
-        "api.main.resolve_principal",
+        "api.main.resolve_request_principal",
         return_value=Principal(
             capability=capability, tenant=tenant, key_id=key_id,
             authenticated=True, reason="test",

@@ -16,6 +16,8 @@ from fastapi.testclient import TestClient
 from api.main import app
 from core.auth import Principal
 
+pytestmark = pytest.mark.usefixtures("provisioned_tenants")
+
 client = TestClient(app)
 
 LOW_RISK = ("LOW", {"semantic_score": 0.1, "source": "mock"})
@@ -34,7 +36,7 @@ def fast_limit(monkeypatch):
 def authenticated_as(key_id):
     """Patches credential resolution to yield a verified principal."""
     return patch(
-        "api.main.resolve_principal",
+        "api.main.resolve_request_principal",
         return_value=Principal(
             capability="GENERAL",
             tenant="acme",

@@ -18,6 +18,8 @@ from core import metrics
 from core.auth import Principal
 from core.logger import log_event
 
+pytestmark = pytest.mark.usefixtures("provisioned_tenants")
+
 client = TestClient(app)
 
 LOW_RISK = (
@@ -120,7 +122,7 @@ def test_tenant_counter_uses_the_resolved_tenant(_mock):
     )
     before = sample("gatekeeper_tenant_assessments_total", tenant="acme", decision="ALLOW")
 
-    with patch("api.main.resolve_principal", return_value=principal):
+    with patch("api.main.resolve_request_principal", return_value=principal):
         client.post("/api/v1/assess", json={"prompt": "hello"})
 
     after = sample("gatekeeper_tenant_assessments_total", tenant="acme", decision="ALLOW")
@@ -172,11 +174,11 @@ def test_unknown_source_collapses_to_other_and_is_counted():
     unrecognised source must be bucketed, and the fact that it happened must
     be visible so the omission gets fixed.
     """
-    before = sample("gatekeeper_metrics_unknown_source_total", source="brand_new_source")
+    before = sample("gatekeeper_metrics_unknown_source_total", source="unknown")
 
     assert metrics.safe_source("brand_new_source") == "other"
 
-    after = sample("gatekeeper_metrics_unknown_source_total", source="brand_new_source")
+    after = sample("gatekeeper_metrics_unknown_source_total", source="unknown")
     assert after == before + 1
 
 

@@ -11,6 +11,13 @@ from pydantic import ValidationError
 from core.config import Settings
 
 
+@pytest.fixture(autouse=True)
+def _clear_host_settings(monkeypatch):
+    # Tests of defaults must not inherit the runner's safety configuration.
+    for name in Settings.model_fields:
+        monkeypatch.delenv(name, raising=False)
+
+
 def make_settings(**env):
     """Build a Settings instance from explicit env vars only, isolated
     from any real .env file and from the actual process environment."""

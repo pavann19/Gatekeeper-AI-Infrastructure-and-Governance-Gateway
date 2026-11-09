@@ -34,19 +34,23 @@ from core.activity import find_by_request_id, get_recent_activity
 from core.benchmarks import list_benchmark_runs
 from core.policy_versioning import deploy_policy, list_versions, rollback_to
 from core.privacy import NER_LABELS, REGEX_PATTERNS, redact_pii
-from core.auth import auth_required, resolve_principal
+from core.auth import auth_required, resolve_request_principal
 from core.rate_limit import assess_rate_limiter, bucket_parameters
 from core.tenancy import resolve_tenant
 from core.risk import assess_risk
 from core.cache import flush_cache
 from core.admission import require_admission, owns_tenant_record
-from core.logger import get_logger, log_event, log_output_event, log_gateway_event
+from core.logger import get_logger, log_event, log_output_event, log_gateway_event, AuditPersistenceError
 from core.policy import get_default_action, load_policy_file, policy_decision, resolve_policy_set, validate_policy_file
-from core.review_queue import enqueue_review, get_review, list_pending_reviews, resolve_review
+from core.review_queue import (
+    enqueue_review, get_review, list_pending_reviews, resolve_review,
+    ReviewCapacityError, ReviewStoreUnavailable,
+)
 from core.tools import execute_tool, get_tool_registry
 from core.llm_providers import get_provider, list_provider_names, LLMProviderError
 from core.token_quota import gateway_token_quota, extract_total_tokens, seconds_until_utc_midnight
 from core.config import settings, CAPABILITY_INTERNAL
+from core.postgres_state import PostgresStateUnavailable
 
 logger = get_logger("gatekeeper.api")
 
@@ -54,6 +58,7 @@ logger = get_logger("gatekeeper.api")
 # ok=None means "never probed". Guarded by _health_probe_lock.
 _health_probe_cache: tuple = (None, 0.0)
 _health_probe_lock = threading.Lock()
+_startup_status = "not_started"
 
 
 def _probe_judge_backend(base_url: str) -> bool:
@@ -96,8 +101,8 @@ def _write_audit_or_fail(audit_fn, *args, audit_request_id: str = "?", **kwargs)
     cannot be recorded (disk full, permission error, ...), returning it as
     a normal 200 response would put an unprovable verdict into circulation
     — the exact failure mode a governance gateway must not have. So an
-    audit-write failure becomes an explicit 503, unless an operator has
-    opted out via AUDIT_WRITE_FAILS_CLOSED=false (logged loudly either way).
+    audit-write failure always becomes an explicit 503. The legacy
+    AUDIT_WRITE_FAILS_CLOSED flag cannot authorize un-audited decisions.
     """
     try:
         audit_fn(*args, **kwargs)
@@ -120,6 +125,18 @@ async def shared_cache_unavailable(request, exc):
     from fastapi.responses import JSONResponse
     return JSONResponse({'detail': 'Required distributed cache unavailable'}, status_code=503,
                         headers={'Retry-After': '5'})
+
+
+@app.exception_handler(ReviewCapacityError)
+@app.exception_handler(ReviewStoreUnavailable)
+@app.exception_handler(TimeoutError)
+@app.exception_handler(ConnectionError)
+@app.exception_handler(AuditPersistenceError)
+@app.exception_handler(PostgresStateUnavailable)
+async def bounded_dependency_unavailable(request, exc):
+    from fastapi.responses import JSONResponse
+    return JSONResponse({'detail': 'Required dependency unavailable or bounded capacity exhausted'},
+                        status_code=503, headers={'Retry-After': '5'})
 
 # the client UI (login, review dashboard, and whatever else is
 # added later) is a set of static pages -- no build step, no new frontend
@@ -152,7 +169,7 @@ app.add_middleware(
     allow_origins=_cors_origins,
     allow_credentials=_allow_credentials,
     allow_methods=["GET", "POST"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_headers=["Authorization", "X-API-Key", "Content-Type"],
 )
 
 _assess_pool = ThreadPoolExecutor(
@@ -173,6 +190,17 @@ def _timed_on_worker(submit_ts, func, args):
 
 _assess_slots = threading.BoundedSemaphore(settings.ASSESS_MAX_CONCURRENCY * 2)
 _gateway_slots = threading.BoundedSemaphore(settings.GATEWAY_MAX_CONCURRENCY * 2)
+_io_pool = ThreadPoolExecutor(max_workers=settings.IO_MAX_CONCURRENCY, thread_name_prefix="state-io")
+_io_slots = threading.BoundedSemaphore(settings.IO_MAX_CONCURRENCY * 2)
+
+
+async def _run_io_bounded(func):
+    """Bound local/Redis state work and wait for durable acknowledgements off-loop."""
+    return await _submit_bounded(_io_pool, _io_slots, func, (), settings.ASSESS_TIMEOUT_SECONDS)
+
+
+async def _approval_context_async(*args):
+    return await _run_io_bounded(partial(approval_context, *args))
 
 
 async def _submit_bounded(pool, slots, func, args, limit):
@@ -361,8 +389,16 @@ async def warm_models() -> None:
     # registered its demo/real tools either, even with REGISTER_DEMO_TOOLS
     # or REGISTER_REAL_TOOLS explicitly set. Tool registration is an
     # orthogonal concern to model warm-up and must run regardless.
+    global _startup_status
+    _startup_status = "starting"
+    if settings.STATE_BACKEND == 'postgres':
+        from core.postgres_state import get_postgres_store
+        if not await _run_io_bounded(partial(get_postgres_store().ready)):
+            _startup_status = 'degraded'
+            raise RuntimeError('Required PostgreSQL state schema is unavailable; approved migration required')
     if not settings.WARM_MODELS_ON_STARTUP:
         logger.info("Model warm-up disabled; models will load on first request.")
+        _startup_status = "lazy"
     else:
         def _warm():
             from core.embeddings import _get_model
@@ -375,15 +411,18 @@ async def warm_models() -> None:
 
         started = time.perf_counter()
         try:
-            warmed, detail = await asyncio.get_running_loop().run_in_executor(
-                _assess_pool, _warm
+            warmed, detail = await asyncio.wait_for(
+                asyncio.get_running_loop().run_in_executor(_assess_pool, _warm),
+                timeout=settings.STARTUP_WARMUP_TIMEOUT_SECONDS,
             )
+            _startup_status = "warmed" if warmed else "degraded"
             elapsed = time.perf_counter() - started
             if warmed:
                 logger.info(f"Model warm-up complete in {elapsed:.1f}s — {detail}")
             else:
                 logger.warning(f"Model warm-up incomplete after {elapsed:.1f}s — {detail}")
         except Exception:
+            _startup_status = "degraded"
             logger.exception("Model warm-up failed; models will load on first request.")
 
     if settings.REGISTER_DEMO_TOOLS:
@@ -448,7 +487,7 @@ def metrics_endpoint(request: Request):
         raise HTTPException(status_code=404, detail="Metrics are disabled.")
 
     if settings.METRICS_REQUIRE_AUTH:
-        principal = resolve_principal(authorization=request.headers.get("Authorization"))
+        principal = resolve_request_principal(request=request)
         if not principal.authenticated:
             raise HTTPException(
                 status_code=401,
@@ -470,7 +509,7 @@ async def assess_prompt(req: AssessRequest, request: Request, background_tasks: 
     #    Capability comes from a verified credential, never from the request
     #    body. An anonymous caller gets GENERAL (least privilege); it cannot
     #    escalate by asserting anything about itself.
-    principal = resolve_principal(authorization=request.headers.get("Authorization"))
+    principal = await _run_io_bounded(partial(resolve_request_principal, request=request))
     if auth_required() and not principal.authenticated:
         raise HTTPException(
             status_code=401,
@@ -484,7 +523,7 @@ async def assess_prompt(req: AssessRequest, request: Request, background_tasks: 
     #     on purpose: a suspended tenant is rejected before spending a rate
     #     token or reaching detection, and the SLA it carries (rate_limit_rpm)
     #     must be known before the limiter runs.
-    tenant_config = resolve_tenant(principal.tenant)
+    tenant_config = await _run_io_bounded(partial(resolve_tenant, principal.tenant))
     if tenant_config.suspended:
         logger.warning(f"Rejected request for suspended tenant '{principal.tenant}'.")
         raise HTTPException(
@@ -495,7 +534,7 @@ async def assess_prompt(req: AssessRequest, request: Request, background_tasks: 
     # 0c. RATE LIMITING — before any expensive work is scheduled. Placing this
     #     after authentication is deliberate: the limit that applies depends on
     #     whether the caller has a verified identity.
-    _enforce_rate_limit(principal, request, tenant_config)
+    await _run_io_bounded(partial(_enforce_rate_limit, principal, request, tenant_config))
 
     logger.info(
         f"Assess request | capability={principal.capability} "
@@ -504,7 +543,7 @@ async def assess_prompt(req: AssessRequest, request: Request, background_tasks: 
     )
 
     # 1. Privacy Layer
-    clean_query, redacted_info = _redact_or_fail(req.prompt, tenant_config)
+    clean_query, redacted_info = await _run_bounded(partial(_redact_or_fail, req.prompt, tenant_config))
     redacted_items = redacted_info.get("items", [])
 
     # 2. Risk Assessment (Neuro-Symbolic) - offloaded to thread to avoid blocking event loop.
@@ -609,12 +648,23 @@ async def assess_prompt(req: AssessRequest, request: Request, background_tasks: 
     #     GET /api/v1/review/{review_id} for the eventual outcome.
     review_id = None
     if decision == "REVIEW":
-        review = enqueue_review(
-            reason=reason, capability=principal.capability, risk=risk_level,
-            tenant=principal.tenant, prompt_hash=hashlib.sha256(clean_query.encode("utf-8")).hexdigest(),
-            request_id=request.state.request_id,
-            context=approval_context(principal, request.state.request_id, request.url.path,
-                                     {"prompt_hash": hashlib.sha256(req.prompt.encode()).hexdigest()}, reason),
+        review = await _run_io_bounded(
+            partial(
+                enqueue_review,
+                reason=reason,
+                capability=principal.capability,
+                risk=risk_level,
+                tenant=principal.tenant,
+                prompt_hash=hashlib.sha256(clean_query.encode("utf-8")).hexdigest(),
+                request_id=request.state.request_id,
+                context=await _approval_context_async(
+                    principal,
+                    request.state.request_id,
+                    request.url.path,
+                    {"prompt_hash": hashlib.sha256(req.prompt.encode()).hexdigest()},
+                    reason,
+                ),
+            )
         )
         review_id = review.review_id
         details["review_id"] = review_id
@@ -623,9 +673,17 @@ async def assess_prompt(req: AssessRequest, request: Request, background_tasks: 
     #    input decision, so a record never shows "ALLOW" for a request that
     #    was actually blocked on its response. Fails the request closed if the
     #    record cannot be persisted (see _write_audit_or_fail).
-    _write_audit_or_fail(
-        log_event, principal.capability, clean_query, risk_level, decision, details,
-        audit_request_id=request.state.request_id,
+    await _run_io_bounded(
+        partial(
+            _write_audit_or_fail,
+            log_event,
+            principal.capability,
+            clean_query,
+            risk_level,
+            decision,
+            details,
+            audit_request_id=request.state.request_id,
+        )
     )
 
     # 4b. A DISTINCT output audit event, in addition to the merged summary
@@ -633,10 +691,18 @@ async def assess_prompt(req: AssessRequest, request: Request, background_tasks: 
     #     docstring for why an output decision needs its own record rather
     #     than living only nested inside the input's.
     if output_details is not None:
-        _write_audit_or_fail(
-            log_output_event, principal.capability, req.response_text, output_decision,
-            output_details, tenant=principal.tenant, request_id=request.state.request_id,
-            audit_request_id=request.state.request_id,
+        await _run_io_bounded(
+            partial(
+                _write_audit_or_fail,
+                log_output_event,
+                principal.capability,
+                req.response_text,
+                output_decision,
+                output_details,
+                tenant=principal.tenant,
+                request_id=request.state.request_id,
+                audit_request_id=request.state.request_id,
+            )
         )
 
     # 5. Metrics. After the audit write, deliberately: the audit record is the
@@ -681,7 +747,7 @@ async def assess_output_endpoint(req: AssessOutputRequest, request: Request):
     # expensive machinery, so it gets the same gate. Enforcing AUTH_MODE here
     # too closes a real gap — "required" is documented as meaning every
     # request is attributed, and one open expensive endpoint made that false.
-    principal = resolve_principal(authorization=request.headers.get("Authorization"))
+    principal = await _run_io_bounded(partial(resolve_request_principal, request=request))
     if auth_required() and not principal.authenticated:
         raise HTTPException(
             status_code=401,
@@ -692,7 +758,7 @@ async def assess_output_endpoint(req: AssessOutputRequest, request: Request):
 
     # Same reasoning as /assess: a suspended tenant must not have a working
     # bypass route just because it happens to be the OTHER endpoint.
-    tenant_config = resolve_tenant(principal.tenant)
+    tenant_config = await _run_io_bounded(partial(resolve_tenant, principal.tenant))
     if tenant_config.suspended:
         logger.warning(f"Rejected output-assessment request for suspended tenant '{principal.tenant}'.")
         raise HTTPException(
@@ -700,7 +766,7 @@ async def assess_output_endpoint(req: AssessOutputRequest, request: Request):
             detail=f"Tenant '{principal.tenant}' is suspended.",
         )
 
-    _enforce_rate_limit(principal, request, tenant_config)
+    await _run_io_bounded(partial(_enforce_rate_limit, principal, request, tenant_config))
 
     logger.info(f"Output assessment request | key_id={principal.key_id} tenant={principal.tenant}")
 
@@ -730,10 +796,18 @@ async def assess_output_endpoint(req: AssessOutputRequest, request: Request):
     #    BLOCK here (PII leak, secret, toxicity, hallucination) left zero
     #    audit trail. See log_output_event's docstring. Fails closed if the
     #    record cannot be persisted (see _write_audit_or_fail).
-    _write_audit_or_fail(
-        log_output_event, principal.capability, req.response_text, decision, details,
-        tenant=principal.tenant, request_id=request.state.request_id,
-        audit_request_id=request.state.request_id,
+    await _run_io_bounded(
+        partial(
+            _write_audit_or_fail,
+            log_output_event,
+            principal.capability,
+            req.response_text,
+            decision,
+            details,
+            tenant=principal.tenant,
+            request_id=request.state.request_id,
+            audit_request_id=request.state.request_id,
+        )
     )
 
     process_time_ms = round((time.perf_counter() - request.state.start_time) * 1000, 2) if hasattr(request.state, "start_time") else 0.0
@@ -760,7 +834,7 @@ def gateway_providers(request: Request):
     endpoint added alongside this one (tools listing, raw logs) -- this
     is operator/developer-facing configuration, not end-user data.
     """
-    principal = resolve_principal(authorization=request.headers.get("Authorization"))
+    principal = resolve_request_principal(request=request)
     if principal.capability != CAPABILITY_INTERNAL:
         raise HTTPException(
             status_code=403,
@@ -788,7 +862,7 @@ def list_tools(request: Request):
     shape (table names, internal service paths) that a GENERAL/ELEVATED
     caller has no operational need to browse.
     """
-    principal = resolve_principal(authorization=request.headers.get("Authorization"))
+    principal = resolve_request_principal(request=request)
     if principal.capability != CAPABILITY_INTERNAL:
         raise HTTPException(
             status_code=403,
@@ -816,7 +890,7 @@ async def gateway_chat(req: GatewayChatRequest, request: Request, background_tas
     request.state.start_time = time.perf_counter()
 
     # 0. AUTH + TENANT + RATE LIMIT — identical boundary to /api/v1/assess.
-    principal = resolve_principal(authorization=request.headers.get("Authorization"))
+    principal = await _run_io_bounded(partial(resolve_request_principal, request=request))
     if auth_required() and not principal.authenticated:
         raise HTTPException(
             status_code=401,
@@ -824,9 +898,12 @@ async def gateway_chat(req: GatewayChatRequest, request: Request, background_tas
                    "'Authorization: Bearer <key>'.",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    tenant_config = resolve_tenant(principal.tenant)
+    tenant_config = await _run_io_bounded(partial(resolve_tenant, principal.tenant))
     require_admission(principal, tenant_config)
-    _enforce_rate_limit(principal, request, tenant_config)
+    await _run_io_bounded(partial(_enforce_rate_limit, principal, request, tenant_config))
+
+    if req.system_prompt and (not principal.authenticated or principal.capability != CAPABILITY_INTERNAL):
+        raise HTTPException(403, "Only authenticated INTERNAL applications may supply a system prompt")
 
     # 0b. TOKEN QUOTA (token accounting) — checked before the
     # (comparatively expensive) input assessment runs at all, same
@@ -840,7 +917,7 @@ async def gateway_chat(req: GatewayChatRequest, request: Request, background_tas
             if tenant_config.token_quota_daily is not None
             else settings.GATEWAY_TOKEN_QUOTA_DAILY_DEFAULT
         )
-        if gateway_token_quota.would_exceed(principal.tenant, quota):
+        if await _run_io_bounded(partial(gateway_token_quota.would_exceed, principal.tenant, quota)):
             if settings.METRICS_ENABLED:
                 metrics.gateway_quota_rejections_total.labels(tenant=principal.tenant).inc()
             raise HTTPException(
@@ -854,7 +931,7 @@ async def gateway_chat(req: GatewayChatRequest, request: Request, background_tas
     #    architectural difference from a sidecar: Gatekeeper decides
     #    whether the provider is called at all, not just whether to trust
     #    a response the caller already obtained.
-    clean_query, redacted_info = _redact_or_fail(req.prompt, tenant_config)
+    clean_query, redacted_info = await _run_bounded(partial(_redact_or_fail, req.prompt, tenant_config))
     try:
         risk_level, details = await _run_bounded(assess_risk, clean_query, background_tasks.add_task, req.prompt, principal.tenant)
     except asyncio.TimeoutError:
@@ -875,19 +952,38 @@ async def gateway_chat(req: GatewayChatRequest, request: Request, background_tas
 
     review_id = None
     if decision == "REVIEW":
-        review = enqueue_review(
-            reason=reason, capability=principal.capability, risk=risk_level,
-            tenant=principal.tenant, prompt_hash=hashlib.sha256(clean_query.encode("utf-8")).hexdigest(),
-            request_id=request.state.request_id,
-            context=approval_context(principal, request.state.request_id, request.url.path,
-                                     {"prompt_hash": hashlib.sha256(req.prompt.encode()).hexdigest()}, reason),
+        review = await _run_io_bounded(
+            partial(
+                enqueue_review,
+                reason=reason,
+                capability=principal.capability,
+                risk=risk_level,
+                tenant=principal.tenant,
+                prompt_hash=hashlib.sha256(clean_query.encode("utf-8")).hexdigest(),
+                request_id=request.state.request_id,
+                context=await _approval_context_async(
+                    principal,
+                    request.state.request_id,
+                    request.url.path,
+                    {"prompt_hash": hashlib.sha256(req.prompt.encode()).hexdigest()},
+                    reason,
+                ),
+            )
         )
         review_id = review.review_id
         details["review_id"] = review_id
 
-    _write_audit_or_fail(
-        log_event, principal.capability, clean_query, risk_level, decision, details,
-        audit_request_id=request.state.request_id,
+    await _run_io_bounded(
+        partial(
+            _write_audit_or_fail,
+            log_event,
+            principal.capability,
+            clean_query,
+            risk_level,
+            decision,
+            details,
+            audit_request_id=request.state.request_id,
+        )
     )
 
     # BLOCK/REVIEW stop here — the provider is never called. Same reasoning
@@ -953,9 +1049,21 @@ async def gateway_chat(req: GatewayChatRequest, request: Request, background_tas
             break
         except asyncio.TimeoutError:
             latency_ms = round((time.perf_counter() - call_start) * 1000, 2)
-            _write_audit_or_fail(log_gateway_event, principal.capability, attempt_name, attempt_model, success=False,
-                              latency_ms=latency_ms, decision="BLOCK", error="timeout",
-                              tenant=principal.tenant, request_id=request.state.request_id)
+            await _run_io_bounded(
+                partial(
+                    _write_audit_or_fail,
+                    log_gateway_event,
+                    principal.capability,
+                    attempt_name,
+                    attempt_model,
+                    success=False,
+                    latency_ms=latency_ms,
+                    decision="BLOCK",
+                    error="timeout",
+                    tenant=principal.tenant,
+                    request_id=request.state.request_id,
+                )
+            )
             if settings.METRICS_ENABLED:
                 metrics.gateway_call_total.labels(provider=attempt_name, outcome="timeout").inc()
             last_error_status = 503
@@ -963,9 +1071,21 @@ async def gateway_chat(req: GatewayChatRequest, request: Request, background_tas
                                  f"{settings.GATEWAY_TIMEOUT_SECONDS:g}s.")
         except LLMProviderError as e:
             latency_ms = round((time.perf_counter() - call_start) * 1000, 2)
-            _write_audit_or_fail(log_gateway_event, principal.capability, attempt_name, attempt_model, success=False,
-                              latency_ms=latency_ms, decision="BLOCK", error=str(e),
-                              tenant=principal.tenant, request_id=request.state.request_id)
+            await _run_io_bounded(
+                partial(
+                    _write_audit_or_fail,
+                    log_gateway_event,
+                    principal.capability,
+                    attempt_name,
+                    attempt_model,
+                    success=False,
+                    latency_ms=latency_ms,
+                    decision="BLOCK",
+                    error=str(e),
+                    tenant=principal.tenant,
+                    request_id=request.state.request_id,
+                )
+            )
             if settings.METRICS_ENABLED:
                 metrics.gateway_call_total.labels(provider=attempt_name, outcome="failure").inc()
             last_error_status = 502
@@ -1007,14 +1127,34 @@ async def gateway_chat(req: GatewayChatRequest, request: Request, background_tas
         final_decision = output_decision
 
     details["output_assessment"] = output_details
-    _write_audit_or_fail(
-        log_output_event, principal.capability, llm_response.content, output_decision,
-        output_details, tenant=principal.tenant, request_id=request.state.request_id,
-        audit_request_id=request.state.request_id,
+    await _run_io_bounded(
+        partial(
+            _write_audit_or_fail,
+            log_output_event,
+            principal.capability,
+            llm_response.content,
+            output_decision,
+            output_details,
+            tenant=principal.tenant,
+            request_id=request.state.request_id,
+            audit_request_id=request.state.request_id,
+        )
     )
-    _write_audit_or_fail(log_gateway_event, principal.capability, provider_name, llm_response.model, success=True,
-                      latency_ms=latency_ms, decision=final_decision, usage=llm_response.usage,
-                      tenant=principal.tenant, request_id=request.state.request_id)
+    await _run_io_bounded(
+        partial(
+            _write_audit_or_fail,
+            log_gateway_event,
+            principal.capability,
+            provider_name,
+            llm_response.model,
+            success=True,
+            latency_ms=latency_ms,
+            decision=final_decision,
+            usage=llm_response.usage,
+            tenant=principal.tenant,
+            request_id=request.state.request_id,
+        )
+    )
     if settings.METRICS_ENABLED:
         metrics.gateway_call_total.labels(provider=provider_name, outcome="success").inc()
 
@@ -1023,7 +1163,15 @@ async def gateway_chat(req: GatewayChatRequest, request: Request, background_tas
     # module docstring for why this can only ever gate the NEXT call.
     tokens_used = extract_total_tokens(llm_response.usage)
     if tokens_used > 0:
-        gateway_token_quota.record(principal.tenant, tokens_used)
+        try:
+            await _run_io_bounded(partial(gateway_token_quota.record, principal.tenant, tokens_used))
+        except Exception:
+            # The external call already completed. A bookkeeping outage must
+            # not turn it into a retryable failure and duplicate provider costs.
+            details["token_accounting_degraded"] = True
+            logger.error("Token accounting unavailable after completed provider call. request_id=%s",
+                         request.state.request_id)
+            metrics.gateway_accounting_failures_total.inc()
         if settings.METRICS_ENABLED:
             metrics.gateway_tokens_total.labels(tenant=principal.tenant).inc(tokens_used)
 
@@ -1045,7 +1193,7 @@ async def tools_call(req: ToolCallRequest, request: Request):
     """Apply HTTP admission and invoke shared authorized/audited tool execution."""
     request.state.start_time = time.perf_counter()
 
-    principal = resolve_principal(authorization=request.headers.get("Authorization"))
+    principal = await _run_io_bounded(partial(resolve_request_principal, request=request))
     if auth_required() and not principal.authenticated:
         raise HTTPException(
             status_code=401,
@@ -1053,9 +1201,9 @@ async def tools_call(req: ToolCallRequest, request: Request):
                    "'Authorization: Bearer <key>'.",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    tenant_config = resolve_tenant(principal.tenant)
+    tenant_config = await _run_io_bounded(partial(resolve_tenant, principal.tenant))
     require_admission(principal, tenant_config)
-    _enforce_rate_limit(principal, request, tenant_config)
+    await _run_io_bounded(partial(_enforce_rate_limit, principal, request, tenant_config))
 
     try:
         result = await _run_bounded(partial(execute_tool,
@@ -1075,13 +1223,23 @@ async def tools_call(req: ToolCallRequest, request: Request):
             json.dumps({"tool": req.name, "arguments": req.arguments},
                       sort_keys=True, default=str).encode("utf-8")
         ).hexdigest()
-        review = enqueue_review(
-            reason=result["reason"], capability=principal.capability,
-            risk=result.get("risk_level") or "HIGH", tenant=principal.tenant,
-            prompt_hash=call_hash, request_id=request.state.request_id,
-            context=approval_context(principal, request.state.request_id, req.name,
-                                     {"arguments": req.arguments, "spec": asdict(get_tool_registry().get(req.name))},
-                                     result["reason"]),
+        review = await _run_io_bounded(
+            partial(
+                enqueue_review,
+                reason=result["reason"],
+                capability=principal.capability,
+                risk=result.get("risk_level") or "HIGH",
+                tenant=principal.tenant,
+                prompt_hash=call_hash,
+                request_id=request.state.request_id,
+                context=await _approval_context_async(
+                    principal,
+                    request.state.request_id,
+                    req.name,
+                    {"arguments": req.arguments, "spec": asdict(get_tool_registry().get(req.name))},
+                    result["reason"],
+                ),
+            )
         )
         review_id = review.review_id
 
@@ -1106,7 +1264,7 @@ def flush_semantic_cache(request: Request):
     request to pay the uncached detection cost again — a latency/cost
     amplification vector, not just an inconvenience.
     """
-    principal = resolve_principal(authorization=request.headers.get("Authorization"))
+    principal = resolve_request_principal(request=request)
     if principal.capability != CAPABILITY_INTERNAL:
         raise HTTPException(
             status_code=403,
@@ -1132,7 +1290,7 @@ def whoami(request: Request):
     endpoint that accepts "no credential" as a pass would defeat the point
     of having one.
     """
-    principal = resolve_principal(authorization=request.headers.get("Authorization"))
+    principal = resolve_request_principal(request=request)
     if not principal.authenticated:
         raise HTTPException(
             status_code=401,
@@ -1157,7 +1315,7 @@ def privacy_settings(request: Request, tenant: str | None = None):
     Every caller sees their OWN tenant by default; INTERNAL may pass
     `?tenant=<other>` to inspect a different tenant's privacy configuration.
     """
-    principal = resolve_principal(authorization=request.headers.get("Authorization"))
+    principal = resolve_request_principal(request=request)
     if auth_required() and not principal.authenticated:
         raise HTTPException(
             status_code=401,
@@ -1211,7 +1369,7 @@ def protection_settings(request: Request):
     governs me", not an arbitrary capability picker (the Policy Editor
     is where the full per-capability mapping for every tenant lives).
     """
-    principal = resolve_principal(authorization=request.headers.get("Authorization"))
+    principal = resolve_request_principal(request=request)
     if auth_required() and not principal.authenticated:
         raise HTTPException(
             status_code=401,
@@ -1277,8 +1435,8 @@ def activity_feed(request: Request, limit: int = 50, event_type: str | None = No
     activity by passing tenant=__all__; anything else is still scoped to
     that one tenant, same as a non-INTERNAL caller.
     """
-    principal = resolve_principal(authorization=request.headers.get("Authorization"))
-    if auth_required() and not principal.authenticated:
+    principal = resolve_request_principal(request=request)
+    if not principal.authenticated:
         raise HTTPException(
             status_code=401,
             detail="Authentication required. Present a valid API key as "
@@ -1308,8 +1466,8 @@ def activity_trace(request_id: str, request: Request):
     list that's simply empty, not a 403 -- a stranger's request_id gives
     no signal either way about whether it exists).
     """
-    principal = resolve_principal(authorization=request.headers.get("Authorization"))
-    if auth_required() and not principal.authenticated:
+    principal = resolve_request_principal(request=request)
+    if not principal.authenticated:
         raise HTTPException(
             status_code=401,
             detail="Authentication required. Present a valid API key as "
@@ -1333,7 +1491,7 @@ def raw_logs(request: Request, limit: int = 100, event_type: str | None = None):
     -- unlike the activity feed, there is no "your own tenant" reading of
     this endpoint to fall back to.
     """
-    principal = resolve_principal(authorization=request.headers.get("Authorization"))
+    principal = resolve_request_principal(request=request)
     if principal.capability != CAPABILITY_INTERNAL:
         raise HTTPException(
             status_code=403,
@@ -1361,7 +1519,7 @@ def benchmarks(request: Request):
     performance, not something a GENERAL/ELEVATED caller has an
     operational need to browse.
     """
-    principal = resolve_principal(authorization=request.headers.get("Authorization"))
+    principal = resolve_request_principal(request=request)
     if principal.capability != CAPABILITY_INTERNAL:
         raise HTTPException(
             status_code=403,
@@ -1381,7 +1539,7 @@ def benchmarks(request: Request):
 # caller, not inside it.
 
 def _require_internal(request: Request):
-    principal = resolve_principal(authorization=request.headers.get("Authorization"))
+    principal = resolve_request_principal(request=request)
     if principal.capability != CAPABILITY_INTERNAL:
         raise HTTPException(status_code=403, detail="INTERNAL capability required for policy administration.")
     _reject_suspended_and_rate_limit(principal, request)
@@ -1439,6 +1597,8 @@ def deploy_policy_endpoint(req: PolicyContentRequest, request: Request):
     old and new policy could both be enforced depending on which worker
     handled a request."""
     principal = _require_internal(request)
+    if settings.ENVIRONMENT == 'production':
+        raise HTTPException(403, "Live policy mutation is disabled until reviewed signed releases are implemented")
     suffix = os.path.splitext(settings.POLICY_RULES_FILE)[1] or ".json"
     with tempfile.NamedTemporaryFile("w", suffix=suffix, delete=False, encoding="utf-8") as tmp:
         tmp.write(req.content)
@@ -1463,6 +1623,8 @@ def rollback_policy_endpoint(req: PolicyRollbackRequest, request: Request):
     itself snapshotted first by `rollback_to`, so a bad rollback is just
     as undoable as a bad deploy."""
     principal = _require_internal(request)
+    if settings.ENVIRONMENT == 'production':
+        raise HTTPException(403, "Live policy mutation is disabled until reviewed signed releases are implemented")
     try:
         rollback_to(req.version)
     except FileNotFoundError as e:
@@ -1484,7 +1646,7 @@ def get_review_status(review_id: str, request: Request):
     sensitive than the ability to approve/reject one, so it is gated only
     on authentication, not on capability (unlike the two endpoints below).
     """
-    principal = resolve_principal(authorization=request.headers.get("Authorization"))
+    principal = resolve_request_principal(request=request)
     if not principal.authenticated:
         raise HTTPException(
             status_code=401,
@@ -1501,7 +1663,7 @@ def get_review_status(review_id: str, request: Request):
 
 
 @app.get("/api/v1/review")
-def list_reviews(request: Request):
+def list_reviews(request: Request, limit: int = 100, offset: int = 0, tenant: str | None = None):
     """
     Lists PENDING reviews only — a reviewer's queue, not a full history.
     Resolved reviews stay retrievable individually via the status-check
@@ -1512,20 +1674,20 @@ def list_reviews(request: Request):
     learn about OTHER tenants' pending requests, which GENERAL/ELEVATED
     callers have no business seeing.
     """
-    principal = resolve_principal(authorization=request.headers.get("Authorization"))
+    principal = resolve_request_principal(request=request)
     if principal.capability != CAPABILITY_INTERNAL:
         raise HTTPException(
             status_code=403,
             detail="INTERNAL capability required to list pending reviews.",
         )
     _reject_suspended_and_rate_limit(principal, request)
-    return {"pending": list_pending_reviews()}
+    return {"pending": list_pending_reviews(limit=limit, offset=offset, tenant=tenant)}
 
 
 @app.post("/api/v1/review/{review_id}/resolve", response_model=ReviewStatusResponse)
 def resolve_review_endpoint(review_id: str, req: ReviewResolveRequest, request: Request):
     """Resolve an owned review record without granting general execution authority."""
-    principal = resolve_principal(authorization=request.headers.get("Authorization"))
+    principal = resolve_request_principal(request=request)
     if principal.capability != CAPABILITY_INTERNAL:
         raise HTTPException(
             status_code=403,
@@ -1545,9 +1707,9 @@ def resolve_review_endpoint(review_id: str, req: ReviewResolveRequest, request: 
 @app.get("/health")
 def health_check():
     import os
+    import sys
     from core.config import POLICY_FILE, POLICY_RULES_FILE, OLLAMA_API_URL
     from core.privacy import NLP_MODEL
-    from core.embeddings import _get_model
 
     status = {
         "status": "healthy",
@@ -1571,12 +1733,11 @@ def health_check():
     else:
         status["status"] = "degraded"
 
-    # 3. Check Embedding Model
-    try:
-        model = _get_model()
-        if model is not None:
-            status["checks"]["embedding_model"] = True
-    except Exception:
+    # Observe loaded state; health probes must never initialize model runtimes.
+    embeddings = sys.modules.get('core.embeddings')
+    if getattr(embeddings, '_model', None) is not None:
+        status["checks"]["embedding_model"] = True
+    else:
         status["status"] = "degraded"
 
     from core.circuit_breaker import ollama_judge_breaker
@@ -1602,9 +1763,16 @@ def liveness():
 
 @app.get('/ready', include_in_schema=False)
 def readiness():
-    from core.readiness import readiness_checks
+    from core.readiness import cached_readiness_checks
     from fastapi.responses import JSONResponse
-    checks = readiness_checks()
+    checks = cached_readiness_checks()
     ready = all(checks.values())
     return JSONResponse({'status': 'ready' if ready else 'degraded', 'checks': checks},
                         status_code=200 if ready else 503)
+
+
+@app.get('/startup', include_in_schema=False)
+def startup_probe():
+    from fastapi.responses import JSONResponse
+    return JSONResponse({'status': _startup_status},
+                        status_code=200 if _startup_status in ('lazy', 'warmed') else 503)

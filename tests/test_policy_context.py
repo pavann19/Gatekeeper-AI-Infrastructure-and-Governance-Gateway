@@ -15,6 +15,8 @@ from core import policy as policy_mod
 from core.auth import Principal
 from core.policy import PolicyStore
 
+pytestmark = pytest.mark.usefixtures("provisioned_tenants")
+
 client = TestClient(app)
 
 MEDIUM_RISK = ("MEDIUM", {"semantic_score": 0.2, "source": "mock"})
@@ -41,7 +43,7 @@ def two_tenant_policies(tmp_path, monkeypatch):
 
 def authenticated_as(key_id, tenant):
     return patch(
-        "api.main.resolve_principal",
+        "api.main.resolve_request_principal",
         return_value=Principal(
             capability="GENERAL", tenant=tenant, key_id=key_id,
             authenticated=True, reason="test",
@@ -83,7 +85,7 @@ def test_policy_uses_the_server_resolved_tenant_not_a_client_claim(_mock, two_te
 def test_unconfigured_tenant_gets_default_policy_on_the_real_endpoint(_mock, two_tenant_policies):
     with authenticated_as("k3", "some-other-tenant"):
         response = client.post("/api/v1/assess", json={"prompt": "hello"})
-    assert response.json()["decision"] == "RESTRICT"
+    assert response.status_code == 403
 
 
 @patch("api.main.assess_risk", return_value=MEDIUM_RISK)

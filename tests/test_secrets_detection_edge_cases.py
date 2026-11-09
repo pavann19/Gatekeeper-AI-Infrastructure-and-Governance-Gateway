@@ -25,7 +25,7 @@ def _labels(result):
 # ---------------------------------------------------------------------
 
 def test_asia_prefixed_aws_key_detected_with_exact_type():
-    result = detect_secrets("temp creds ASIAABCDEFGHIJKLMNOP in use")
+    result = detect_secrets("temp creds ASIAABCDEFGHIJKLMNOP in use")  # Synthetic detector fixture; gitleaks:allow
     assert result["secrets_found"] is True
     assert _labels(result) == ["AWS_ACCESS_KEY"]
 
@@ -72,7 +72,7 @@ def test_anthropic_key_detected_as_anthropic_only_not_openai():
 
 
 def test_openssh_private_key_header_detected():
-    result = detect_secrets("-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1r...")
+    result = detect_secrets("-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1r...")  # Synthetic detector fixture; gitleaks:allow
     assert result["secrets_found"] is True
     assert _labels(result) == ["PRIVATE_KEY_BLOCK"]
 
@@ -196,7 +196,7 @@ def test_aws_key_embedded_mid_sentence_is_detected():
 
 
 def test_jwt_embedded_mid_sentence_is_detected():
-    fake_jwt = "eyJhbGciOiJIUzI1NiJ9.eyJ1c2VyIjoidGVzdCJ9.c2lnbmF0dXJlLXBhcnQ"
+    fake_jwt = "eyJhbGciOiJIUzI1NiJ9.eyJ1c2VyIjoidGVzdCJ9.c2lnbmF0dXJlLXBhcnQ"  # Synthetic detector fixture; gitleaks:allow
     result = detect_secrets(
         f"When I inspected the request headers I noticed {fake_jwt} sitting "
         "right there in plaintext, which seems wrong."

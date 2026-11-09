@@ -18,6 +18,14 @@ class RequestIngress:
             return
         messages = []
         size = 0
+        lengths = [value.strip() for key, value in scope.get('headers', []) if key.lower() == b'content-length']
+        if lengths:
+            if len(lengths) != 1 or not lengths[0].isdigit() or len(lengths[0]) > 20:
+                await JSONResponse({'detail': 'Invalid Content-Length'}, status_code=400)(scope, receive, send)
+                return
+            if int(lengths[0]) > settings.REQUEST_MAX_BODY_BYTES:
+                await JSONResponse({'detail': 'Request body exceeds byte limit'}, status_code=413)(scope, receive, send)
+                return
         end = deadline.get()
         if end is None:
             end = time.monotonic() + settings.ASSESS_TIMEOUT_SECONDS
@@ -30,7 +38,7 @@ class RequestIngress:
             if message['type'] == 'http.disconnect':
                 return
             size += len(message.get('body', b''))
-            if size > 1048576:
+            if size > settings.REQUEST_MAX_BODY_BYTES:
                 await JSONResponse({'detail': 'Request body exceeds byte limit'}, status_code=413)(scope, receive, send)
                 return
             messages.append(message)

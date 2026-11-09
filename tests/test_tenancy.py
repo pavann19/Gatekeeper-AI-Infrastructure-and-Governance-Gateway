@@ -35,11 +35,11 @@ def tenant_store(tmp_path, monkeypatch):
 
 # --- resolution basics -------------------------------------------------------
 
-def test_unknown_tenant_resolves_to_default(tenant_store):
-    """No tenants.json entry -> DEFAULT_TENANT, not an error. Tenancy is opt-in."""
+def test_unknown_tenant_is_denied(tenant_store):
+    """A typo in an authenticated tenant binding must never inherit default authority."""
     result = resolve_tenant("never-configured")
-    assert result == DEFAULT_TENANT
-    assert result.status == "active"
+    assert result.tenant_id == "never-configured"
+    assert result.suspended
     assert result.rate_limit_rpm is None
 
 

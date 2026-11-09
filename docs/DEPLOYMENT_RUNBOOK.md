@@ -23,7 +23,7 @@ The broad runtime ranges are not a lockfile. Do not install the canonical replay
 
 ## Docker Compose
 
-Copy `.env.example` to `.env` and configure a private Grafana password. Provision `config/api_keys.json` and `config/tenants.json` before startup; Compose explicitly configures both paths. For a fresh local anonymous demo, each may be an empty JSON object. Never overwrite existing identity files with empty examples.
+Copy `.env.example` to `.env` and configure a private Grafana password. Provision `config/api_keys.json` and `config/tenants.json` before startup; Compose explicitly configures both paths. For a fresh local anonymous demo, the key store may be empty, but the tenant store must explicitly provision `default` as active. Never overwrite existing identity files with examples.
 
 The key CLI can provision the mounted store from a Python environment with API dependencies:
 
@@ -45,12 +45,19 @@ Compose publishes API, Ollama and monitoring ports on the host. Restrict them to
 ## Health
 
 - `/live`: process responds.
+- `/startup`: warm-up completed or lazy startup was explicitly selected; warm-up wait is bounded by `STARTUP_WARMUP_TIMEOUT_SECONDS`.
 - `/ready`: 503 if policy, symbolic rules, required privacy model, loaded baseline models, configured Redis or persistence probes fail.
 - `/health`: dependency diagnostics; HTTP 200 is not an acceptance signal.
 
-Container health checks `/ready`. Readiness does not prove every optional detector tier, judge path or full canonical profile. Confirm the intended deployment profile separately.
+Container health checks `/live`; traffic ingress must check `/ready` separately. Readiness is cached for at most five seconds and avoids fsync/full SQLite integrity scans on each probe. Lazy startup can be live while model readiness remains unavailable. Readiness does not prove every optional detector tier, judge path or full canonical profile. Confirm the intended deployment profile separately.
 
 ## State and policy
+
+The hardened pilot candidate uses `STATE_BACKEND=postgres` for shared audit and
+review state. Schema installation is explicit and checksum-sealed; runtime
+credentials are restricted and must use verified TLS. PostgreSQL outages never
+fall back to local files. See [the migration/role preflight](ai-continuation/PILOT_PREFLIGHT.md).
+The table below describes the original local Compose lab topology.
 
 | State | Compose storage | Boundary |
 |---|---|---|
@@ -63,9 +70,11 @@ Container health checks `/ready`. Readiness does not prove every optional detect
 
 `policy_rules.yaml` is a commented equivalent example. `policies/threat_anchors.json` and other `policies/` files supply detector/rule data; they are not the live action policy. Dropping a policy into `config/` has no effect unless `POLICY_RULES_FILE` points there. Configure a writable active-policy directory and coordinated process reload if dynamic deploy/rollback is needed.
 
-`AUDIT_SQLITE_ENABLED` controls SQLite mirroring; `AUDIT_READ_FROM_SQLITE` makes SQLite persistence authoritative for its reads. JSONL write failure is controlled by `AUDIT_WRITE_FAILS_CLOSED`; retain fail-closed operation. These modes are distinct, not an atomic distributed transaction. JSONL multi-writer acceptance is unverified. Review locks require an advisory-lock-capable local filesystem; do not assume network filesystem equivalence.
+`AUDIT_SQLITE_ENABLED` controls SQLite mirroring; `AUDIT_READ_FROM_SQLITE` makes SQLite persistence authoritative for its reads. Authoritative audit failures always fail closed; `AUDIT_WRITE_FAILS_CLOSED` is a legacy compatibility field with no opt-out. These modes are distinct, not an atomic distributed transaction. Bounded local-filesystem locks serialize JSONL append; distributed multi-writer acceptance remains unverified. Review locks require an advisory-lock-capable local filesystem; do not assume network filesystem equivalence.
 
-Local rate/quota budgets are per process. Redis shares those controls and exact-cache state but does not coordinate active policy, review stores, fuzzy indexes or circuit breakers. Run one worker for local state mode. Full application replica acceptance is not established by Redis backend concurrency tests. The supplied Compose API host port also does not define a scalable replica routing setup.
+Local rate/quota budgets are per process. Redis shares those controls, exact-cache state and configured circuit breakers, but does not coordinate active policy, review stores or fuzzy indexes. Run one worker for local state mode. Full application replica acceptance is not established by Redis backend concurrency tests. The supplied Compose API host port also does not define a scalable replica routing setup.
+
+`deploy/compose.pilot.yml` is a separate hardened configuration candidate with no published host ports, required authentication, PostgreSQL state, offline models, resource limits and explicit external resource names. It was configuration-validated without starting the pilot services. See [pilot preflight](ai-continuation/PILOT_PREFLIGHT.md). TLS ingress, immutable model/runtime artifacts and production operational acceptance remain prerequisites. Production mode disables live HTTP policy deploy/rollback pending a signed reviewed-release workflow.
 
 ## Operator tools and recovery
 
