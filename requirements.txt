@@ -20,3 +20,7 @@ redis>=5.0.0
 prometheus-client>=0.20.0
 nemoguardrails>=0.23.0
 einops>=0.8.0
+
+# Patched transitive dependencies; require Python 3.11 or newer.
+pillow>=13.0.0
+filelock>=4.2.1

@@ -4,7 +4,7 @@ Docker Compose is the packaged local deployment; native Python supports single-p
 
 ## Native Python
 
-Use Python 3.10 with an isolated environment. Install CPU Torch before the API dependencies, then the required privacy model:
+Use Python 3.11 with an isolated environment. Install CPU Torch before the API dependencies, then the required privacy model:
 
 ```sh
 python -m venv .venv-api

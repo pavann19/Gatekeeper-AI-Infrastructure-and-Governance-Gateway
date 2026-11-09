@@ -1,7 +1,7 @@
-# CPU API image; runtime matches the Python 3.10 CI profile.
+# CPU API image; runtime matches the Python 3.11 CI profile.
 # Model dependencies install before pip is removed from the runtime image.
 # Non-root ownership covers the persistent audit and model-cache mount points.
-FROM python@sha256:d8e262e069903a0b7790cd17a66d5343b2f04b9d9e19dc70f152c50fb511acfe
+FROM python@sha256:07d4824036af339fa1b6ef769cc99d9c10a141769538b52b3b597c84f7a7b535
 
 WORKDIR /app
 
@@ -21,7 +21,7 @@ RUN pip install --no-cache-dir --upgrade "msgpack>=1.2.1" "setuptools>=78.1.1" "
 
 COPY . .
 
-RUN python -m pip uninstall -y pip && rm -f /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.10
+RUN python -m pip uninstall -y pip && rm -f /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.11
 
 ENV HF_HOME=/root/.cache/huggingface
 RUN groupadd -r gatekeeper && useradd -r -g gatekeeper -d /app gatekeeper \
