@@ -23,6 +23,7 @@ psutil>=5.9.0
 prometheus-client>=0.20.0
 openapi-spec-validator>=0.7.0
 mypy==2.1.0
+cryptography>=46.0.0
 
 # Patched transitive dependencies; require Python 3.11 or newer.
 pillow>=13.0.0
