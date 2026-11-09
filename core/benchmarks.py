@@ -1,5 +1,5 @@
 """
-Read access over this project's local/private benchmark result files (Phase 7,
+Read access over this project's local/private benchmark result files (implementation,
 Developer UI: "Benchmarks") -- surfaces the SAME accuracy/latency/
 confusion-matrix JSON reports this project's own benchmark scripts produce in
 `_evidence/benchmark_results_*.json`, not a re-run or a re-derived summary. If
@@ -70,5 +70,5 @@ def list_benchmark_runs(directory=None) -> dict:
         runs.append((mtime, run))
 
     runs.sort(key=lambda pair: pair[0], reverse=True)
-    runs = [run for _mtime, run in runs]
-    return {"runs": runs, "errors": errors}
+    ordered_runs = [run for _mtime, run in runs]
+    return {"runs": ordered_runs, "errors": errors}

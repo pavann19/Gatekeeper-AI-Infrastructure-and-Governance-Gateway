@@ -1,5 +1,5 @@
 """
-Tests for GET /api/v1/activity (Phase 7) -- the client UI's activity feed.
+Tests for GET /api/v1/activity (implementation) -- the client UI's activity feed.
 Writes real records into a real audit.jsonl file (via monkeypatching
 core.activity.settings.AUDIT_LOG_PATH, the same setting the endpoint's own
 get_recent_activity() call reads) and drives the real HTTP layer, so these
@@ -13,6 +13,8 @@ from fastapi.testclient import TestClient
 from api.main import app
 from core import auth as auth_mod
 from core.auth import KeyStore, generate_key, hash_key
+
+pytestmark = pytest.mark.usefixtures("provisioned_tenants")
 
 client = TestClient(app)
 

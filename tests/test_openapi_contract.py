@@ -1,7 +1,7 @@
 """
 Contract conformance: the OpenAPI schema FastAPI generates from api/schemas.py
 must actually document the security-relevant size bounds this project's
-Phase 8 hardening work enforces (core/policy_versioning.py's path-traversal
+implementation hardening work enforces (core/policy_versioning.py's path-traversal
 fix's sibling size-bound work, the tool/gateway maxLength additions). This
 is a real regression guard: if a future edit removes a `Field(max_length=...)`
 constraint, the documented contract silently weakens right along with the

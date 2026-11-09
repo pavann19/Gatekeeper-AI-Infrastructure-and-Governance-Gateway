@@ -1,89 +1,8 @@
-"""
-Fits the deployed fusion policy and persists it as a plain-JSON artifact that
-`core/fusion.py` loads at request time.
+"""Fit a plain-JSON fusion artifact from supplied detector score rows.
 
-WHY THIS EXISTS
----------------
-scripts.ensemble_analysis proved the thesis using OUT-OF-FOLD cross-validation
-— that is the right way to answer "does fusion beat a single detector", because
-scoring a model on the data it was fit on would guarantee a win and prove
-nothing. But the artifact actually deployed is a different object: once the
-architecture is validated, the model shipped to production is refit on ALL
-available data, because held-out folds buy nothing at deploy time and only cost
-data efficiency. Cross-validation validates the APPROACH; this script produces
-the ARTIFACT.
-
-FLOOR TIER: FOUR DETECTORS, ALWAYS DEPLOYABLE
------------------------------------------------
-The floor tier — the one every deployment can reach with no external
-licence — is exactly the four-detector pool from the FIRST ensemble_
-analysis run: anchors, protectai_injection, madhurjindal_jailbreak,
-toxic_bert (AUC 0.944 [0.936, 0.951] against the best single detector's
-0.909 [0.899, 0.919] — non-overlapping, validated). Llama Guard remains
-excluded from every tier: it is far too slow for a live request path
-(~seconds, not milliseconds, on CPU), which is an inference-speed problem
-no amount of graceful degradation fixes.
-
-UPGRADE TIERS: RICHER, OPTIONAL, GRACEFULLY DEGRADING
---------------------------------------------------------
-`core/fusion.py`'s tier mechanism (added 2026-08-24) tries the RICHEST
-tier whose required detectors are all available and only falls back to a
-poorer tier when one is missing — never straight to the pre-fusion
-anchors-only path the way a missing feature used to. That capability is
-what makes adding `prompt_guard_2` (Meta-gated) no longer the all-or-
-nothing bet it was when this script only produced one policy: a
-deployment without the licence simply runs one tier down, not zero tiers.
-
-Measured out-of-fold on the 13,011-row suite (`scripts.sweep_fusion_
-variants`, `scripts.analyze_german_by_task` for the language split), all
-deltas non-overlapping-CI decisive:
-
-    floor (4-feature)                    pooled AUC 0.846, German-injection 0.813
-    +deepset_injection (5, no licence)   pooled AUC 0.866, German-injection 0.971
-    +prompt_guard_2 too (6, licence)     pooled AUC 0.908, German-injection 0.987
-    +2 German toxicity detectors (8)     pooled AUC 0.919, German-offensive 0.741
-
-`deepset_injection` carries no licence gate, so the 5-feature tier is
-reachable by every deployment exactly like the floor tier is — it exists
-as a distinct tier (rather than just raising the floor to 5 features)
-specifically so a `deepset_injection` outage alone still degrades one
-step, not to the floor, and so the floor tier itself stays the
-minimal, maximally-portable baseline this project has always shipped.
-
-The 8-feature tier (issue #3) adds `german_toxicity_eistakovskii` and
-`german_toxicity_ankekat`, two German-trained toxicity classifiers with no
-licence gate — closing the German OFFENSIVE-CONTENT gap the 6-feature
-tier barely touched (AUC 0.597→0.741) while improving every other axis
-too (pooled, German injection, English — none traded away; see
-`scripts.analyze_german_by_task` and `scripts.sweep_fusion_variants` for
-the full breakdown). Their `trained_on` is declared empty (UNKNOWN, not
-verified clean) rather than confirmed disjoint from
-`philschmid/germeval18` — neither model card names its training data
-explicitly, the same honest caveat `NemoGuardJailbreakDetector` already
-carries for the same reason.
-
-PERSISTENCE FORMAT
--------------------
-Plain JSON, not pickle/joblib. A pickled sklearn object ties the runtime to the
-exact sklearn version and Python environment that trained it, which is a
-needless deployment fragility. Logistic regression's inference is five numbers
-per feature (scaler mean, scaler scale, coefficient) plus an intercept and two
-thresholds — trivial to apply by hand at inference time (see core/fusion.py).
-
-THRESHOLDS
-----------
-Two operating points, matching the existing HIGH/MEDIUM two-tier structure in
-core/risk.py:
-  - HIGH: threshold achieving <=5% FPR (this project's standard budget
-    throughout §1d-1g of the engineering assessment).
-  - MEDIUM: threshold achieving <=20% FPR, a more permissive cutoff. Prompts
-    scoring above MEDIUM but below HIGH are routed to judge arbitration rather
-    than auto-blocked, mirroring the existing SEMANTIC_THRESHOLD_MEDIUM /
-    SEMANTIC_THRESHOLD_HIGH gap.
-
-Usage:
-    python -m scripts.train_fusion_policy
-"""
+Persist scaler, coefficients, intercepts and decision thresholds for runtime
+use. All-data fit statistics are training sanity checks, not independent
+accuracy estimates. Artifact regeneration is a reviewed decision change."""
 import json
 import os
 from datetime import datetime, timezone
@@ -102,23 +21,7 @@ ARTIFACT_FILE = os.path.join("models", "fusion_policy.json")
 FLOOR_FEATURES = ["anchors", "protectai_injection", "madhurjindal_jailbreak", "toxic_bert"]
 TIER_5_FEATURES = FLOOR_FEATURES + ["deepset_injection"]
 TIER_6_FEATURES = TIER_5_FEATURES + ["prompt_guard_2"]
-# German offensive-content detectors (issue #3). Off-the-shelf, no licence
-# gate, no stacking caveat -- unlike the multilingual_head experiment
-# (issue #4), these are static public models like every other detector in
-# this ensemble. Measured (scripts.analyze_german_by_task, scripts.
-# sweep_fusion_variants): decisive, no-regression improvement over tier 6
-# on every axis -- pooled AUC 0.908->0.919, German 0.729->0.791, English
-# 0.941->0.950 (flat-to-better, not traded away), "other" languages within
-# overlapping CIs (not a regression). German OFFENSIVE CONTENT specifically
-# (the task tier 6 barely touched): AUC 0.597->0.741.
 TIER_8_FEATURES = TIER_6_FEATURES + ["german_toxicity_eistakovskii", "german_toxicity_ankekat"]
-# issue #4's multilingual_head, nested-validated (scripts.validate_
-# multilingual_head_nested) on a fully disjoint 3-way split -- not the
-# OOF-stacking estimate, the leakage-free one: fusion-level pooled AUC
-# 0.923->0.945, German-injection recall@5%FPR 70.8%->93.1%, German-
-# offensive AUC 0.746->0.784, all on data neither the head nor the
-# fusion had seen. 20ms warm per-request (measured), well under this
-# project's existing synchronous-request budgets.
 TIER_9_FEATURES = TIER_8_FEATURES + ["multilingual_head"]
 
 # Kept for backward compatibility with anything importing this name.
@@ -127,13 +30,6 @@ LIVE_FEATURES = FLOOR_FEATURES
 HIGH_FPR_BUDGET = 0.05
 MEDIUM_FPR_BUDGET = 0.20
 
-# Per-class budgets are TIGHTER than the global ones on purpose. Three
-# policies each firing at 5% would produce a union false-positive rate near
-# 15%; 2.24% is the shared per-class budget that
-# scripts/analyze_per_class_thresholds.py binary-searched to make the union
-# land on the global policy's 5%, which is the only basis on which the two
-# arms can be honestly compared. The MEDIUM budget is scaled by the same
-# ratio (2.24/5) to keep the two tiers proportionate.
 PER_CLASS_HIGH_FPR_BUDGET = 0.0224
 PER_CLASS_MEDIUM_FPR_BUDGET = 0.0895
 
@@ -251,7 +147,7 @@ def fit_tier(features, rows, caches, tier_id=None):
                     "check that persistence round-trips correctly. The unbiased "
                     "estimate is scripts.sweep_fusion_variants' out-of-fold AUC "
                     "for this exact feature pool, reported in "
-                    "docs/ENGINEERING_ASSESSMENT.md.",
+                    "docs/EVALUATION.md.",
         },
     }
     if tier_id is not None:

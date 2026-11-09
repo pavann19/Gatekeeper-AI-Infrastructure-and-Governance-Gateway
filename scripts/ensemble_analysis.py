@@ -1,35 +1,7 @@
-"""
-Tests the project's central claim:
+"""Evaluate learned detector-score fusion using out-of-fold predictions.
 
-    An ensemble of specialised detectors under a learned, auditable fusion
-    policy outperforms any single detector.
-
-This is the thesis. It is also the product argument — if it holds, the gateway's
-value is the fusion and governance layer rather than any one classifier, which
-is a defensible position against vendors who ship a single model.
-
-Runs on cached scores from `scripts.compare_detectors`, so it is fast and can be
-iterated on freely.
-
-METHODOLOGICAL COMMITMENTS
---------------------------
-- OUT-OF-FOLD EVALUATION. The learned fusion is scored via stratified k-fold
-  cross-validation using out-of-fold predictions only. Reporting in-sample
-  performance for a trained model would guarantee it "wins" and would mean
-  nothing.
-- CONTAMINATED DETECTORS EXCLUDED BY DEFAULT. Two public detectors were trained
-  on sources in our suite. Including them would let the ensemble inherit their
-  memorisation. The default ensemble uses clean detectors only.
-- SAME OPERATING POINT. Every configuration is compared at the threshold
-  achieving the same FPR budget on the same rows.
-- INTERPRETABILITY. Logistic-regression coefficients are reported. A fusion
-  policy that cannot be explained is not auditable, and auditability is the
-  product claim.
-
-Usage:
-    python -m scripts.ensemble_analysis
-    python -m scripts.ensemble_analysis --include-contaminated
-"""
+Requires cached scores with matching source/dataset identity. Reports are
+local experiments, not current deployment accuracy or throughput claims."""
 import argparse
 import json
 import os

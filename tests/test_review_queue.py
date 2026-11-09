@@ -1,5 +1,5 @@
 """
-Tests for core.review_queue (Phase 4: Human Review). Backs the REVIEW
+Tests for core.review_queue (implementation: Human Review). Backs the REVIEW
 decision outcome — a request queued for a human to resolve rather than
 auto-allowed or auto-blocked.
 """

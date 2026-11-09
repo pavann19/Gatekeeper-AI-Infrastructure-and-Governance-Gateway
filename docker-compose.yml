@@ -1,10 +1,10 @@
+# Local API, judge, shared state and monitoring stack.
+# Provision identity stores before startup; restrict published host ports.
+# The active policy is image-managed unless explicitly configured otherwise.
 services:
   redis:
-    image: redis:7-alpine
-    # Enables the distributed cache backend core/cache_backend.py already
-    # supports (§1k) but this compose file never wired in — without it,
-    # every replica's exact-match cache is process-local, which defeats
-    # the entire point of running more than one gatekeeper-api replica.
+    image: redis@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+    command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - redis_data:/data
     healthcheck:
@@ -16,7 +16,7 @@ services:
       - gatekeeper_net
 
   ollama:
-    image: ollama/ollama:latest
+    image: ollama/ollama@sha256:292ee7945dfc3d5840a181f3ab86fedb1e66703e02c8af98b50f4da56b7e278c
     ports:
       - "11434:11434"
     volumes:
@@ -30,16 +30,8 @@ services:
     networks:
       - gatekeeper_net
 
-  # ONE-SHOT: pulls the judge model and exits. The base ollama/ollama image
-  # ships with NO models — without this, `docker-compose up` on a fresh
-  # volume leaves judge_available() failing (§ core/semantic_judge.py) until
-  # an operator manually runs `docker exec ollama ollama pull llama-guard3`,
-  # which is exactly the kind of undocumented manual step an MVP deployment
-  # should not require. gatekeeper-api's `depends_on: model-pull: service_completed_successfully`
-  # blocks startup until this finishes, rather than starting and silently
-  # falling back to JUDGE_OFFLINE-equivalent behaviour on the first N requests.
   model-pull:
-    image: ollama/ollama:latest
+    image: ollama/ollama@sha256:292ee7945dfc3d5840a181f3ab86fedb1e66703e02c8af98b50f4da56b7e278c
     depends_on:
       ollama:
         condition: service_healthy
@@ -54,48 +46,21 @@ services:
     ports:
       - "8000:8000"
     environment:
-      # llama-guard3, NOT the previous default — the deployed config must
-      # match what §1j-§1v actually measured and validated. Pointing this
-      # at "mistral" (the old default) would silently ship a judge model
-      # this project moved off of months ago.
       - OLLAMA_MODEL=llama-guard3
       - OLLAMA_API_URL=http://ollama:11434/api/generate
       - REDIS_URL=redis://redis:6379/0
       - API_KEYS_FILE=/app/config/api_keys.json
       - TENANTS_FILE=/app/config/tenants.json
-      # POLICY_RULES_FILE deliberately NOT overridden here — it keeps
-      # core/config.py's default ("policy_rules.json", relative to WORKDIR
-      # /app), which resolves to the copy the Dockerfile already bakes in
-      # from the repo root. Unlike the two files above, an ABSENT policy
-      # file is not a safe default (core/policy.py fails closed to BLOCK
-      # for every request with no usable policy), so pointing it at the
-      # always-empty-by-default ./config mount would silently deny all
-      # traffic on a stock `docker-compose up`. See config/README.md for
-      # how to actually override it.
       - AUDIT_LOG_PATH=/app/audit/audit.jsonl
-      # Overridable at `docker compose run -e` or via a .env file (see
-      # .env.example) for anything an operator needs to change without
-      # editing this file — AUTH_MODE, RATE_LIMIT_*, METRICS_REQUIRE_AUTH,
-      # etc. all have safe defaults in core/config.py and do not need to be
-      # set here.
+      - AUDIT_DB_PATH=/app/audit/audit.db
+      - REVIEW_QUEUE_FILE=/app/audit/review_queue.json
+      - POLICY_VERSIONS_DIR=/app/audit/policy_versions
     env_file:
       - path: .env
         required: false
     volumes:
-      # Config files an operator provisions, NOT single-file bind mounts —
-      # those are fragile (Docker creates a DIRECTORY at the target path if
-      # the host file doesn't already exist, silently breaking startup) and
-      # the previous version of this compose file bind-mounted audit.jsonl
-      # as a file for exactly that reason. Mounting the containing
-      # directory means a missing file degrades safely: core/auth.py's
-      # KeyStore and core/tenancy.py's TenantStore both already treat "file
-      # absent" as "nothing configured yet" rather than an error.
       - ./config:/app/config:ro
       - audit_data:/app/audit
-      # HuggingFace/sentence-transformers model cache. Without this, every
-      # container recreation re-downloads all_mpnet-base-v2 and the three
-      # fusion detectors from scratch — slow, and a real failure mode if
-      # the deployment environment has restricted egress.
       - hf_cache:/root/.cache/huggingface
     depends_on:
       redis:
@@ -105,32 +70,8 @@ services:
     networks:
       - gatekeeper_net
 
-  # Phase 8 hardening: the `gatekeeper-ui` service that used to live here
-  # (building Dockerfile.ui / ui/web_app.py, a Streamlit prototype) has
-  # been removed. That prototype called Ollama directly rather than
-  # gatekeeper-api, so it never exercised core/risk.py's pipeline at all
-  # -- deploying it as "the Gatekeeper UI" alongside the real API was
-  # actively misleading, not just an unused extra. The REAL client UI
-  # (sign-in, activity feed, review queue, trace, gateways, logs,
-  # benchmarks, policy editor, settings — see docs/ROADMAP_V2.md's
-  # Phase 7) ships for free inside `gatekeeper-api` itself: once that
-  # service is healthy, it's reachable at
-  # http://localhost:8000/ui/login/index.html. No separate service, no
-  # separate build, and it actually talks to this API. `ui/web_app.py`
-  # and `Dockerfile.ui` themselves are kept in git history (removed from
-  # the working tree in the same commit this comment was added) rather
-  # than silently deleted with no trace -- see that commit for the full
-  # record if the old prototype is ever needed for reference.
-
-  # --- Dashboard: Grafana reading core/metrics.py's existing /metrics ---
-  # Grafana, not a bespoke UI — the metrics (per-decision counters, per-stage
-  # latency histograms, rate-limit/timeout/circuit-breaker gauges) already
-  # exist (§1r); a dashboard is the cheapest way to make them visible, and
-  # writing a custom frontend for data Prometheus already models well would
-  # be reinventing a solved problem this project has no frontend codebase
-  # for anyway.
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus@sha256:efd719c99d83b060d9daefdcf00360461adf279f45ef5391f8d111892118753e
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
@@ -142,21 +83,13 @@ services:
       - gatekeeper_net
 
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana@sha256:b28bae15e219c998fb0e0424ed724930cc61b1f61fb404d47c862f9a23f9e572
     ports:
       - "3000:3000"
     environment:
-      # Change this — see .env.example. Defaulting to a fixed password in
-      # a file this repo ships would be shipping a real credential.
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-changeme}
-      # Anonymous viewer access, OFF by default — metrics leak operational
-      # detail the same way /metrics itself does (§1r); an operator opts in
-      # explicitly via .env rather than this shipping open.
       - GF_AUTH_ANONYMOUS_ENABLED=${GRAFANA_ANONYMOUS_ENABLED:-false}
     volumes:
-      # Datasource + dashboard auto-provisioning (see monitoring/grafana/
-      # provisioning/) means `docker compose up` produces a working,
-      # populated dashboard with zero manual click-through setup.
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards/files:ro
       - grafana_data:/var/lib/grafana

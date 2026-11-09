@@ -2,11 +2,13 @@
 import hashlib
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
+from uuid import uuid4
 import logging
-from pythonjsonlogger import jsonlogger
+import threading
 
 from core.config import settings
+from core.state_lock import state_lock
 
 # --- CONFIGURE STRUCTURED LOGGING ---
 logger = logging.getLogger("gatekeeper")
@@ -26,17 +28,6 @@ if not logger.handlers:
     console_formatter = logging.Formatter('%(levelname)s: %(message)s')
     console_handler.setFormatter(console_formatter)
     logger.addHandler(console_handler)
-
-    # JSON Audit Handler
-    os.makedirs(os.path.dirname(AUDIT_LOG_PATH) or ".", exist_ok=True)
-    audit_handler = logging.FileHandler(AUDIT_LOG_PATH, encoding="utf-8")
-    json_formatter = jsonlogger.JsonFormatter('%(timestamp)s %(level)s %(name)s %(message)s')
-    audit_handler.setFormatter(json_formatter)
-    
-    audit_logger = logging.getLogger("gatekeeper.audit")
-    audit_logger.setLevel(logging.INFO)
-    audit_logger.propagate = False 
-    audit_logger.addHandler(audit_handler)
 
 def get_logger(name="gatekeeper"):
     return logging.getLogger(name)
@@ -73,17 +64,76 @@ def _mirror_to_sqlite(event_type, log_entry):
             type(e).__name__, e, event_type, log_entry.get("request_id"),
         )
 
+class AuditPersistenceError(RuntimeError):
+    """The authoritative audit store did not acknowledge persistence."""
+
+
+_audit_lock = threading.Lock()
+
+
+def _persist_local_audit(event_type, entry):
+    sqlite_authority = settings.AUDIT_READ_FROM_SQLITE
+    if sqlite_authority:
+        if not settings.AUDIT_SQLITE_ENABLED:
+            raise AuditPersistenceError("SQLite audit authority is disabled")
+        _mirror_to_sqlite(event_type, entry)
+    payload = json.dumps(entry, ensure_ascii=True) + "\n"
+    try:
+        with _audit_lock, state_lock(settings.AUDIT_LOG_PATH):
+            path = settings.AUDIT_LOG_PATH
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            with open(path, "a", encoding="utf-8") as stream:
+                if stream.write(payload) != len(payload):
+                    raise OSError("Incomplete audit write")
+                stream.flush()
+                os.fsync(stream.fileno())
+    except Exception:
+        if not sqlite_authority:
+            raise
+        logger.critical("JSONL audit mirror failed after authoritative SQLite persistence")
+    if not sqlite_authority:
+        _mirror_to_sqlite(event_type, entry)
+
+
+def _persist_audit(event_type, entry):
+    from core.policy import policy_identity
+    entry = {**entry, 'event_id': uuid4().hex, 'policy_digest': policy_identity()}
+    try:
+        if settings.STATE_BACKEND == 'postgres':
+            from core.postgres_state import get_postgres_store
+            get_postgres_store().write_audit(entry)
+        else:
+            _persist_local_audit(event_type, entry)
+    except Exception as exc:
+        raise AuditPersistenceError("Authoritative audit persistence failed") from exc
+    # Diagnostic observers run only after authoritative persistence succeeded.
+    try:
+        logging.getLogger("gatekeeper.audit").info("Audit persisted", extra=entry)
+    except Exception:
+        logger.warning("Diagnostic audit observer failed")
+
+
+def log_review_event(record, outcome, reviewer, phase):
+    """Append a content-free reviewer decision to the authoritative audit trail."""
+    _persist_audit("review_resolution", {
+        "event_type": "review_resolution", "timestamp": datetime.now(timezone.utc).isoformat(),
+        "request_id": record.get("request_id"), "tenant": record.get("tenant"),
+        "review_id": record["review_id"], "reviewer": reviewer, "outcome": outcome,
+        "phase": phase, "prompt_hash": record.get("prompt_hash"),
+    })
+
+
 def log_event(capability, prompt, risk, decision, metadata=None):
     if metadata is None:
         metadata = {}
-    
-    timestamp = datetime.now().isoformat()
+
+    timestamp = datetime.now(timezone.utc).isoformat()
     prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
 
     log_entry = {
         "timestamp": timestamp,
         # Distinguishes this record from log_output_event's records in the
-        # same audit stream — see that function's docstring (Phase 2, Output
+        # same audit stream — see that function's docstring (, Output
         # Security) for why they are separate events rather than one shape
         # with an optional half.
         "event_type": "input_assessment",
@@ -115,37 +165,35 @@ def log_event(capability, prompt, risk, decision, metadata=None):
     }
 
     # Structured JSON log for Audit
-    audit_logger = logging.getLogger("gatekeeper.audit")
-    audit_logger.info("Governance Decision", extra=log_entry)
-    _mirror_to_sqlite("input_assessment", log_entry)
+    _persist_audit("input_assessment", log_entry)
 
 
 def log_output_event(capability, response_text, decision, metadata=None, tenant="unset", request_id="unset"):
     """
-    Audit record for an OUTPUT assessment — distinct from log_event's INPUT
-    record (Phase 2, Output Security roadmap item).
+        Audit record for an OUTPUT assessment — distinct from log_event's INPUT
+        record (implementation).
 
-    WHY A SEPARATE FUNCTION, not log_event with more optional fields. An
-    input assessment and an output assessment answer different questions
-    ("is this prompt an attack?" vs "is this response safe to return?") and
-    carry fields that don't apply to the other (risk/symbolic_triggered vs
-    pii_leakage/secrets_detected/system_prompt_leak). Cramming both into one
-    schema with everything optional makes every consumer of the audit log —
-    a query, a dashboard, a compliance export — responsible for knowing
-    which half of the record is meaningful for a given row. `event_type`
-    lets a query select cleanly; the two record shapes stay honest about
-    what they actually measure.
+        WHY A SEPARATE FUNCTION, not log_event with more optional fields. An
+        input assessment and an output assessment answer different questions
+        ("is this prompt an attack?" vs "is this response safe to return?") and
+        carry fields that don't apply to the other (risk/symbolic_triggered vs
+        pii_leakage/secrets_detected/system_prompt_leak). Cramming both into one
+        schema with everything optional makes every consumer of the audit log —
+        a query, a dashboard, a compliance export — responsible for knowing
+        which half of the record is meaningful for a given row. `event_type`
+        lets a query select cleanly; the two record shapes stay honest about
+        what they actually measure.
 
-    Previously MISSING ENTIRELY for the standalone /api/v1/assess_output
-    endpoint — that endpoint could BLOCK a response (PII leak, toxicity,
-    secret, hallucination) with zero audit trail. Every output decision must
-    be as auditable as every input decision; this closes that gap.
-    """
+        Previously MISSING ENTIRELY for the standalone /api/v1/assess_output
+        endpoint — that endpoint could BLOCK a response (PII leak, toxicity,
+        secret, hallucination) with zero audit trail. Every output decision must
+        be as auditable as every input decision; this closes that gap.
+        """
     if metadata is None:
         metadata = {}
 
     log_entry = {
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "event_type": "output_assessment",
         "request_id": request_id,
         "tenant": tenant,
@@ -155,41 +203,21 @@ def log_output_event(capability, response_text, decision, metadata=None, tenant=
         "pii_leakage": metadata.get("pii_leakage", False),
         "secrets_detected": metadata.get("secrets_detected", False),
         "toxicity_detected": metadata.get("toxicity_detected", False),
+        "toxicity_assessed": metadata.get("toxicity_assessed", False),
+        "toxicity_status": metadata.get("toxicity_status", "NOT_ASSESSED"),
         "hallucination_detected": metadata.get("hallucination_detected", False),
         "system_prompt_leak_detected": metadata.get("system_prompt_leak_detected", False),
         "source": metadata.get("source", "unknown"),
     }
 
-    audit_logger = logging.getLogger("gatekeeper.audit")
-    audit_logger.info("Output Governance Decision", extra=log_entry)
-    _mirror_to_sqlite("output_assessment", log_entry)
+    _persist_audit("output_assessment", log_entry)
 
 
 def log_gateway_event(capability, provider, model, success, latency_ms, decision,
                       usage=None, error=None, tenant="unset", request_id="unset"):
-    """
-    Audit record for a PROXIED CALL through the LLM gateway (Phase 5: Real
-    LLM Gateway, "Audit trail for the proxied call itself" roadmap item) —
-    a THIRD distinct event_type alongside log_event's "input_assessment"
-    and log_output_event's "output_assessment", for the same reason those
-    two are separate from each other: this answers a third, different
-    question ("did the call to the external provider succeed, and what did
-    it cost?") that neither the input nor output assessment records answer.
-
-    Deliberately does not duplicate the input/output governance verdicts —
-    those are already fully recorded by log_event/log_output_event for the
-    same request_id, joinable on it. `decision` here is the FINAL combined
-    decision the gateway returned to the caller (ALLOW/BLOCK/etc.), present
-    for a quick "did this proxied call actually go through" filter without
-    needing to join, not a duplicate source of truth for WHY.
-
-    No prompt or response content is logged here either — same privacy
-    discipline as every other audit event in this codebase. `usage` is
-    whatever the provider returned (core.llm_providers.LLMResponse.usage),
-    logged verbatim since it is already just token counts, not content.
-    """
+    """Persist a distinct provider-gateway event with sanitized metadata."""
     log_entry = {
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "event_type": "gateway_call",
         "request_id": request_id,
         "tenant": tenant,
@@ -203,49 +231,22 @@ def log_gateway_event(capability, provider, model, success, latency_ms, decision
         "error": error,
     }
 
-    audit_logger = logging.getLogger("gatekeeper.audit")
-    audit_logger.info("Gateway Call", extra=log_entry)
-    _mirror_to_sqlite("gateway_call", log_entry)
+    _persist_audit("gateway_call", log_entry)
 
 
 def log_tool_event(capability, tool_name, decision, risk_level, reason,
                    arguments=None, success=None, error=None,
-                   tenant="unset", request_id="unset"):
-    """
-    Audit record for a TOOL CALL (Phase 6, Tool/Agent Gateway,
-    "Audit events" roadmap item) — a FOURTH distinct `event_type`
-    alongside `log_event`'s "input_assessment", `log_output_event`'s
-    "output_assessment", and `log_gateway_event`'s "gateway_call", for
-    the same reason all three are already separate from each other: this
-    answers a fourth, different question ("was this tool call allowed to
-    run, and did it succeed?") that none of the others answer. Emitted
-    for EVERY decision core/tools.py::execute_tool reaches — BLOCK and
-    REVIEW included, not just ALLOW — because "an agent tried to call a
-    tool it wasn't authorized for" is itself an auditable security event,
-    arguably more interesting than a routine successful call.
-
-    `arguments` is never logged verbatim — only its SHA-256 hash, same
-    privacy discipline `log_event`'s `prompt_hash` and `log_output_event`'s
-    `response_hash` already apply: a tool argument can carry the same
-    sensitive content a prompt can (a customer ID, a file path, a query
-    string), and this audit trail's existing guarantee — no raw content,
-    ever — must not have a silent exception for tool calls. Hashed as
-    `json.dumps(arguments, sort_keys=True)` so the same call always hashes
-    identically regardless of dict key order.
-
-    `success`/`error` are only meaningful when `decision == "ALLOW"` — a
-    BLOCK or REVIEW never reached the handler at all (see
-    `execute_tool`'s own docstring), so both stay `None` for those rows
-    rather than being coerced into a misleading `False`.
-    """
+                   tenant="unset", request_id="unset", phase="decision"):
+    """Persist a tool intent/completion/failure event with argument hashes."""
     arguments_hash = None
     if arguments is not None:
         canonical = json.dumps(arguments, sort_keys=True, default=str)
         arguments_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
     log_entry = {
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "event_type": "tool_call",
+        "phase": phase,
         "request_id": request_id,
         "tenant": tenant,
         "capability": capability,
@@ -258,6 +259,4 @@ def log_tool_event(capability, tool_name, decision, risk_level, reason,
         "error": error,
     }
 
-    audit_logger = logging.getLogger("gatekeeper.audit")
-    audit_logger.info("Tool Call", extra=log_entry)
-    _mirror_to_sqlite("tool_call", log_entry)
+    _persist_audit("tool_call", log_entry)

@@ -1,5 +1,5 @@
 """
-Regression coverage for assess_risk's `raw_prompt` parameter (Phase 8 live
+Regression coverage for assess_risk's `raw_prompt` parameter (implementation live
 pentest fix): the local, in-process text classifiers (hard-ban regex,
 domain alignment, the fusion sub-detectors) run on `raw_prompt` when
 supplied, while the embedding, the persisted semantic cache, and the judge

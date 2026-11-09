@@ -1,43 +1,8 @@
-"""
-Fits the FINAL multilingual_head artifact and persists it as plain JSON --
-the deployable counterpart to scripts.build_multilingual_feature's
-research script (which produces held-out/OOF numbers for evaluation, not
-a servable artifact).
+"""Refit and persist a multilingual embedding head as plain JSON.
 
-WHY A SEPARATE ARTIFACT, NOT PICKLE
--------------------------------------
-Same reasoning as scripts.train_fusion_policy's own artifact: a pickled
-sklearn object ties the runtime to the exact sklearn/Python environment
-that trained it. Logistic regression over a fixed-size embedding is a
-scaler (mean/scale per dimension) plus a coefficient per dimension plus
-an intercept -- trivial to persist as JSON and apply by hand at inference
-time (see core/detectors.py::EmbeddingHeadDetector).
-
-REFIT ON ALL DATA -- WHY THIS ARTIFACT'S OWN "AUC" IS NOT A CLAIM
---------------------------------------------------------------------
-Exactly like scripts.train_fusion_policy: the deployed artifact is refit
-on every available row, because held-out folds buy nothing at deploy time
-and only cost data efficiency. This means the artifact has seen 100% of
-data/eval_suite.jsonl -- evaluating IT against that same suite afterward
-would be training-data contamination, unconditionally. The unbiased
-numbers for this feature live elsewhere and were produced BEFORE this
-refit: scripts.build_multilingual_feature's held-out-test-split and
-leave-one-source-out results, and scripts.validate_multilingual_head_
-nested's fully disjoint three-way split. Cite those, never this
-artifact's own in-sample score.
-
-RETRAIN CADENCE
-----------------
-No automatic cadence -- this is a manual step, run alongside
-scripts.train_fusion_policy whenever data/eval_suite.jsonl changes
-materially (a new source added, a meaningful volume change), not on
-every commit. The artifact's `trained_at` and `n_rows` fields exist so a
-future run can tell at a glance whether it is stale relative to the
-current suite.
-
-Usage:
-    python -m scripts.train_multilingual_head_artifact
-"""
+Scaler, coefficients and intercept define runtime inference without pickle.
+All-data training metrics are not holdout evidence. Requires matching local
+embedding/dataset inputs; see docs/EVALUATION.md."""
 import json
 import os
 from datetime import datetime, timezone

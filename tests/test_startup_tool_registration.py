@@ -1,6 +1,6 @@
 """
 Regression coverage for api/main.py::warm_models' tool-registration wiring
-(Phase 8 live pentest findings):
+(implementation live pentest findings):
 
 1. `core.real_tools.register_real_tools` -- the function that wires up the
    only REAL (non-sandboxed) tool this project ships, `http.get` -- was

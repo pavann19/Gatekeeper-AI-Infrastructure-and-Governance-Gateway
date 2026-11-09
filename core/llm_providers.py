@@ -1,48 +1,10 @@
 # core/llm_providers.py
-"""
-Provider abstraction (Phase 5, Real LLM Gateway roadmap item — scoped down
-to this piece only for this pass; request forwarding, streaming, token
-accounting, retry/fallback, and audit trail are explicitly NOT built here,
-per the roadmap's own item breakdown).
+"""Configured provider adapters and failover for gateway requests.
 
-WHAT THIS FILE IS, AND WHAT IT DELIBERATELY IS NOT
------------------------------------------------------
-A single interface — `LLMProvider.complete(messages, model=None)` — that
-three concrete backends (Ollama, an OpenAI-compatible endpoint, an
-Anthropic-compatible endpoint) each implement, so a future gateway endpoint
-can call any of them without knowing which one it's talking to. It is NOT
-that gateway endpoint: nothing here is wired into api/main.py, no
-`/api/v1/*` route exists yet, and no audit event is written for a proxied
-call. That is deliberate — "provider abstraction" and "request forwarding"
-are two separate roadmap line items for a reason: this piece is
-independently testable (every provider here is tested against mocked HTTP
-responses, no live network needed) and independently useful even before a
-gateway endpoint exists to call it.
-
-WHY RAW `requests`, NOT THE VENDOR SDKS
-------------------------------------------
-Matches this project's existing convention (core/semantic_judge.py talks to
-Ollama via raw `requests`, not an SDK) and avoids three new dependencies
-for what is, in each case, one HTTP POST with a JSON body. "OpenAI-
-compatible" is also a real, load-bearing distinction — it means anything
-that speaks the same wire format (real OpenAI, Groq, Together, a local
-vLLM/LM Studio server), which is exactly what pointing `OPENAI_BASE_URL`
-at a different host already gives you, and an SDK's job of abstracting the
-JSON shape from you is the one thing this module wants to see anyway (to
-normalise it into `LLMResponse`).
-
-ERROR MODEL, DELIBERATELY SIMPLE
------------------------------------
-One exception type, `LLMProviderError`, for every failure mode (network
-error, timeout, non-2xx response, unparseable body). No retry, no circuit
-breaker, no per-provider exception hierarchy — those are exactly what the
-roadmap's separate "Timeout/failure handling, fallback" item is for, at
-the GATEWAY level, once there is a gateway to apply them across multiple
-provider attempts. A provider class raising immediately and clearly on any
-failure is the correct building block for that; building partial
-resilience into the block itself would just be resilience logic with no
-caller yet to exercise it correctly.
-"""
+Adapters return content, provider/model identity and reported usage. Transport
+errors remain explicit and diagnostics sanitize untrusted failures. Provider
+configuration is trusted operator input. Token accounting consumes reported
+usage; it is not proof of provider billing or a distributed reservation."""
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -66,20 +28,7 @@ class LLMProviderError(Exception):
 
 @dataclass
 class LLMResponse:
-    """
-    Normalised across all three providers, so a caller never branches on
-    which one it talked to.
-
-    `usage` is passed through verbatim from whichever provider returned it
-    (each has its own field names — see each provider's docstring) and is
-    NOT yet consumed by anything: Phase 5's "token accounting" roadmap item
-    is what would build a policy on top of this field. Present here only
-    because it costs nothing to surface what the provider already sent.
-
-    `raw` is the full, unmodified provider response — kept for a future
-    audit trail (another separate roadmap item) to log verbatim, not
-    inspected by anything in this module itself.
-    """
+    """Implementation of LLMResponse."""
     content: str
     model: str
     provider: str
@@ -95,7 +44,7 @@ class LLMProvider:
 
     name = "base"
 
-    def complete(self, messages: List[Dict[str, str]], model: str = None,
+    def complete(self, messages: List[Dict[str, str]], model: str | None = None,
                 timeout: float = DEFAULT_TIMEOUT_SECONDS) -> LLMResponse:
         raise NotImplementedError
 
@@ -110,7 +59,7 @@ class OllamaProvider(LLMProvider):
     """
     name = "ollama"
 
-    def __init__(self, base_url: str = None, default_model: str = None):
+    def __init__(self, base_url: str | None = None, default_model: str | None = None):
         self.base_url = base_url or settings.OLLAMA_CHAT_URL
         self.default_model = default_model or settings.OLLAMA_MODEL
 
@@ -121,16 +70,16 @@ class OllamaProvider(LLMProvider):
         try:
             response = requests.post(self.base_url, json=payload, timeout=timeout)
         except requests.RequestException as e:
-            raise LLMProviderError(f"Ollama request failed: {type(e).__name__}: {e}") from e
+            raise LLMProviderError(f"Ollama request failed: {type(e).__name__}") from e
 
         if response.status_code != 200:
-            raise LLMProviderError(f"Ollama returned HTTP {response.status_code}: {response.text[:200]}")
+            raise LLMProviderError(f"Ollama returned HTTP {response.status_code}")
 
         try:
             data = response.json()
             content = data["message"]["content"]
         except (ValueError, KeyError) as e:
-            raise LLMProviderError(f"Unrecognised Ollama response shape: {e}") from e
+            raise LLMProviderError(f"Unrecognised Ollama response shape: {type(e).__name__}") from e
 
         return LLMResponse(
             content=content, model=model, provider=self.name,
@@ -149,7 +98,7 @@ class OpenAICompatibleProvider(LLMProvider):
     """
     name = "openai_compatible"
 
-    def __init__(self, api_key: str = None, base_url: str = None, default_model: str = None):
+    def __init__(self, api_key: str | None = None, base_url: str | None = None, default_model: str | None = None):
         self.api_key = api_key if api_key is not None else settings.OPENAI_API_KEY
         self.base_url = (base_url or settings.OPENAI_BASE_URL).rstrip("/")
         self.default_model = default_model or settings.OPENAI_MODEL
@@ -168,17 +117,17 @@ class OpenAICompatibleProvider(LLMProvider):
             response = requests.post(f"{self.base_url}/chat/completions",
                                      json=payload, headers=headers, timeout=timeout)
         except requests.RequestException as e:
-            raise LLMProviderError(f"OpenAI-compatible request failed: {type(e).__name__}: {e}") from e
+            raise LLMProviderError(f"OpenAI-compatible request failed: {type(e).__name__}") from e
 
         if response.status_code != 200:
             raise LLMProviderError(f"OpenAI-compatible endpoint returned HTTP "
-                                   f"{response.status_code}: {response.text[:200]}")
+                                   f"{response.status_code}")
 
         try:
             data = response.json()
             content = data["choices"][0]["message"]["content"]
         except (ValueError, KeyError, IndexError) as e:
-            raise LLMProviderError(f"Unrecognised OpenAI-compatible response shape: {e}") from e
+            raise LLMProviderError(f"Unrecognised OpenAI-compatible response shape: {type(e).__name__}") from e
 
         return LLMResponse(
             content=content, model=data.get("model", model), provider=self.name,
@@ -195,8 +144,8 @@ class AnthropicCompatibleProvider(LLMProvider):
     """
     name = "anthropic_compatible"
 
-    def __init__(self, api_key: str = None, base_url: str = None, default_model: str = None,
-                anthropic_version: str = None):
+    def __init__(self, api_key: str | None = None, base_url: str | None = None, default_model: str | None = None,
+                anthropic_version: str | None = None):
         self.api_key = api_key if api_key is not None else settings.ANTHROPIC_API_KEY
         self.base_url = (base_url or settings.ANTHROPIC_BASE_URL).rstrip("/")
         self.default_model = default_model or settings.ANTHROPIC_MODEL
@@ -228,17 +177,17 @@ class AnthropicCompatibleProvider(LLMProvider):
             response = requests.post(f"{self.base_url}/messages",
                                      json=payload, headers=headers, timeout=timeout)
         except requests.RequestException as e:
-            raise LLMProviderError(f"Anthropic-compatible request failed: {type(e).__name__}: {e}") from e
+            raise LLMProviderError(f"Anthropic-compatible request failed: {type(e).__name__}") from e
 
         if response.status_code != 200:
             raise LLMProviderError(f"Anthropic-compatible endpoint returned HTTP "
-                                   f"{response.status_code}: {response.text[:200]}")
+                                   f"{response.status_code}")
 
         try:
             data = response.json()
             content = data["content"][0]["text"]
         except (ValueError, KeyError, IndexError) as e:
-            raise LLMProviderError(f"Unrecognised Anthropic-compatible response shape: {e}") from e
+            raise LLMProviderError(f"Unrecognised Anthropic-compatible response shape: {type(e).__name__}") from e
 
         return LLMResponse(
             content=content, model=data.get("model", model), provider=self.name,

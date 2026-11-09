@@ -14,6 +14,12 @@ from core.tools import ToolRegistry
 
 
 @pytest.fixture(autouse=True)
+def _authenticated_transport_fixture(monkeypatch):
+    monkeypatch.setattr('core.mcp_http_server.resolve_request_principal',
+                        lambda request: Principal(authenticated=True, key_id='transport-test'))
+
+
+@pytest.fixture(autouse=True)
 def _reset_mcp_rate_limiter():
     """
     Every test in this file hits the MCP server as the same unauthenticated
@@ -100,7 +106,7 @@ def test_mcp_sse_session_force_closed_after_max_lifetime(mcp_app, mcp_client, mo
     assert mcp_app.state.sessions == {}
 
 
-def test_mcp_sse_session_relay(mcp_app, mcp_client):
+def test_mcp_sse_session_relay(mcp_app, mcp_client, monkeypatch):
     """
     Verifies full SSE session relay:
     1. Client registers an active SSE session queue in app.state.sessions.
@@ -109,7 +115,9 @@ def test_mcp_sse_session_relay(mcp_app, mcp_client):
     """
     session_id = "test-session-42"
     queue = asyncio.Queue()
-    mcp_app.state.sessions[session_id] = queue
+    from core.mcp_http_server import MCPSession
+    monkeypatch.setattr("core.mcp_http_server._session_identity", lambda *args: "owner")
+    mcp_app.state.sessions[session_id] = MCPSession("owner", queue)
 
     msg = {
         "jsonrpc": "2.0",
@@ -218,8 +226,8 @@ def test_mcp_suspended_tenant_returns_403(mcp_client, monkeypatch):
 
     monkeypatch.setattr(
         server_mod,
-        "resolve_principal",
-        lambda authorization=None: Principal(authenticated=True, tenant="suspended-corp", key_id="susp-key", capability="GENERAL"),
+        "resolve_request_principal",
+        lambda request=None: Principal(authenticated=True, tenant="suspended-corp", key_id="susp-key", capability="GENERAL"),
     )
     monkeypatch.setattr(
         server_mod,
@@ -236,11 +244,10 @@ def test_mcp_suspended_tenant_returns_403(mcp_client, monkeypatch):
 def test_mcp_auth_required_returns_401(mcp_client, monkeypatch):
     from core import mcp_http_server as server_mod
 
-    monkeypatch.setattr(server_mod, "auth_required", lambda: True)
     monkeypatch.setattr(
         server_mod,
-        "resolve_principal",
-        lambda authorization=None: Principal(authenticated=False, tenant="anonymous", key_id="anonymous", capability="GENERAL"),
+        "resolve_request_principal",
+        lambda request=None: Principal(authenticated=False, tenant="anonymous", key_id="anonymous", capability="GENERAL"),
     )
 
     msg = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}

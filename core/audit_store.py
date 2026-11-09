@@ -1,55 +1,22 @@
-"""
-Embedded-SQLite mirror of the audit trail.
+"""Queryable SQLite audit persistence alongside JSONL.
 
-The audit trail has always been append-only JSONL (`core/logger.py`), read
-by a byte-bounded reverse tail scan (`core/activity.py`). That scan is
-bounded but a full-budget sweep for a near-zero-match query is still real
-work under concurrency, and two deferred-tier items (compliance export,
-attack-campaign clustering) are close to unimplementable over a linear
-scan. This module adds a queryable, indexed store using **stdlib `sqlite3`
-only — no new service, no new deployment dependency**, which is the
-property that makes it acceptable given this project's infra reality.
-
-WHAT THIS INCREMENT DOES
-------------------------
-- `write(event_type, entry)` — mirror one audit record into SQLite. Called
-  by `core/logger.py` alongside the existing JSONL write (dual-write).
-- `recent(...)` / `by_request_id(...)` — read APIs returning the SAME shape
-  as `core/activity.py` so a later increment can swap the reader over with
-  no caller change.
-
-FAIL-MODE
--------------------------------------------
-The JSONL write stays AUTHORITATIVE for now. `core/logger.py` calls
-`write()` inside a `try/except` that logs CRITICAL and swallows — a SQLite
-mirror failure does NOT fail the request and does NOT trip
-`AUDIT_WRITE_FAILS_CLOSED` (that flag guards the JSONL write, which still
-succeeded). Only once reads move to SQLite does a write failure here become
-request-fatal.
-
-FOUR EVENT SHAPES STAY SEPARATE
-------------------------------
-One table per `event_type` — `input_assessment`, `output_assessment`,
-`gateway_call`, `tool_call` — for exactly the reason `core/logger.py` keeps
-the four functions separate: they answer different questions and carry
-non-overlapping fields. A pre-`event_type` JSONL line (migration only) goes
-to `legacy_event` with its raw JSON preserved, never dropped.
-
-PRIVACY
--------
-Hashes only. The schema has `prompt_hash` / `response_hash` /
-`arguments_hash` columns and NO column that could hold raw prompt,
-response, or argument text — same guarantee the JSONL trail already makes.
-"""
+Input, output, gateway and tool events have separate tables. Current records
+store content hashes rather than raw prompt, response or argument text.
+Migration preserves legacy rows as legacy events. SQLite writes are fatal
+when AUDIT_READ_FROM_SQLITE makes this store authoritative; otherwise the
+logger records a mirror failure. See docs/SECURITY.md."""
 from __future__ import annotations
 
 import json
+import os
+from contextlib import nullcontext
 import sqlite3
 import threading
 from typing import Any, Iterable
 
 from core.config import settings
 from core.logger import get_logger
+from core.state_lock import state_lock
 
 logger = get_logger("gatekeeper.audit_store")
 
@@ -57,6 +24,8 @@ logger = get_logger("gatekeeper.audit_store")
 # This lock only serialises the cheap schema-ensure + insert, so a burst of
 # concurrent audit writes cannot interleave a half-created schema.
 _write_lock = threading.Lock()
+_schema_lock = threading.Lock()
+_schema_identities: dict[str, tuple[int, int] | None] = {}
 
 KNOWN_EVENT_TYPES = ("input_assessment", "output_assessment", "gateway_call", "tool_call")
 
@@ -100,7 +69,6 @@ CREATE TABLE IF NOT EXISTS legacy_event (
 );
 """
 
-# request_id / tenant / event_type / timestamp — the four the roadmap names.
 _INDEXES = [
     ("input_assessment", "request_id"), ("input_assessment", "tenant"),
     ("input_assessment", "timestamp"), ("input_assessment", "event_type"),
@@ -141,20 +109,23 @@ _COLUMNS: dict[str, tuple[str, ...]] = {
     "output_assessment": (
         "timestamp", "request_id", "tenant", "capability", "decision",
         "response_hash", "pii_leakage", "secrets_detected", "toxicity_detected",
-        "hallucination_detected", "system_prompt_leak_detected", "source"),
+        "hallucination_detected", "system_prompt_leak_detected", "source", "toxicity_assessed", "toxicity_status"),
     "gateway_call": (
         "timestamp", "request_id", "tenant", "capability", "provider", "model",
         "success", "latency_ms", "decision", "usage_json", "error"),
     "tool_call": (
         "timestamp", "request_id", "tenant", "capability", "tool", "decision",
-        "risk_level", "reason", "arguments_hash", "success", "error"),
+        "risk_level", "reason", "arguments_hash", "success", "error", "phase"),
 }
 
 _BOOL_COLUMNS = {
     "educational_context", "symbolic_triggered", "judge_invoked", "pii_leakage",
     "secrets_detected", "toxicity_detected", "hallucination_detected",
-    "system_prompt_leak_detected", "success",
+    "system_prompt_leak_detected", "success", "toxicity_assessed",
 }
+
+for _event_type in _COLUMNS:
+    _COLUMNS[_event_type] += ("event_id", "policy_digest")
 
 
 def _db_path(path: str | None) -> str:
@@ -164,15 +135,38 @@ def _db_path(path: str | None) -> str:
 def _connect(path: str | None = None) -> sqlite3.Connection:
     conn = sqlite3.connect(_db_path(path), timeout=5.0)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    conn.executescript(_SCHEMA)
-    for table, col in _INDEXES:
-        conn.execute(
-            f"CREATE INDEX IF NOT EXISTS ix_{table}_{col} ON {table}({col})"
-        )
-    conn.executescript(_VIEW)
-    return conn
+    try:
+        conn.execute("PRAGMA synchronous=FULL")
+        database_path = _db_path(path)
+        with _schema_lock:
+            stat = os.stat(database_path) if database_path != ':memory:' else None
+            identity = (stat.st_dev, stat.st_ino) if stat else None
+            if identity is None or _schema_identities.get(os.path.abspath(database_path)) != identity:
+                with state_lock(database_path) if database_path != ':memory:' else nullcontext():
+                    conn.execute("PRAGMA journal_mode=WAL")
+                    conn.executescript(_SCHEMA)
+                    migrations = {
+                        "tool_call": {"phase": "TEXT"},
+                        "output_assessment": {"toxicity_assessed": "INTEGER", "toxicity_status": "TEXT"},
+                    }
+                    for table in _COLUMNS:
+                        migrations.setdefault(table, {}).update({"event_id": "TEXT", "policy_digest": "TEXT"})
+                    for table, additions in migrations.items():
+                        columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+                        for column, kind in additions.items():
+                            if column not in columns:
+                                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
+                    conn.commit()
+                    for table, col in _INDEXES:
+                        conn.execute(
+                            f"CREATE INDEX IF NOT EXISTS ix_{table}_{col} ON {table}({col})"
+                        )
+                    conn.executescript(_VIEW)
+                _schema_identities[os.path.abspath(database_path)] = identity
+        return conn
+    except BaseException:
+        conn.close()
+        raise
 
 
 def _coerce_row(event_type: str, entry: dict[str, Any]) -> list[Any]:

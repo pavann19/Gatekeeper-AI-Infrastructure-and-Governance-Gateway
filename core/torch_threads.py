@@ -1,16 +1,8 @@
-"""
-Pins torch's thread pools before any model loads. Must be imported before
-the first `import torch` anywhere in the process (transitively, via
-transformers/sentence-transformers) — torch's thread pools initialize on
-first use and cannot be resized afterward.
+"""Configure Torch thread limits before model imports.
 
-See core/config.py's TORCH_INTRA_OP_THREADS/TORCH_INTER_OP_THREADS
-docstring and docs/perf/01-baseline-analysis.md for why this exists:
-8 detectors dispatched in parallel per assessment x up to
-ASSESS_MAX_CONCURRENCY concurrent assessments x torch's own unpinned
-default (6 intra-op threads on this box) oversubscribes a 12-core machine
-by design, not by accident.
-"""
+Assessment and detector pools already provide outer concurrency. Explicit
+intra/inter-op limits reduce nested CPU oversubscription. This module is
+imported before Torch-backed models; settings remain deployment-specific."""
 from __future__ import annotations
 
 from core.config import settings

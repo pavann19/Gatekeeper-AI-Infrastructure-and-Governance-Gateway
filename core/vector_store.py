@@ -62,14 +62,14 @@ class ScalableVectorStore:
         """Computes the semantic centroid of the store's vectors."""
         if not self.texts:
             return None
-            
+
         vectors = []
         for t in self.texts:
             vectors.append(get_embedding(t).cpu().numpy())
-            
+
         if not vectors:
             return None
-            
+
         centroid = np.mean(vectors, axis=0)
         # Normalize to L2 so we can compute inner product easily
         import faiss  # noqa: PLC0415

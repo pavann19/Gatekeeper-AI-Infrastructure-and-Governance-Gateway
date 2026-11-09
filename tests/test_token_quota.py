@@ -1,4 +1,4 @@
-"""Unit tests for core/token_quota.py (Phase 5: token accounting)."""
+"""Unit tests for core/token_quota.py (implementation: token accounting)."""
 from core.token_quota import TokenQuotaTracker, extract_total_tokens
 
 

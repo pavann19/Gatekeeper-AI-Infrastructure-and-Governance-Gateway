@@ -1,36 +1,7 @@
-"""
-Dry-runs a CANDIDATE policy file against historical traffic, before it is
-deployed (Phase 3, Policy-as-Code roadmap item: "Simulation").
+"""Compare a candidate policy against recorded capability/risk/tenant triples.
 
-WHAT IT ACTUALLY REPLAYS
---------------------------
-Real audit records from AUDIT_LOG_PATH (default: audit.jsonl) -- each
-input-assessment record already carries exactly the three inputs
-policy_decision() needs: capability, risk, tenant (see
-core/logger.py::log_event's schema). This script re-evaluates every one of
-those historical (capability, risk, tenant) triples under the CANDIDATE
-policy file and diffs the result against what was ACTUALLY decided at the
-time, without ever mutating the live policy store core/policy.py's module-
-global `_store` represents -- policy_decision()'s `store=` parameter exists
-specifically for this.
-
-WHAT IT DOES NOT DO
----------------------
-Does not re-run detection. If the candidate policy would only ever be
-evaluated against risk levels the fusion pipeline actually produces, this
-sees exactly that distribution, for real, from real traffic -- not a
-synthetic one. It cannot tell you how a policy change interacts with a
-FUTURE detection change; that is a different, undecidable question this
-tool does not attempt.
-
-Output-assessment audit records (event_type="output_assessment") carry no
-`risk` field and are skipped -- this simulates INPUT policy only, matching
-what core/policy.py::policy_decision governs.
-
-Usage:
-    python -m scripts.simulate_policy candidate_policy_rules.yaml
-    python -m scripts.simulate_policy candidate_policy_rules.yaml --audit-log audit.jsonl
-"""
+Does not re-run detection or change the live policy. Requires local audit
+data; historical decisions are not fresh model evaluations."""
 import argparse
 import json
 import sys

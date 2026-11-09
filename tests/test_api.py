@@ -8,7 +8,7 @@ client = TestClient(app)
 def test_assess_endpoint_clean(mock_assess_risk):
     # Mock assess_risk to return low risk so we don't trigger ML models in unit tests
     mock_assess_risk.return_value = ("LOW", {"semantic_score": 0.1, "source": "mock"})
-    
+
     response = client.post("/api/v1/assess", json={"prompt": "Hello world"})
     assert response.status_code == 200
     data = response.json()
@@ -44,6 +44,19 @@ def test_assess_defaults_topicality_when_absent(mock_assess_risk):
     assert response.json()["topicality"] == "UNKNOWN"
 
 
+def test_health_does_not_initialize_embedding_model():
+    import core.embeddings as embeddings
+
+    with patch.object(embeddings, '_model', None), patch.object(
+        embeddings, '_get_model', side_effect=AssertionError('health loaded a model')
+    ) as loader, patch('api.main._probe_judge_backend', return_value=False):
+        response = client.get('/health')
+    assert response.status_code == 200
+    assert response.json()['checks']['embedding_model'] is False
+    assert response.json()['status'] == 'degraded'
+    loader.assert_not_called()
+
+
 def test_health_check():
     """/health reports per-dependency status; overall status degrades if any fail.
 
@@ -66,7 +79,7 @@ def test_health_check():
     assert data["status"] == ("healthy" if all(data["checks"].values()) else "degraded")
 
 
-# --- Phase 8 hardening: /health consults the circuit breaker instead of -----
+# --- /health consults the circuit breaker instead of -----
 # --- always making a fresh network call (found via a real load test showing
 # --- /health latency badly degrading under concurrency when Ollama is down)
 
@@ -129,7 +142,7 @@ def test_health_still_probes_when_breaker_is_closed():
     assert response.json()["checks"]["semantic_judge"] is True
 
 
-def test_health_check_fast_when_judge_unreachable():
+def test_health_check_fast_when_judge_unreachable(monkeypatch):
     """When the judge backend is unreachable (and breaker closed), /health must:
     (a) return 200,
     (b) report semantic_judge: False,
@@ -138,6 +151,7 @@ def test_health_check_fast_when_judge_unreachable():
     import time
     import api.main as m
     from core.circuit_breaker import ollama_judge_breaker
+    monkeypatch.setattr('core.config.OLLAMA_API_URL', 'http://127.0.0.1:1/api/generate')
     ollama_judge_breaker.reset()
     m._health_probe_cache = (None, 0.0)  # force a real probe (which will fail -> False)
 
@@ -151,13 +165,14 @@ def test_health_check_fast_when_judge_unreachable():
     assert elapsed < 3.0, f"/health took {elapsed:.3f}s when judge was unreachable; must be < 3.0s"
 
 
-def test_health_check_probe_result_is_cached():
+def test_health_check_probe_result_is_cached(monkeypatch):
     """A burst of /health calls must not each pay the judge-probe timeout —
     after the first probe, subsequent calls within the TTL reuse the result
     and return in single-digit ms."""
     import time
     import api.main as m
     from core.circuit_breaker import ollama_judge_breaker
+    monkeypatch.setattr('core.config.OLLAMA_API_URL', 'http://127.0.0.1:1/api/generate')
 
     ollama_judge_breaker.reset()
     m._health_probe_cache = (None, 0.0)  # force a fresh probe on the first call

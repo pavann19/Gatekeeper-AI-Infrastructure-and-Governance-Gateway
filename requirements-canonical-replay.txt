@@ -1,0 +1,16 @@
+# Critical offline replay pins; install in a separate provisioned runtime.
+# These pins are not a complete clean-install deployment lock.
+torch==2.6.0
+transformers==5.2.0
+sentence-transformers==5.2.0
+huggingface-hub==1.33.0
+numpy==2.4.4
+tokenizers==0.22.2
+safetensors==0.8.0
+
+faiss-cpu==1.14.2
+requests==2.34.2
+pydantic-settings==2.5.2
+python-dotenv==1.2.3
+python-json-logger==3.3.0
+prometheus-client==0.21.1

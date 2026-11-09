@@ -1,31 +1,9 @@
-"""
-Closed-loop concurrency benchmark for POST /api/v1/assess.
+"""Closed-loop HTTP assessment load harness.
 
-Fixes every problem the previous benchmarks/run_load_test.py had:
-  - fixed seed / fixed workload (workload_v1.jsonl, hash-verified before run)
-  - closed-loop concurrency (N workers, each immediately re-issuing on
-    completion) at fixed levels, not an open-loop RPS ramp
-  - a warm-up period, discarded from the measured window
-  - sends Authorization: Bearer <key> -- an anonymous caller is capped at
-    RATE_LIMIT_ANONYMOUS_RPM (20 RPM vs 120 authenticated; see
-    core/config.py), which would measure the rate limiter, not the pipeline
-  - one real f-string newline in every print, not a literal "\\n"
-
-    PYTHONPATH=. python benchmarks/load/assess_bench.py \\
-        --api-key "$GATEKEEPER_BENCH_API_KEY" \\
-        --concurrency 1,4,16 --duration 60 --warmup 10 \\
-        --judge-label enabled
-
-Requires a Gatekeeper API already running (same checkout as this script --
-see --repo-root) and reachable at --base-url. Provision a benchmark key
-first:
-
-    PYTHONPATH=. python scripts/manage_api_keys.py issue \\
-        --capability INTERNAL --tenant benchmark --label "load-test"
-
-Writes one JSON file per concurrency level to
-  _evidence/perf/<git-sha>-<concurrency>.json
-"""
+Requires an already running, identified server and a matching hash-verified
+workload. Warm-up is excluded from the measured window. Use an authenticated
+key and record admission/error rates, judge state, source and model identities.
+Harness metadata does not attest a remote server. See docs/EVALUATION.md."""
 from __future__ import annotations
 
 import argparse
@@ -136,9 +114,7 @@ def collect_environment_metadata() -> dict:
             "intra_op": torch_threads,
             "inter_op": torch_interop_threads,
             "OMP_NUM_THREADS_env": os.environ.get("OMP_NUM_THREADS"),
-            "note": "no explicit torch.set_num_threads() call exists in this "
-                    "codebase as of this run -- these are torch's own defaults, "
-                    "not a deliberate setting. See docs/perf/01-baseline-analysis.md.",
+            "note": "Harness process thread settings; server thread identity must be verified separately.",
         },
         "model_revisions": model_revisions,
     }

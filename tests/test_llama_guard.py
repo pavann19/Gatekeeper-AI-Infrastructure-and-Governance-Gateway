@@ -326,10 +326,7 @@ def test_memory_precheck_blocks_load(monkeypatch):
 # --- registry ---------------------------------------------------------------
 
 def test_llama_guard_registered_for_harmful_content():
-    """
-    harmful_content is the class every other detector misses (best 36.2%).
-    A detector built for that construct must be present in the registry.
-    """
+    """Tests for llama guard."""
     reg = get_registry()
     assert "llama_guard_3_1b" in reg
     assert CLASS_HARMFUL in reg["llama_guard_3_1b"].targets

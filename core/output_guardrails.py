@@ -50,51 +50,85 @@ def check_system_prompt_leakage(response_text: str, system_prompt: str,
     (the actual incident). Sliding-window substring matching answers the
     second question directly.
     """
-    if not system_prompt or len(system_prompt) < min_run:
+    if min_run < 1:
+        raise ValueError("min_run must be positive")
+    if not system_prompt or min(len(system_prompt), len(response_text)) < min_run:
         return False
-    for i in range(len(system_prompt) - min_run + 1):
-        if system_prompt[i:i + min_run] in response_text:
+    # A suffix automaton finds the longest common substring in linear time
+    # and space. It avoids re-scanning a 50k response for each prompt window.
+    transitions: list[dict[str, int]] = [{}]
+    links = [-1]
+    lengths = [0]
+    last = 0
+    for char in system_prompt:
+        current = len(transitions)
+        transitions.append({})
+        lengths.append(lengths[last] + 1)
+        links.append(0)
+        previous = last
+        while previous >= 0 and char not in transitions[previous]:
+            transitions[previous][char] = current
+            previous = links[previous]
+        if previous >= 0:
+            target = transitions[previous][char]
+            if lengths[previous] + 1 == lengths[target]:
+                links[current] = target
+            else:
+                clone = len(transitions)
+                transitions.append(dict(transitions[target]))
+                lengths.append(lengths[previous] + 1)
+                links.append(links[target])
+                while previous >= 0 and transitions[previous].get(char) == target:
+                    transitions[previous][char] = clone
+                    previous = links[previous]
+                links[target] = links[current] = clone
+        last = current
+    state = matched = 0
+    for char in response_text:
+        while state and char not in transitions[state]:
+            state = links[state]
+            matched = lengths[state]
+        if char in transitions[state]:
+            state = transitions[state][char]
+            matched += 1
+        else:
+            matched = 0
+        if matched >= min_run:
             return True
     return False
 
 
-def assess_output(response_text: str, system_prompt: str = None, tenant_config=None) -> tuple:
+def assess_output(response_text: str, system_prompt: str | None = None, tenant_config=None) -> tuple:
     """
-    Evaluates the LLM's response before it is returned to the user.
+        Evaluates the LLM's response before it is returned to the user.
 
-    Checks, in order (cheapest/most severe first, mirroring core/risk.py's
-    own hard-veto-before-expensive-checks shape):
-    1. Secrets (API keys, tokens, private key blocks) — BLOCK. No safe
-       partial version of a leaked credential exists, so there is nothing to
-       redact-and-continue here, unlike PII below.
-    2. System-prompt leakage (only if `system_prompt` was supplied) — BLOCK.
-    3. PII — REDACT AND CONTINUE, not block (Phase 2, Output Security). The
-       previous behaviour blocked the entire response over a single
-       incidental PII match, discarding the redaction it had already
-       computed. This mirrors the INPUT side's own behaviour
-       (core/risk.py's collect_semantic_signals runs on the PII-redacted
-       prompt, never on the raw one) rather than treating input and output
-       PII inconsistently.
-    4. Toxicity / harmful content, via Semantic Judge — BLOCK. Runs on the
-       PII-redacted text, not the raw text, for the same reason (2) redacts
-       rather than reveals: a toxicity judge does not need to see PII to do
-       its job, so there is no reason to widen exposure of it further. This
-       function only checks `verdict == "DANGEROUS"`, so any other string
-       output_judge() returns falls through to ALLOW below — that is now
-       safe rather than a silent fail-open, because output_judge() itself
-       no longer returns the bare JUDGE_OFFLINE sentinel when the primary
-       judge is down: it falls back to a fast local model first (the
-       "inverter", core/semantic_judge.py::_fallback_output_judge,
-       OUTPUT_JUDGE_FALLBACK_ENABLED in core/config.py) and only reaches
-       JUDGE_OFFLINE — and therefore ALLOW — if that fallback is also
-       unavailable.
-    5. Semantic Grounding Check (hallucination) — BLOCK. Same redacted text.
+        Checks, in order (cheapest/most severe first, mirroring core/risk.py's
+        own hard-veto-before-expensive-checks shape):
+        1. Secrets (API keys, tokens, private key blocks) — BLOCK. No safe
+           partial version of a leaked credential exists, so there is nothing to
+           redact-and-continue here, unlike PII below.
+        2. System-prompt leakage (only if `system_prompt` was supplied) — BLOCK.
+        3. PII — REDACT AND CONTINUE, not block (implementation). The
+           previous behaviour blocked the entire response over a single
+           incidental PII match, discarding the redaction it had already
+           computed. This mirrors the INPUT side's own behaviour
+           (core/risk.py's collect_semantic_signals runs on the PII-redacted
+           prompt, never on the raw one) rather than treating input and output
+           PII inconsistently.
+        4. Toxicity / harmful content, via Semantic Judge — BLOCK. Runs on the
+           PII-redacted text, not the raw text, for the same reason (2) redacts
+           rather than reveals: a toxicity judge does not need to see PII to do
+           its job, so there is no reason to widen exposure of it further. This
+           assessment passes only for an explicit SAFE verdict. Unavailable,
+           malformed and failed judgments block release of the response.
 
-    Returns:
-        (decision, details) where decision is "ALLOW" or "BLOCK".
-        details["clean_response"] carries the PII-redacted text whenever the
-        response was not blocked outright — None if it was.
-    """
+        5. Semantic Grounding Check (hallucination) — BLOCK. Same redacted text.
+
+        Returns:
+            (decision, details) where decision is "ALLOW" or "BLOCK".
+            details["clean_response"] carries the PII-redacted text whenever the
+            response was not blocked outright — None if it was.
+        """
     details = {
         "secrets_detected": False,
         "system_prompt_leak_detected": False,
@@ -103,6 +137,8 @@ def assess_output(response_text: str, system_prompt: str = None, tenant_config=N
         "hallucination_detected": False,
         "source": "clean_pass",
         "clean_response": None,
+        "toxicity_assessed": False,
+        "toxicity_status": "NOT_ASSESSED",
     }
 
     # 1. Secret detection — hard block, no redact-and-continue (see docstring).
@@ -123,14 +159,29 @@ def assess_output(response_text: str, system_prompt: str = None, tenant_config=N
         return "BLOCK", details
 
     # 3. PII — redact and continue.
-    clean_text, redacted_info = redact_pii(response_text, tenant_config=tenant_config)
+    try:
+        clean_text, redacted_info = redact_pii(response_text, tenant_config=tenant_config)
+    except Exception:
+        details["source"] = "privacy_unavailable_fail_closed"
+        return "BLOCK", details
     if redacted_info.get("pii_found"):
         logger.info(f"Output PII redacted (not blocked). Source: {redacted_info.get('source')}")
         details["pii_leakage"] = True
         details["redacted_items"] = redacted_info.get("items")
 
     # 4. Toxicity Check via Local LLM Judge — on the redacted text.
-    verdict = output_judge(clean_text)
+    try:
+        verdict = output_judge(clean_text)
+    except TimeoutError:
+        verdict = "JUDGE_TIMEOUT"
+    except Exception:
+        verdict = "JUDGE_ERROR"
+    if verdict not in ("SAFE", "DANGEROUS"):
+        details["toxicity_status"] = verdict if verdict in ("JUDGE_OFFLINE", "JUDGE_ERROR", "JUDGE_TIMEOUT") else "INVALID_VERDICT"
+        details["source"] = "toxicity_unavailable_fail_closed"
+        return "BLOCK", details
+    details["toxicity_assessed"] = True
+    details["toxicity_status"] = verdict
     if verdict == "DANGEROUS":
         logger.warning("🚫 OUTPUT BLOCKED: Semantic Judge classified response as TOXIC/HARMFUL.")
         details["toxicity_detected"] = True

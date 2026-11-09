@@ -56,7 +56,7 @@ def test_get_model_returns_same_cached_instance(monkeypatch):
     fake = _FakeModel()
     load_calls = {"n": 0}
 
-    def fake_constructor(name):
+    def fake_constructor(name, revision=None):
         load_calls["n"] += 1
         return fake
 
@@ -75,9 +75,11 @@ def test_get_model_returns_same_cached_instance(monkeypatch):
 def test_get_model_uses_configured_embedding_model_name(monkeypatch):
     _reset_model_cache(monkeypatch)
     seen_names = []
+    seen_revisions = []
 
-    def fake_constructor(name):
+    def fake_constructor(name, revision=None):
         seen_names.append(name)
+        seen_revisions.append(revision)
         return _FakeModel()
 
     monkeypatch.setattr(
@@ -85,12 +87,13 @@ def test_get_model_uses_configured_embedding_model_name(monkeypatch):
     )
     embeddings_mod._get_model()
     assert seen_names == [embeddings_mod.EMBEDDING_MODEL]
+    assert seen_revisions == [embeddings_mod.DEFAULT_EMBEDDING_REVISION]
 
 
 def test_model_load_failure_propagates_and_does_not_cache(monkeypatch):
     _reset_model_cache(monkeypatch)
 
-    def failing_constructor(name):
+    def failing_constructor(name, revision=None):
         raise OSError("model not found")
 
     monkeypatch.setattr(
@@ -204,11 +207,8 @@ def test_cosine_similarity_returns_python_float():
     assert isinstance(result, float)
 
 
-# --- Integration: real cached all-mpnet-base-v2 model -------------------------
-# EMBEDDING_MODEL's default is already present in this machine's HF cache
-# (no network download needed), so these exercise the real encode() path
-# rather than only the fake stand-in above.
 
+@pytest.mark.integration
 def test_real_model_produces_768_dim_vector_for_mpnet(monkeypatch):
     _reset_model_cache(monkeypatch)
     vec = get_embedding("The quick brown fox jumps over the lazy dog.")
@@ -216,6 +216,7 @@ def test_real_model_produces_768_dim_vector_for_mpnet(monkeypatch):
     assert vec.shape == (768,)  # all-mpnet-base-v2's known output dimensionality
 
 
+@pytest.mark.integration
 def test_real_model_is_deterministic_across_calls(monkeypatch):
     _reset_model_cache(monkeypatch)
     v1 = get_embedding("Deterministic embedding check.")
@@ -223,6 +224,7 @@ def test_real_model_is_deterministic_across_calls(monkeypatch):
     assert torch.equal(v1, v2)
 
 
+@pytest.mark.integration
 def test_real_model_semantic_similarity_ranks_related_text_higher(monkeypatch):
     _reset_model_cache(monkeypatch)
     anchor = get_embedding("The cat sat on the mat.")
@@ -234,12 +236,14 @@ def test_real_model_semantic_similarity_ranks_related_text_higher(monkeypatch):
     assert sim_related > sim_unrelated
 
 
+@pytest.mark.integration
 def test_real_model_handles_empty_string_without_error(monkeypatch):
     _reset_model_cache(monkeypatch)
     vec = get_embedding("")
     assert vec.shape == (768,)
 
 
+@pytest.mark.integration
 def test_real_model_second_get_model_call_reuses_cached_instance(monkeypatch):
     _reset_model_cache(monkeypatch)
     m1 = embeddings_mod._get_model()

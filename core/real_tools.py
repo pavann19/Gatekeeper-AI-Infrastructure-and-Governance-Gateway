@@ -16,8 +16,9 @@ port scan or cloud-metadata-endpoint read (`169.254.169.254`, the
 classic SSRF target). This tool therefore also resolves the hostname
 itself and rejects the call if ANY resolved address is private,
 loopback, link-local, or otherwise non-global — checked at CALL TIME,
-not once at startup, so a rebinding attempt between calls doesn't slip
-through a cached "safe" verdict.
+not once at startup. The connection uses the validated socket address
+directly, avoiding a second DNS lookup. Host and TLS verification retain
+the original hostname. A killable worker bounds DNS and streaming together.
 
 Redirects are not followed (`allow_redirects=False`): a 3xx response
 pointing somewhere off the allowlist would otherwise be a clean bypass
@@ -44,6 +45,11 @@ precisely that: the schema correctly validated `url` as a string; this
 handler is what knows which strings are actually acceptable.
 """
 from __future__ import annotations
+
+import http.client
+import multiprocessing
+import ssl
+import time
 
 import ipaddress
 import socket
@@ -81,6 +87,8 @@ def _resolved_addresses_are_all_public(hostname: str) -> bool:
     except socket.gaierror:
         return False
 
+    if not infos:
+        return False
     for info in infos:
         ip_str = info[4][0]
         try:
@@ -112,38 +120,107 @@ def _http_get(url: str) -> dict:
     if hostname not in allowed:
         raise DisallowedURLError(f"hostname {hostname!r} is not in the configured allowlist")
 
-    if not _resolved_addresses_are_all_public(hostname):
-        raise DisallowedURLError(
-            f"hostname {hostname!r} resolved to a private/loopback/reserved address "
-            f"-- refusing to fetch (possible DNS rebinding)"
-        )
+    if parts.username is not None or parts.password is not None:
+        raise DisallowedURLError("URL credentials are forbidden")
+    return _isolated_fetch(url, REQUEST_TIMEOUT_SECONDS)
 
-    import requests
 
-    response = requests.get(
-        url, timeout=REQUEST_TIMEOUT_SECONDS, allow_redirects=False, stream=True,
-    )
+def _pinned_fetch(url, timeout):
+    deadline = time.monotonic() + timeout
+    parts = urlsplit(url)
+    host = parts.hostname
+    port = parts.port or (443 if parts.scheme == "https" else 80)
+    infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    if not infos or any(not ipaddress.ip_address(info[4][0]).is_global
+                        or ipaddress.ip_address(info[4][0]).is_multicast for info in infos):
+        raise DisallowedURLError("Destination is not exclusively public")
+    family, socktype, proto, _, sockaddr = infos[0]
+
+    def remaining():
+        seconds = deadline - time.monotonic()
+        if seconds <= 0:
+            raise TimeoutError("Fetch deadline exceeded")
+        return seconds
+
+    class PinnedConnection(http.client.HTTPConnection):
+        default_port = 443 if parts.scheme == "https" else 80
+
+        def connect(self):
+            self.sock = socket.socket(family, socktype, proto)
+            try:
+                self.sock.settimeout(remaining())
+                self.sock.connect(sockaddr)
+                if parts.scheme == "https":
+                    # Default context validates the certificate against the ORIGINAL hostname.
+                    self.sock = ssl.create_default_context().wrap_socket(self.sock, server_hostname=host)
+            except Exception:
+                self.sock.close()
+                raise
+
+    connection = PinnedConnection(host, port, timeout=remaining())
     try:
+        target = parts.path or "/"
+        if parts.query:
+            target += "?" + parts.query
+        connection.request("GET", target, headers={"Connection": "close"})
+        response = connection.getresponse()
         chunks = []
-        total = 0
-        truncated = False
-        for chunk in response.iter_content(chunk_size=8192):
-            total += len(chunk)
-            if total > MAX_RESPONSE_BYTES:
-                truncated = True
+        size = 0
+        while size <= MAX_RESPONSE_BYTES:
+            remaining()
+            chunk = response.read1(min(8192, MAX_RESPONSE_BYTES + 1 - size))
+            if not chunk:
                 break
             chunks.append(chunk)
+            size += len(chunk)
+        remaining()
         body = b"".join(chunks)
+        return {"status_code": response.status, "url": url,
+                "content": body[:MAX_RESPONSE_BYTES].decode("utf-8", errors="replace"),
+                "truncated": size > MAX_RESPONSE_BYTES,
+                "content_type": response.getheader("Content-Type")}
     finally:
-        response.close()
+        connection.close()
 
-    return {
-        "status_code": response.status_code,
-        "url": url,
-        "content": body.decode("utf-8", errors="replace"),
-        "truncated": truncated,
-        "content_type": response.headers.get("Content-Type"),
-    }
+
+def _fetch_worker(pipe, url, timeout):
+    try:
+        pipe.send(("ok", _pinned_fetch(url, timeout)))
+    except DisallowedURLError:
+        pipe.send(("disallowed", None))
+    except Exception:
+        pipe.send(("failed", None))
+    finally:
+        pipe.close()
+
+
+def _isolated_fetch(url, timeout, _worker=None):
+    # A killable process bounds DNS, connect, TLS and slow streaming together.
+    deadline = time.monotonic() + timeout
+    context = multiprocessing.get_context("spawn")
+    reader, writer = context.Pipe(duplex=False)
+    process = context.Process(target=_worker or _fetch_worker, args=(writer, url, timeout), daemon=True)
+    try:
+        process.start()
+        writer.close()
+        if not reader.poll(max(0, deadline - time.monotonic())):
+            raise TimeoutError("Fetch deadline exceeded")
+        status, result = reader.recv()
+        if time.monotonic() >= deadline:
+            raise TimeoutError("Fetch deadline exceeded")
+        if status == "disallowed":
+            raise DisallowedURLError("Destination is not exclusively public")
+        if status != "ok":
+            raise RuntimeError("Outbound fetch failed")
+        return result
+    finally:
+        reader.close()
+        writer.close()
+        if process.pid is not None:
+            if process.is_alive():
+                process.terminate()
+            process.join(timeout=1)
+            process.close()
 
 
 HTTP_GET_SPEC = ToolSpec(

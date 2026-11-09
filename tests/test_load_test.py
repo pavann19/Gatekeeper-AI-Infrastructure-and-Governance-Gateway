@@ -1,10 +1,4 @@
-"""
-Tests for scripts/load_test.py's aggregation logic (percentiles, throughput,
-status histogram) -- the actual HTTP layer (`_one_request`) is mocked here
-so these run without a live server; the tool itself was additionally run
-against a real running instance (see docs/ROADMAP_V2.md's Phase 8 entry)
-to produce real evidence, which is what a unit test alone can't prove.
-"""
+"""Tests for the HTTP load utility and result accounting."""
 from unittest.mock import patch
 
 from scripts.load_test import run_load_test

@@ -1,39 +1,8 @@
-"""
-Builds the taxonomy-labeled, multi-source evaluation suite.
+"""Assemble a taxonomy-labeled evaluation suite from upstream datasets.
 
-WHY THIS EXISTS
----------------
-The project previously published metrics from a single 546-prompt dataset. That
-is inadequate for three reasons, all of which this script addresses:
-
-1. TAXONOMY. "Prompt injection" (instruction override), "jailbreak" (persona and
-   roleplay attacks that defeat the safety policy) and "harmful content"
-   (requests for dangerous information) are three distinct problems. A single
-   pooled score hides which one a system is bad at. Every row here carries an
-   `attack_class`, so metrics can be reported per class.
-
-2. SINGLE SOURCE. One dataset measures one distribution and will not generalise.
-   This pulls from every reachable public source and records provenance per row.
-
-3. LANGUAGE. The original dataset is largely German while the configured encoder
-   is English-only, which was the dominant cause of missed detections. Every row
-   is language-tagged so that effect is measurable rather than confounding.
-
-DESIGN NOTES
-------------
-- Sources that are gated, removed, or unreachable are SKIPPED, not fatal. Every
-  skip is recorded in the manifest with its reason, so the suite is always
-  reproducible and never silently smaller than it claims to be.
-- Rows are deduplicated on normalised text across ALL sources. Several public
-  injection datasets are forks of each other (JasperLS/prompt-injections is a
-  copy of deepset/prompt-injections); without dedup the overlap would be
-  double-counted and inflate whichever class it belongs to.
-- Per-source caps keep the suite runnable. Sampling is seeded and recorded.
-
-Usage:
-    python -m scripts.build_eval_suite
-    python -m scripts.build_eval_suite --benign-cap 2000
-"""
+Rows carry source, label, attack class and language. Outputs are local.
+Upstream revisions are not a reconstruction of the frozen canonical suite;
+record revisions/licenses and independent splits before publishing metrics."""
 import argparse
 import hashlib
 import json
@@ -172,16 +141,7 @@ def _src_jbb_behaviors(load):
 
 
 def _src_rikka_snow_multilingual(load):
-    """
-    Genuinely multilingual (de/en, plus others) prompt-injection dataset with
-    a matched benign class in each language -- added specifically to close
-    the "German-specific detection gap" roadmap item (docs/ROADMAP_V2.md
-    Phase 1), which was blocked on data volume: the original suite had only
-    234 German rows (74 attacks) total, too thin to fit a dedicated
-    threshold. Sampled at build_eval_suite.py's own detect_language() shows
-    ~2500 of this source's rows are German, roughly 10x this suite's prior
-    German attack volume on its own.
-    """
+    """Implementation of  src rikka snow multilingual."""
     for split in ("train", "test"):
         ds = load("rikka-snow/prompt-injection-multilingual", split=split)
         for row in ds:

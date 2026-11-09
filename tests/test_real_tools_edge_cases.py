@@ -40,151 +40,116 @@ def _allowlist(monkeypatch):
                         "example.com,api.example.org")
 
 
+
+def _exchange(status=200, body=b"ok", content_type=None, read_error=None):
+    import io
+    from core.real_tools import _pinned_fetch
+    sock = MagicMock()
+    headers = f"HTTP/1.1 {status} Response\r\nContent-Length: {len(body)}\r\n"
+    if content_type:
+        headers += f"Content-Type: {content_type}\r\n"
+    if read_error:
+        class BrokenStream(io.BytesIO):
+            def read1(self, *args):
+                raise read_error
+        reader = BrokenStream((headers + "\r\n").encode() + body)
+    else:
+        reader = io.BytesIO((headers + "\r\n").encode() + body)
+    sock.makefile.return_value = reader
+    with patch("socket.getaddrinfo", return_value=_fake_addrinfo("93.184.216.34")), \
+         patch("socket.socket", return_value=sock), patch("ssl.create_default_context") as tls:
+        tls.return_value.wrap_socket.return_value = sock
+        try:
+            result = _pinned_fetch("https://example.com/", 2)
+        finally:
+            sock.close.assert_called_once()
+    return result, sock
+
 # --- timeout handling -----------------------------------------------------
 
 def test_timeout_propagates_as_a_real_exception(monkeypatch):
-    """The handler does not catch requests' own exceptions -- a timeout
-    must surface to the caller as a requests.exceptions.Timeout, not be
-    swallowed or converted into a DisallowedURLError."""
-    monkeypatch.setattr("core.real_tools._resolved_addresses_are_all_public", lambda h: True)
-    with patch("requests.get", side_effect=requests.exceptions.Timeout("timed out")):
-        with pytest.raises(requests.exceptions.Timeout):
+    with patch("core.real_tools._isolated_fetch", side_effect=TimeoutError("timed out")):
+        with pytest.raises(TimeoutError):
             _http_get("https://example.com/")
 
 
 def test_timeout_surfaces_through_execute_tool_as_allow_with_error(monkeypatch):
-    """core/tools.py::execute_tool wraps any handler exception into an
-    ALLOW decision carrying an `error` string -- verifying the real,
-    observable behavior a caller of the full pipeline actually sees for
-    a timed-out request."""
-    monkeypatch.setattr("core.real_tools._resolved_addresses_are_all_public", lambda h: True)
     reg = ToolRegistry()
     register_real_tools(reg)
-    with patch("requests.get", side_effect=requests.exceptions.Timeout("timed out")):
+    with patch("core.real_tools._isolated_fetch", side_effect=TimeoutError("private diagnostic")):
         result = execute_tool("ELEVATED", "http.get", {"url": "https://example.com/"}, registry=reg)
-    assert result["decision"] == "ALLOW"
-    assert "Timeout" in result["error"]
+    assert result["decision"] == "ALLOW" and "TimeoutError" in result["error"]
+    assert "private diagnostic" not in result["error"]
 
 
 # --- connection-error handling ---------------------------------------------
 
 def test_connection_error_propagates_as_a_real_exception(monkeypatch):
-    monkeypatch.setattr("core.real_tools._resolved_addresses_are_all_public", lambda h: True)
-    with patch("requests.get", side_effect=requests.exceptions.ConnectionError("refused")):
-        with pytest.raises(requests.exceptions.ConnectionError):
+    with patch("core.real_tools._isolated_fetch", side_effect=RuntimeError("Outbound fetch failed")):
+        with pytest.raises(RuntimeError):
             _http_get("https://example.com/")
 
 
 def test_connection_error_surfaces_through_execute_tool_as_allow_with_error(monkeypatch):
-    monkeypatch.setattr("core.real_tools._resolved_addresses_are_all_public", lambda h: True)
     reg = ToolRegistry()
     register_real_tools(reg)
-    with patch("requests.get", side_effect=requests.exceptions.ConnectionError("refused")):
+    with patch("core.real_tools._isolated_fetch", side_effect=RuntimeError("private diagnostic")):
         result = execute_tool("ELEVATED", "http.get", {"url": "https://example.com/"}, registry=reg)
-    assert result["decision"] == "ALLOW"
-    assert "ConnectionError" in result["error"]
-    assert "refused" in result["error"]
+    assert result["decision"] == "ALLOW" and "RuntimeError" in result["error"]
+    assert "private diagnostic" not in result["error"]
 
 
 # --- non-2xx status codes are returned as ordinary results, not errors -----
 
 @pytest.mark.parametrize("status", [404, 403, 500, 503])
 def test_non_2xx_status_codes_are_returned_not_raised(monkeypatch, status):
-    """A 4xx/5xx response is a normal, successfully-completed HTTP
-    exchange from the handler's point of view -- it must be returned as
-    data (status_code + body), never raised as an exception."""
-    monkeypatch.setattr("core.real_tools._resolved_addresses_are_all_public", lambda h: True)
-    with patch("requests.get") as mock_get:
-        mock_response = MagicMock(status_code=status, headers={"Content-Type": "text/plain"})
-        mock_response.iter_content.return_value = [b"error body"]
-        mock_get.return_value = mock_response
-        result = _http_get("https://example.com/")
-    assert result["status_code"] == status
-    assert result["content"] == "error body"
+    result, _ = _exchange(status=status, body=b"error body")
+    assert result["status_code"] == status and result["content"] == "error body"
 
 
 def test_successful_response_content_and_metadata_returned_correctly(monkeypatch):
-    monkeypatch.setattr("core.real_tools._resolved_addresses_are_all_public", lambda h: True)
-    with patch("requests.get") as mock_get:
-        mock_response = MagicMock(status_code=200, headers={"Content-Type": "application/json"})
-        mock_response.iter_content.return_value = [b'{"a": 1}']
-        mock_get.return_value = mock_response
-        result = _http_get("https://api.example.org/data")
-    assert result == {
-        "status_code": 200,
-        "url": "https://api.example.org/data",
-        "content": '{"a": 1}',
-        "truncated": False,
-        "content_type": "application/json",
-    }
+    result, _ = _exchange(body=b'{"a": 1}', content_type="application/json")
+    assert result == {"status_code": 200, "url": "https://example.com/", "content": '{"a": 1}',
+                      "truncated": False, "content_type": "application/json"}
 
 
 def test_missing_content_type_header_returns_none(monkeypatch):
-    monkeypatch.setattr("core.real_tools._resolved_addresses_are_all_public", lambda h: True)
-    with patch("requests.get") as mock_get:
-        mock_response = MagicMock(status_code=200, headers={})
-        mock_response.iter_content.return_value = [b"ok"]
-        mock_get.return_value = mock_response
-        result = _http_get("https://example.com/")
+    result, _ = _exchange()
     assert result["content_type"] is None
 
 
 def test_non_utf8_bytes_are_replaced_not_raised(monkeypatch):
-    """The handler decodes with errors='replace' -- invalid UTF-8 bytes
-    must not raise UnicodeDecodeError, and should show up as the
-    replacement character rather than being silently dropped."""
-    monkeypatch.setattr("core.real_tools._resolved_addresses_are_all_public", lambda h: True)
-    with patch("requests.get") as mock_get:
-        mock_response = MagicMock(status_code=200, headers={"Content-Type": "text/plain"})
-        mock_response.iter_content.return_value = [b"\xff\xfe not valid utf-8"]
-        mock_get.return_value = mock_response
-        result = _http_get("https://example.com/")
+    result, _ = _exchange(body=b"\xff\xfe not valid utf-8")
     assert "�" in result["content"]
 
 
 def test_response_is_always_closed_even_when_content_fits(monkeypatch):
-    monkeypatch.setattr("core.real_tools._resolved_addresses_are_all_public", lambda h: True)
-    with patch("requests.get") as mock_get:
-        mock_response = MagicMock(status_code=200, headers={})
-        mock_response.iter_content.return_value = [b"ok"]
-        mock_get.return_value = mock_response
-        _http_get("https://example.com/")
-    mock_response.close.assert_called_once()
+    result, sock = _exchange()
+    assert result["content"] == "ok"
+    sock.close.assert_called_once()
 
 
 def test_response_is_closed_even_when_iter_content_raises(monkeypatch):
-    """finally: response.close() must run even if streaming the body
-    itself blows up mid-read -- a resource-cleanup guarantee worth
-    pinning down since it's a `finally` block, not incidental."""
-    monkeypatch.setattr("core.real_tools._resolved_addresses_are_all_public", lambda h: True)
-    with patch("requests.get") as mock_get:
-        mock_response = MagicMock(status_code=200, headers={})
-        mock_response.iter_content.side_effect = requests.exceptions.ChunkedEncodingError("broken")
-        mock_get.return_value = mock_response
-        with pytest.raises(requests.exceptions.ChunkedEncodingError):
-            _http_get("https://example.com/")
-    mock_response.close.assert_called_once()
+    with pytest.raises(OSError):
+        _exchange(read_error=OSError("broken stream"))
 
 
 # --- DNS-rebinding defence: additional scenarios not covered elsewhere -----
 
 def test_one_private_address_among_multiple_resolved_blocks_the_call(monkeypatch):
-    """A hostname resolving to BOTH a public and a private address must
-    still be rejected -- ALL resolved addresses must be public, not just
-    the first one returned by getaddrinfo."""
-    monkeypatch.setattr(socket, "getaddrinfo",
-                         lambda host, port: _fake_addrinfo("93.184.216.34", "10.0.0.1"))
-    with pytest.raises(DisallowedURLError, match="private/loopback/reserved"):
-        _http_get("https://example.com/")
+    from core.real_tools import _pinned_fetch
+    with patch("socket.getaddrinfo", return_value=_fake_addrinfo("93.184.216.34", "10.0.0.1")), patch("socket.socket") as connect:
+        with pytest.raises(DisallowedURLError):
+            _pinned_fetch("https://example.com/", 1)
+    connect.assert_not_called()
 
 
 def test_ipv6_loopback_resolution_blocks_the_call(monkeypatch):
-    monkeypatch.setattr(
-        socket, "getaddrinfo",
-        lambda host, port: [(socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("::1", 0, 0, 0))],
-    )
-    with pytest.raises(DisallowedURLError, match="private/loopback/reserved"):
-        _http_get("https://example.com/")
+    from core.real_tools import _pinned_fetch
+    with patch("socket.getaddrinfo", return_value=[(socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("::1", 443, 0, 0))]), patch("socket.socket") as connect:
+        with pytest.raises(DisallowedURLError):
+            _pinned_fetch("https://example.com/", 1)
+    connect.assert_not_called()
 
 
 def test_all_public_addresses_directly_via_helper():
@@ -195,10 +160,6 @@ def test_all_public_addresses_directly_via_helper():
 # --- request shape: stream=True is used so the size cap can be enforced ---
 
 def test_request_uses_streaming_so_size_cap_can_be_enforced(monkeypatch):
-    monkeypatch.setattr("core.real_tools._resolved_addresses_are_all_public", lambda h: True)
-    with patch("requests.get") as mock_get:
-        mock_response = MagicMock(status_code=200, headers={})
-        mock_response.iter_content.return_value = [b""]
-        mock_get.return_value = mock_response
-        _http_get("https://example.com/")
-    assert mock_get.call_args.kwargs["stream"] is True
+    monkeypatch.setattr("core.real_tools.MAX_RESPONSE_BYTES", 4)
+    result, _ = _exchange(body=b"abcde")
+    assert result["content"] == "abcd" and result["truncated"] is True

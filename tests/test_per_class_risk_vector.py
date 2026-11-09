@@ -1,15 +1,4 @@
-"""
-Tests for surfacing the per-class risk vector (Gatekeeper 2.0 Phase 1 —
-see docs/ROADMAP_V2.md).
-
-core/fusion.py's `fused_threat_score` already computes `triggering_class`
-and `class_scores` (via `_select_per_class_verdict`) but core/risk.py
-previously dropped both before they reached `details` — the caller could
-see THAT a request was flagged HIGH, never WHAT KIND of attack fusion
-believed it was. These tests prove the two fields survive every path that
-builds a `details`/return dict in core/risk.py, including the early-return
-paths (cache/hard-ban/fast-path) where they must be present but empty.
-"""
+"""Tests for per-class threat-risk details."""
 from unittest.mock import patch
 
 import pytest

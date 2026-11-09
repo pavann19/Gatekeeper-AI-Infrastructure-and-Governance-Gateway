@@ -23,6 +23,8 @@ from core.auth import (
     resolve_principal,
 )
 
+pytestmark = pytest.mark.usefixtures("provisioned_tenants")
+
 client = TestClient(app)
 
 

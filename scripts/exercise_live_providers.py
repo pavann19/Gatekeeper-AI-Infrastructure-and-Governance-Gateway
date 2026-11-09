@@ -1,12 +1,7 @@
-"""
-Diagnostics and smoke-testing tool for live outbound LLM providers (Phase 5).
-Tests configured external endpoints (Ollama, OpenAI-compatible, Anthropic-compatible)
-with live or sandbox API credentials, reporting latency, response preview, and token accounting.
+"""Operator diagnostics for configured outbound model providers.
 
-Usage:
-    python -m scripts.exercise_live_providers --provider openai_compatible --prompt "Hello Gatekeeper"
-    python -m scripts.exercise_live_providers --all
-"""
+Uses live credentials/endpoints and reports response previews and timing.
+Run only against an owned service with non-sensitive test prompts."""
 from __future__ import annotations
 
 import argparse

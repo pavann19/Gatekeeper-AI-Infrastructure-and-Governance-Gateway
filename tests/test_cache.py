@@ -1,22 +1,4 @@
-"""
-Tests for the semantic cache — in particular the exact-match-first fix.
-
-BACKGROUND: the end-to-end benchmark (docs/ENGINEERING_ASSESSMENT.md §1g/1h)
-showed warm-cache recall collapsing to roughly the pre-fusion cold-cache
-number and FPR roughly tripling versus the fused cold-cache pass on the
-IDENTICAL prompts. scripts/diagnose_cache_threshold.py measured why: at the
-old CACHE_SIMILARITY_THRESHOLD (0.95), 9.1% of near-duplicate prompt pairs in
-deepset/prompt-injections above that threshold had OPPOSITE ground-truth
-labels — the dataset mutates a benign wrapper by inserting/removing an
-injection payload, producing nearly-identical text with an opposite verdict.
-A concrete pair from that measurement anchors the tests below.
-
-The fix has two tiers: an exact prompt-hash match (zero collision risk, always
-tried first) and a fuzzy FAISS similarity match (raised to 0.99, still not
-provably safe, only reached when the exact tier misses). These tests must
-prove tier 1 is unconditionally correct and tier 2 respects the configured
-threshold.
-"""
+"""Regression tests for exact-first and bounded fuzzy security cache lookup."""
 import time
 
 import numpy as np
@@ -26,8 +8,6 @@ from core.cache import FAISSCache
 from core.cache_backend import LocalExactCache
 
 
-# The real collision from scripts/diagnose_cache_threshold.py, similarity 0.9876:
-# nearly identical wrapper text, opposite labels (0=benign, 1=injection).
 BENIGN_VARIANT = (
     "I am looking for a new hobby and am interested in painting. However, I "
     "have no experience whatsoever. Recommend a simple project to start with."
@@ -110,8 +90,7 @@ def test_exact_match_returns_its_own_verdict_regardless_of_neighbors(cache):
     # Re-querying the exact benign text must return its OWN verdict, not the
     # near-duplicate malicious entry's, despite 0.9876 similarity between them.
     risk, score = cache.lookup(BENIGN_VARIANT, benign_vec)
-    assert risk == "LOW"
-    assert score == 0.05
+    assert (risk, score) == (None, None)  # Permissive entries require fresh assessment.
 
     risk, score = cache.lookup(MALICIOUS_VARIANT, malicious_vec)
     assert risk == "HIGH"
@@ -132,7 +111,7 @@ def test_exact_match_used_even_when_a_closer_fuzzy_neighbor_exists(cache):
     # Querying "prompt A" verbatim must return A's verdict even though B is
     # nearly identical in vector space.
     risk, _ = cache.lookup("prompt A", a_vec)
-    assert risk == "LOW"
+    assert risk is None  # A permissive nearest entry requires fresh assessment.
 
 
 def test_exact_match_respects_ttl(cache, monkeypatch):
@@ -170,7 +149,8 @@ def test_exact_match_is_lru_promoted(cache):
     cache.lookup("first", vecs[0])  # touch "first" -> moves to MRU end
 
     keys = list(cache._exact._data.keys())
-    first_hash = [k for k, v in cache._exact._data.items() if v["prompt"] == "first"][0]
+    from core.cache import _security_key
+    first_hash = _security_key("first")
     assert keys[-1] == first_hash
 
 
@@ -248,10 +228,10 @@ def test_lru_eviction_drops_oldest_when_full(cache, monkeypatch):
     cache._exact.max_size = 2
     cache.add("a", unit_vector(seed=1), "LOW", 0.1)
     cache.add("b", unit_vector(seed=2), "LOW", 0.1)
-    cache.add("c", unit_vector(seed=3), "LOW", 0.1)  # should evict "a"
+    cache.add("c", unit_vector(seed=3), "HIGH", 0.1)  # should evict "a"
 
     assert cache.lookup("a", unit_vector(seed=1)) == (None, None)
-    assert cache.lookup("c", unit_vector(seed=3))[0] == "LOW"
+    assert cache.lookup("c", unit_vector(seed=3))[0] == "HIGH"
 
 
 def test_re_adding_same_prompt_updates_rather_than_duplicates(cache):

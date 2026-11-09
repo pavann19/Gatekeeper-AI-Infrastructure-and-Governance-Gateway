@@ -1,7 +1,7 @@
 """
 Read access over the audit log (`AUDIT_LOG_PATH`, one JSON object per line,
 written by core/logger.py's four log_*_event functions) for the client
-UI's activity feed (Phase 7).
+UI's activity feed (implementation).
 
 This module only READS. Nothing here writes to the audit log or changes
 what gets recorded -- it exists purely to answer "what happened recently",
@@ -81,7 +81,7 @@ def _tail_raw_lines(
             return [], False, True, 0, b""
         return [], False, True
 
-    lines_newest_first = []
+    lines_newest_first: list[bytes] = []
     pos = file_size if start_pos is None else start_pos
     if pos <= 0:
         if return_state:
@@ -134,6 +134,9 @@ def get_recent_activity(limit=DEFAULT_LIMIT, tenant=None, event_types=None, path
     for all types (known and "legacy").
     """
     limit = max(1, min(int(limit), MAX_LIMIT))
+    if path is None and settings.STATE_BACKEND == 'postgres':
+        from core.postgres_state import get_postgres_store
+        return get_postgres_store().recent(limit=limit, tenant=tenant, event_types=event_types)
 
     # Serve from the SQLite store when it is the read authority.
     # An explicit `path` still forces the JSONL scan (tests, ad-hoc file reads).
@@ -150,7 +153,7 @@ def get_recent_activity(limit=DEFAULT_LIMIT, tenant=None, event_types=None, path
     event_type_filter = set(event_types) if event_types else None
 
     events = []
-    
+
     # Pass 1: Cheap attempt reading just enough lines for the requested limit
     raw_lines, truncated, exhausted, pos, carry = _tail_raw_lines(
         audit_path, needed=limit, max_bytes=MAX_BYTES_SCANNED, return_state=True
@@ -222,6 +225,9 @@ def find_by_request_id(request_id, tenant=None, path=None):
     of the file," a real possibility for an old request_id on a large
     log, not an edge case to hide.
     """
+    if path is None and settings.STATE_BACKEND == 'postgres':
+        from core.postgres_state import get_postgres_store
+        return get_postgres_store().recent(tenant=tenant, request_id=request_id, limit=200)
     if path is None and _sqlite_reads_enabled():
         try:
             from core import audit_store

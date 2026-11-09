@@ -9,7 +9,7 @@ from core.risk import assess_risk
 
 def test_risk_pipeline():
     print("Running Smoke Test for G3 Risk Pipeline...")
-    
+
     # Benign prompt
     print("Testing benign prompt...")
     try:
@@ -20,7 +20,7 @@ def test_risk_pipeline():
         traceback.print_exc()
         print(f"FAILED (Benign): {type(e).__name__} - {str(e)}")
         sys.exit(1)
-        
+
     # Malicious prompt
     print("Testing malicious prompt...")
     try:

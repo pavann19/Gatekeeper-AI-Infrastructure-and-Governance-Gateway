@@ -1,15 +1,4 @@
-"""
-Tests for Stage 4's Llama Guard arbitration path (core/risk.py).
-
-This is the wiring that moves Llama Guard's offline-measured harmful-content
-detection (60-63%, see docs/ENGINEERING_ASSESSMENT.md) into the live pipeline,
-without paying its per-request latency on every request: it is only invoked
-for the ambiguous zone (Stage 4), not the always-on Stage 2/3 fusion.
-
-The contract that matters most, exactly as with core/fusion.py's detector
-handling: unavailability must fall back to the Ollama judge, never silently
-produce a wrong verdict or crash the request.
-"""
+"""Tests for Llama Guard arbitration, availability and fail-closed decisions."""
 import types
 
 import pytest

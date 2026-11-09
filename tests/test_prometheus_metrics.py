@@ -18,6 +18,8 @@ from core import metrics
 from core.auth import Principal
 from core.logger import log_event
 
+pytestmark = pytest.mark.usefixtures("provisioned_tenants")
+
 client = TestClient(app)
 
 LOW_RISK = (
@@ -120,7 +122,7 @@ def test_tenant_counter_uses_the_resolved_tenant(_mock):
     )
     before = sample("gatekeeper_tenant_assessments_total", tenant="acme", decision="ALLOW")
 
-    with patch("api.main.resolve_principal", return_value=principal):
+    with patch("api.main.resolve_request_principal", return_value=principal):
         client.post("/api/v1/assess", json={"prompt": "hello"})
 
     after = sample("gatekeeper_tenant_assessments_total", tenant="acme", decision="ALLOW")
@@ -172,11 +174,11 @@ def test_unknown_source_collapses_to_other_and_is_counted():
     unrecognised source must be bucketed, and the fact that it happened must
     be visible so the omission gets fixed.
     """
-    before = sample("gatekeeper_metrics_unknown_source_total", source="brand_new_source")
+    before = sample("gatekeeper_metrics_unknown_source_total", source="unknown")
 
     assert metrics.safe_source("brand_new_source") == "other"
 
-    after = sample("gatekeeper_metrics_unknown_source_total", source="brand_new_source")
+    after = sample("gatekeeper_metrics_unknown_source_total", source="unknown")
     assert after == before + 1
 
 
@@ -263,7 +265,7 @@ def test_timeouts_are_counted(monkeypatch):
     monkeypatch.setattr("api.main.settings.ASSESS_TIMEOUT_SECONDS", 0.05)
     before = sample("gatekeeper_assessment_timeouts_total", endpoint="/api/v1/assess")
 
-    with patch("api.main.assess_risk", side_effect=lambda p, s, r=None: _time.sleep(1.0)):
+    with patch("api.main.assess_risk", side_effect=lambda p, s, r=None, tenant="default": _time.sleep(1.0)):
         response = client.post("/api/v1/assess", json={"prompt": "hello"})
 
     assert response.status_code == 503
@@ -283,7 +285,7 @@ def test_in_flight_gauge_is_decremented_even_on_timeout(monkeypatch):
 
     monkeypatch.setattr("api.main.settings.ASSESS_TIMEOUT_SECONDS", 0.05)
 
-    with patch("api.main.assess_risk", side_effect=lambda p, s, r=None: _time.sleep(0.5)):
+    with patch("api.main.assess_risk", side_effect=lambda p, s, r=None, tenant="default": _time.sleep(0.5)):
         client.post("/api/v1/assess", json={"prompt": "hello"})
 
     assert sample("gatekeeper_assessments_in_flight") == 0.0

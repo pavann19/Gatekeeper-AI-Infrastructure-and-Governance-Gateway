@@ -1,5 +1,5 @@
 """
-Tests for the Policy Editor endpoints (Phase 7, Developer UI):
+Tests for the Policy Editor endpoints (implementation):
 GET /api/v1/policy, POST /api/v1/policy/validate, POST /api/v1/policy/deploy,
 POST /api/v1/policy/rollback.
 
@@ -193,7 +193,7 @@ def test_rollback_restores_the_previous_live_policy(key_store, _isolated_policy_
     assert json.loads(_isolated_policy_files.read_text(encoding="utf-8")) == VALID_POLICY
 
 
-# --- Phase 8 hardening: policy changes are a distinct, security-relevant metric ---
+# --- policy changes are a distinct, security-relevant metric ---
 
 def _counter_value(action, outcome):
     from core.metrics import policy_changes_total

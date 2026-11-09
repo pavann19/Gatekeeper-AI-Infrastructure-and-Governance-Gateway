@@ -1,21 +1,8 @@
-"""
-Builds the fixed load-test workload from this project's own eval suite.
+"""Build a deterministic stratified workload from a supplied evaluation suite.
 
-    PYTHONPATH=. python benchmarks/load/build_workload.py
-
-Deterministic: fixed seed, fixed sample size, stratified by (label,
-language) proportional to the full 13,011-row suite so the fixed benign/
-attack/German mix isn't an arbitrary guess -- it mirrors the corpus the
-project already calibrates against, just capped to a size a closed-loop
-load test can cycle through many times in one run. Re-running this script
-regenerates byte-identical output; the committed workload_v1.jsonl and its
-.sha256 sidecar are checked into git specifically so nobody has to.
-
-Writes:
-  benchmarks/load/workload_v1.jsonl        N_TOTAL rows, one JSON object each
-  benchmarks/load/workload_v1.jsonl.sha256 the SHA-256 the bench harness
-                                            verifies before every run
-"""
+Writes workload_v1.jsonl and its SHA-256 sidecar. Both dataset and workload
+are local assets; rebuilding changed upstream data does not reproduce an old
+hash. Run only when intentionally defining a new workload, not to conceal drift."""
 from __future__ import annotations
 
 import hashlib

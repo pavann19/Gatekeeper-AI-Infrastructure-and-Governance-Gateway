@@ -22,7 +22,7 @@ LOW_RISK = ("LOW", {"semantic_score": 0.1, "source": "mock"})
 
 def authenticated_as(key_id, tenant="acme"):
     return patch(
-        "api.main.resolve_principal",
+        "api.main.resolve_request_principal",
         return_value=Principal(
             capability="GENERAL", tenant=tenant, key_id=key_id,
             authenticated=True, reason="test",

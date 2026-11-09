@@ -7,6 +7,7 @@ import asyncio
 from unittest.mock import MagicMock, patch
 
 import pytest
+from core.auth import Principal
 from starlette.testclient import TestClient
 
 from core.activity import _tail_raw_lines
@@ -15,6 +16,12 @@ from core.privacy import redact_pii
 from core.rate_limit import RedisRateLimiter
 from core.tenancy import TenantConfig
 from core.token_quota import RedisTokenQuotaTracker
+
+
+@pytest.fixture(autouse=True)
+def _authenticated_mcp_transport(monkeypatch):
+    monkeypatch.setattr("core.mcp_http_server.resolve_request_principal",
+                        lambda request: Principal(authenticated=True, key_id="synthetic-transport"))
 
 
 # ---------------------------------------------------------------------------
@@ -65,7 +72,7 @@ def test_mutant_mcp_suspended_tenant_enforcement():
     principal = Principal(capability="INTERNAL", tenant="suspended-corp", authenticated=True)
     suspended_tenant = TenantConfig(tenant_id="suspended-corp", status="suspended")
 
-    with patch("core.mcp_http_server.resolve_principal", return_value=principal), \
+    with patch("core.mcp_http_server.resolve_request_principal", return_value=principal), \
          patch("core.mcp_http_server.resolve_tenant", return_value=suspended_tenant):
 
         resp = client.post(
@@ -84,7 +91,7 @@ def test_mutant_mcp_suspended_tenant_enforcement():
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_mutant_mcp_session_queue_delivery():
+async def test_mutant_mcp_session_queue_delivery(monkeypatch):
     """
     Target: `core/mcp_http_server.py::_handle_messages`
     Mutant: omitting `await queue.put(rpc_resp)`
@@ -95,7 +102,9 @@ async def test_mutant_mcp_session_queue_delivery():
 
     session_id = "test-session-uuid-1234"
     session_queue = asyncio.Queue()
-    app.state.sessions[session_id] = session_queue
+    from core.mcp_http_server import MCPSession
+    monkeypatch.setattr("core.mcp_http_server._session_identity", lambda *args: "owner")
+    app.state.sessions[session_id] = MCPSession("owner", session_queue)
 
     resp = client.post(
         f"/mcp/messages?sessionId={session_id}",
@@ -185,8 +194,8 @@ def test_mutant_privacy_disabled_pattern_override():
     redacted_with_override, info_override = redact_pii(text, tenant_config=tenant_cfg)
     assert "9876543210" in redacted_with_override
     assert "[REDACTED:EMAIL]" in redacted_with_override
-    assert not any(item.startswith("PHONE:") for item in info_override.get("items", []))
-    assert any(item.startswith("EMAIL:") for item in info_override.get("items", []))
+    assert not any(item == "PHONE" for item in info_override.get("items", []))
+    assert any(item == "EMAIL" for item in info_override.get("items", []))
 
     # Without override, both must be redacted
     redacted_default, info_default = redact_pii(text, tenant_config=None)

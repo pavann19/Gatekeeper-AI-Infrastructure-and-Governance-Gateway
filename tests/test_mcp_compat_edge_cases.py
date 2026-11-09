@@ -2,7 +2,7 @@
 Additional edge-case coverage for core/mcp_compat.py, complementing
 tests/test_mcp_compat.py. Focus areas not already covered there:
 schema-shape edge cases (empty parameters, nested objects, arrays,
-Phase 8's maxLength constraint), multi-tool list ordering/content
+implementation's maxLength constraint), multi-tool list ordering/content
 fidelity, and malformed/unexpected MCP-side call input.
 """
 
@@ -77,9 +77,9 @@ def test_array_schema_with_item_type_preserved():
 
 
 def test_max_length_constraint_survives_translation():
-    """Phase 8 added JSON-Schema `maxLength` enforcement in
-    core/tools.py::validate_arguments. The MCP-facing schema must carry
-    that constraint through unchanged so an MCP client can see it."""
+    """implementation added JSON-Schema `maxLength` enforcement in
+        core/tools.py::validate_arguments. The MCP-facing schema must carry
+        that constraint through unchanged so an MCP client can see it."""
     schema = {
         "type": "object",
         "properties": {"url": {"type": "string", "maxLength": 2048}},

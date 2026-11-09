@@ -1,34 +1,17 @@
-"""
-Verification for the Phase 1 "separate risk from topicality in practice"
-item (docs/ROADMAP_V2.md; see docs/ENGINEERING_ASSESSMENT.md's write-up).
-
-FINDING: this item was already correctly implemented. `core/risk.py`'s
-`fuse_signals` already computes `topicality` independently of `final_risk`
-(tests/test_fusion.py's `test_off_topic_benign_prompt_is_not_a_safety_risk`
-is literally "the core regression test" for exactly this, per its own
-docstring), and topicality influences a risk decision in exactly one
-deliberate, documented, opt-in case: `DOMAIN_GUARDRAIL_MODE=enforcing`
-(also already tested, `test_off_topic_escalates_only_in_enforcing_mode`).
-
-What was NOT previously tested is that the separation holds at the
-ENFORCEMENT layer too, not just inside `fuse_signals` -- these tests close
-that gap: `core.policy.policy_decision` and `core.metrics.record_assessment`
-must never let `topicality` influence an enforcement decision or a metric
-label, structurally (by signature) and behaviourally (by input variation).
-"""
+"""Tests that subject-domain topicality and safety risk are independent."""
 from core.metrics import assessments_total
 from core.policy import policy_decision
 
 
 def test_policy_decision_has_no_topicality_parameter():
     """A future refactor that widens this signature to accept topicality
-    would be re-introducing exactly the conflation
-    docs/ENGINEERING_ASSESSMENT.md's benchmark.py fix already eliminated --
-    guard against that happening silently."""
+        would be re-introducing exactly the conflation
+        docs/EVALUATION.md.
+        guard against that happening silently."""
     import inspect
     params = set(inspect.signature(policy_decision).parameters)
     assert "topicality" not in params
-    # `store` was added for Phase 3 (Policy-as-Code) simulation --
+    # `store` was added for (Policy-as-Code) simulation --
     # scripts/simulate_policy.py evaluates a candidate policy file without
     # touching the live global store. It carries no topicality concept.
     assert params == {"capability", "risk", "tenant_id", "store"}

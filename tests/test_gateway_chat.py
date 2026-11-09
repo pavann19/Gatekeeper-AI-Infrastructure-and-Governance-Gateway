@@ -1,5 +1,5 @@
 """
-Tests for POST /api/v1/gateway/chat (Phase 5: Real LLM Gateway — request
+Tests for POST /api/v1/gateway/chat (implementation: Real LLM Gateway â€” request
 forwarding + response interception). Every provider call is mocked; no
 live network or API key needed.
 """
@@ -133,7 +133,7 @@ def test_review_decision_never_reaches_the_provider(mock_assess, review_policy):
 
 @patch("api.main.assess_risk", return_value=LOW_RISK)
 def test_output_guardrails_block_a_leaked_secret_from_the_provider(mock_assess):
-    mock_llm_response = LLMResponse(content="key: AKIAABCDEFGHIJKLMNOP", model="m", provider="ollama")
+    mock_llm_response = LLMResponse(content="key: AKIAABCDEFGHIJKLMNOP", model="m", provider="ollama")  # Synthetic detector fixture; gitleaks:allow
     with patch("core.llm_providers.OllamaProvider.complete", return_value=mock_llm_response), \
          patch("core.output_guardrails.assess_output", return_value=DIRTY_OUTPUT):
         response = client.post("/api/v1/gateway/chat", json={"prompt": "give me a key"})
@@ -225,7 +225,7 @@ def test_requires_auth_when_auth_mode_required(monkeypatch):
     assert response.status_code == 401
 
 
-# --- Phase 8 hardening: model/provider had no size bound before, unlike ---
+# --- model/provider had no size bound before, unlike ---
 # --- every other free-text field in this schema -----------------------------
 
 def test_oversized_model_name_is_rejected():
@@ -265,7 +265,7 @@ def test_valid_key_authenticates_the_call(mock_assess, key_store):
 
 
 # ---------------------------------------------------------------------------
-# Token accounting (Phase 5): enforced against usage already recorded from
+# Token accounting (): enforced against usage already recorded from
 # past calls, never a pre-flight estimate.
 # ---------------------------------------------------------------------------
 
@@ -320,7 +320,7 @@ def test_quota_disabled_by_default_even_with_prior_usage(mock_assess, monkeypatc
 
 
 # ---------------------------------------------------------------------------
-# Cross-provider fallback (Phase 5): only when the caller left `provider`
+# Cross-provider fallback (): only when the caller left `provider`
 # unset -- an explicit choice is never second-guessed.
 # ---------------------------------------------------------------------------
 

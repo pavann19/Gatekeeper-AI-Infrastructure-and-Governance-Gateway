@@ -1,5 +1,5 @@
 """
-Sandboxed demo tools (Phase 6, Tool/Agent Gateway roadmap item
+Sandboxed demo tools (implementation
 "Sandboxed demo tools") — the first real tools registered against
 `core/tools.py`'s registry, existing to exercise the whole pipeline
 (access control, structural validation, risk-based approval, execution)
@@ -143,7 +143,7 @@ _DEMO_HANDLERS = {
 }
 
 
-def register_demo_tools(registry: ToolRegistry = None) -> ToolRegistry:
+def register_demo_tools(registry: ToolRegistry | None = None) -> ToolRegistry:
     """
     Registers all four demo tools. Explicit opt-in — see module
     docstring for why this isn't automatic on import. Returns the

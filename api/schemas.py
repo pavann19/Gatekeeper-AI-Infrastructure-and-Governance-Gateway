@@ -13,7 +13,7 @@ class AssessRequest(BaseModel):
 
     # Optional. When present, /api/v1/assess runs BOTH input and output
     # assessment in one call — see api/main.py's "Output Guard" step for why
-    # this exists: the Phase 0 V2 audit found Output Guard was a separate
+    # this exists: the V2 audit found Output Guard was a separate
     # endpoint a caller had to remember to invoke themselves, which is not a
     # property an MVP integration should require. This does NOT make
     # Gatekeeper call the caller's LLM — the caller still generates the
@@ -32,7 +32,7 @@ class AssessRequest(BaseModel):
                     "machinery as /api/v1/assess_output.",
     )
 
-    # Optional reference text for system-prompt-leakage detection (Phase 2,
+    # Optional reference text for system-prompt-leakage detection (,
     # Output Security). Gatekeeper is a sidecar to the CALLER's own LLM call
     # and has no access to the caller's actual system prompt unless handed
     # one explicitly — there is nothing built into this gateway to detect
@@ -154,7 +154,7 @@ class AssessOutputResponse(BaseModel):
     )
 
 
-# --- Policy Editor (Phase 7) ---
+# --- Policy Editor () ---
 
 class PolicyContentRequest(BaseModel):
     """Candidate policy file content, exactly as it would be written to
@@ -185,7 +185,7 @@ class PolicyRollbackRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
 
-# --- Identity check (Phase 7) ---
+# --- Identity check () ---
 
 class WhoAmIResponse(BaseModel):
     """What a caller's own credential resolves to. Deliberately the same
@@ -200,11 +200,11 @@ class WhoAmIResponse(BaseModel):
     model_config = {"extra": "forbid"}
 
 
-# --- Human Review (Phase 4) ---
+# --- Human Review () ---
 
 class ReviewStatusResponse(BaseModel):
     review_id: str
-    status: str = Field(..., description="PENDING, APPROVED, or REJECTED.")
+    status: str = Field(..., description="PENDING, APPROVED, REJECTED, or CONSUMED.")
     reason: str = Field(..., description="Why this request was routed to review.")
     capability: str
     risk: str
@@ -231,7 +231,7 @@ class ReviewResolveRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
 
-# --- Real LLM Gateway (Phase 5) ---
+# --- Real LLM Gateway () ---
 
 class GatewayChatRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=50_000,
@@ -246,7 +246,7 @@ class GatewayChatRequest(BaseModel):
         description="ollama, openai_compatible, or anthropic_compatible. "
                     "Defaults to LLM_GATEWAY_DEFAULT_PROVIDER if omitted.",
     )
-    # max_length=200: Phase 8 hardening -- a model name is a short
+    # max_length=200: - a model name is a short
     # identifier (e.g. "llama-guard3", "gpt-4o-mini"); this was the one
     # caller-supplied free-text field in this schema with no bound at
     # all, before being forwarded straight into the outbound request to
@@ -272,17 +272,19 @@ class GatewayChatResponse(BaseModel):
     model: Optional[str] = Field(None, description="Which model actually handled this call.")
     usage: Optional[Dict[str, Any]] = Field(
         None, description="Token usage as reported by the provider, verbatim -- "
-                          "not yet enforced against any quota (Phase 5's "
-                          "'Token accounting' item is unbuilt).",
+                          "used for configured token accounting; reporting depends "
+                          "on the provider and is not a concurrent reservation.",
     )
     review_id: Optional[str] = Field(None, description="Set when decision is REVIEW.")
     details: Dict[str, Any] = Field(default_factory=dict, description="Metadata and scores.")
     process_time_ms: float = Field(default=0.0, description="Server-side processing latency, including the provider call.")
 
 
-# --- Tool / Agent Gateway (Phase 6) ---
+# --- Tool / Agent Gateway () ---
 
 class ToolCallRequest(BaseModel):
+    review_id: Optional[str] = Field(None, min_length=32, max_length=32,
+                                   description="One-use approval for this exact original request context.")
     # max_length=200: registered tool names are short dotted identifiers
     # (e.g. "demo.database.query"); nothing in this codebase registers or
     # will plausibly register a longer one.
@@ -300,19 +302,19 @@ class ToolCallRequest(BaseModel):
     @classmethod
     def _bound_arguments_size(cls, value):
         """
-        Phase 8 hardening: every other free-text field in this codebase
-        already has a max_length (see AssessRequest.prompt, etc.) --
-        `arguments` was the one caller-supplied, structurally-unbounded
-        field in this schema file, since `core.tools.validate_arguments`
-        only checks type/required/enum, never size (a `url` string
-        argument for http.get, for instance, has no length cap at any
-        layer). Bounded here at the schema boundary, before any of that
-        downstream validation, hashing, or the tool's own handler ever
-        sees it. 100_000 chars comfortably covers any real tool argument
-        set (a URL, a table name, a row id) while still bounding the
-        worst case (a deliberately oversized body wasting CPU/memory on
-        JSON-dumping and hashing it before the tool even runs).
-        """
+                implementation hardening: every other free-text field in this codebase
+                already has a max_length (see AssessRequest.prompt, etc.) --
+                `arguments` was the one caller-supplied, structurally-unbounded
+                field in this schema file, since `core.tools.validate_arguments`
+                only checks type/required/enum, never size (a `url` string
+                argument for http.get, for instance, has no length cap at any
+                layer). Bounded here at the schema boundary, before any of that
+                downstream validation, hashing, or the tool's own handler ever
+                sees it. 100_000 chars comfortably covers any real tool argument
+                set (a URL, a table name, a row id) while still bounding the
+                worst case (a deliberately oversized body wasting CPU/memory on
+                JSON-dumping and hashing it before the tool even runs).
+                """
         serialized_size = len(json.dumps(value, default=str))
         if serialized_size > 100_000:
             raise ValueError(

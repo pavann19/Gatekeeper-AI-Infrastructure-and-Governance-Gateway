@@ -1,32 +1,8 @@
-"""
-Leakage-free validation of the multilingual_head's FUSION-level contribution
-(issue #4's first requirement) -- the gap scripts.sweep_fusion_variants'
-`plus_ml_5`/`all_7`/`plus_ml_9` numbers explicitly warned about:
+"""Evaluate multilingual-head and fusion contributions on disjoint splits.
 
-    "Feeding an OOF-generated feature into a second CV over the same rows
-    is the standard stacking protocol, but it is mildly optimistic -- the
-    fusion's training folds contain rows whose head-scores came from a
-    head fitted on data overlapping the fusion's own test fold."
-
-METHODOLOGY: A THREE-WAY DISJOINT SPLIT
-------------------------------------------
-    A (40%) -- fits the multilingual head ONLY. Never touched again.
-    B (30%) -- the head scores B (genuinely out-of-sample for the head,
-               since B was never in A). Fusion is fit on B using those
-               scores alongside the other 8 detectors.
-    C (30%) -- held out from BOTH fits. The head scores C (also
-               out-of-sample), the fusion (fit on B) scores C. This is
-               the number that actually answers "does adding this feature
-               help", with no stacking optimism anywhere in the chain.
-
-A control fusion (the shipped 8 features, no multilingual_head) is fit on
-the SAME B and evaluated on the SAME C, so the comparison isolates the
-head's marginal contribution rather than conflating it with "a different,
-possibly luckier split."
-
-Usage:
-    python -m scripts.validate_multilingual_head_nested
-"""
+Uses separate head-training, fusion-training and held-out evaluation sets.
+Imported feature/source helpers are retained dependencies. Requires local
+embedding/score inputs; no current public metric is asserted."""
 import json
 import os
 

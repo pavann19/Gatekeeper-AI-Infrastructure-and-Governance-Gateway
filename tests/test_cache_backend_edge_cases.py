@@ -133,7 +133,7 @@ def test_redis_key_prefix_isolates_from_raw_key_collisions():
     backend = cb.RedisExactCache(fake_redis)
     backend.get("gatekeeper:cache:already-prefixed-looking-key")
     fake_redis.get.assert_called_once_with(
-        "gatekeeper:cache:gatekeeper:cache:already-prefixed-looking-key"
+        "gatekeeper:cache:v3:gatekeeper:cache:already-prefixed-looking-key"
     )
 
 
@@ -146,10 +146,11 @@ def test_redis_set_serialises_complex_nested_entry():
         "reasons": ["pattern_match", "llm_judge"],
         "metadata": {"model": "llama-guard-8b", "nested": {"a": 1}},
     }
+    fake_redis.eval.return_value = json.dumps(complex_entry)
     backend.set("hash1", complex_entry)
 
-    args, _ = fake_redis.setex.call_args
-    assert json.loads(args[2]) == complex_entry
+    args, _ = fake_redis.eval.call_args
+    assert json.loads(args[3]) == {"risk": "HIGH", "score": .87}
 
 
 def test_redis_flush_with_no_matching_keys_deletes_nothing():
@@ -177,7 +178,7 @@ def test_redis_package_not_installed_falls_back_to_local(monkeypatch):
     with mock.patch("builtins.__import__", side_effect=fake_import):
         backend = cb.build_exact_cache_backend()
 
-    assert isinstance(backend, cb.LocalExactCache)
+    assert isinstance(backend, cb.RedisExactCache)
 
 
 def test_max_size_is_passed_through_to_local_fallback(monkeypatch, tmp_path):
@@ -209,7 +210,7 @@ def test_unreachable_redis_error_log_does_not_leak_credentials(monkeypatch, capl
         with caplog.at_level("ERROR"):
             backend = cb.build_exact_cache_backend()
 
-    assert isinstance(backend, cb.LocalExactCache)
+    assert isinstance(backend, cb.RedisExactCache)
     # The error branch logs the exception message, not the URL, so the
     # credential must not appear anywhere in the captured log output.
     assert "supersecret" not in caplog.text

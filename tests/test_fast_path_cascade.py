@@ -1,16 +1,4 @@
-"""
-Tests for the Stage 1.5 fast-path cascade (core/risk.py::_fast_path_signals /
-_fast_path_decision) — the last unbuilt piece of the V2 reference
-architecture's fast/deep split.
-
-THE CLAIM UNDER TEST, stated precisely because it is easy to overstate: this
-cascade can only ESCALATE to HIGH on a cheap, vector-only signal already
-being confident. It cannot ALLOW, and it does not reduce latency for benign
-or subtle-attack traffic — only for the subset of attacks a cheap anchor/
-meta-intent similarity is already decisive about. See
-docs/ENGINEERING_ASSESSMENT.md §1v for the measured before/after and this
-scope boundary in full.
-"""
+"""Regression tests for decisive cheap-signal paths and ambiguous-path continuation."""
 from unittest.mock import patch
 
 import pytest

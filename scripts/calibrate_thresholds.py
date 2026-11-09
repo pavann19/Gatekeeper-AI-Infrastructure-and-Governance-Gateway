@@ -1,41 +1,8 @@
-"""
-Threshold calibration for the Gatekeeper risk pipeline.
+"""Select operating thresholds for supplied detector signals against an FPR budget.
 
-WHY THIS EXISTS
----------------
-Every decision threshold in core/config.py (SEMANTIC_THRESHOLD_HIGH = 0.48,
-META_INTENT_THRESHOLD = 0.40, ...) was originally chosen by intuition. That is
-indefensible in a technical report and unsafe in a product: a threshold is an
-operating point on a precision/recall trade-off curve, and it must be selected
-against a stated objective, not guessed.
-
-This script replaces "I picked 0.48" with:
-
-    "0.48 is the operating point that maximises recall subject to a
-     false-positive rate of at most 5% on a held-out split."
-
-METHOD
-------
-1. Extract raw signals ONCE per prompt (the expensive part: embedding +
-   FAISS search + meta-intent similarity). Results are cached to disk so
-   subsequent sweeps are instantaneous.
-2. Split into calibration / holdout sets with a fixed seed.
-3. Sweep the threshold grid over the calibration set, evaluating the same
-   deterministic fusion rule the live pipeline uses.
-4. Select the operating point satisfying the FPR budget, then report its
-   performance on the HOLDOUT set — the number that goes in the report.
-5. Emit ROC/PR curves and AUC for the continuous signal.
-
-The semantic judge (Stage 4) is deliberately excluded from the sweep: it is
-non-deterministic and expensive, so sweeping over it is not reproducible. The
-calibration therefore measures the *deterministic* pipeline, and the report
-should state that explicitly. Judge contribution belongs in an ablation study.
-
-Usage:
-    python -m scripts.calibrate_thresholds
-    python -m scripts.calibrate_thresholds --fpr-budget 0.02
-    python -m scripts.calibrate_thresholds --refresh-signals
-"""
+Uses calibration and holdout splits, writes local score/report outputs,
+and excludes live judging. Do not tune on the reporting test split or treat
+these historical inputs as a clean-clone canonical measurement."""
 import argparse
 import json
 import os

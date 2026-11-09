@@ -1,10 +1,4 @@
-"""
-Tests for core/tools.py — Phase 6's first item, "Tool registry + schemas".
-
-Scope matches the module's own docstring: registry correctness and
-structural argument validation. No allow/deny, approval, sandboxing, or
-audit wiring here — those are separate, not-yet-built roadmap items.
-"""
+"""Tests for core/tools.py — implementation's first item, "Tool registry + schemas"."""
 import pytest
 
 from core.tools import (
@@ -116,7 +110,8 @@ def test_unknown_argument_rejected():
     spec = make_spec()
     ok, detail = validate_arguments(spec, {"table": "orders", "drop_all": True})
     assert ok is False
-    assert "drop_all" in detail
+    assert "unknown argument" in detail
+    assert "drop_all" not in detail
 
 
 def test_wrong_type_rejected():
@@ -165,7 +160,7 @@ def test_bool_is_accepted_as_boolean():
     assert ok is True
 
 
-# --- Phase 8 hardening: maxLength, previously unenforced --------------------
+# --- maxLength, previously unenforced --------------------
 
 def test_string_within_max_length_is_accepted():
     spec = make_spec(parameters={
@@ -386,7 +381,7 @@ def test_execute_unknown_tool_blocks_cleanly():
     reg = ToolRegistry()
     result = execute_tool("INTERNAL", "does_not_exist", {}, registry=reg)
     assert result["decision"] == "BLOCK"
-    assert "does_not_exist" in result["reason"]
+    assert "unknown tool" in result["reason"]
 
 
 def test_execute_allowed_tool_with_no_handler_blocks():
@@ -409,7 +404,8 @@ def test_execute_handler_exception_is_reported_not_raised():
     result = execute_tool("GENERAL", "database.read", {"table": "orders"}, registry=reg)
     assert result["decision"] == "ALLOW"  # the call WAS allowed to attempt running
     assert "RuntimeError" in result["error"]
-    assert "downstream database unreachable" in result["error"]
+    assert "downstream database unreachable" not in result["error"]
+    assert "tool execution failed" in result["error"]
 
 
 def test_execute_uses_shared_registry_by_default():

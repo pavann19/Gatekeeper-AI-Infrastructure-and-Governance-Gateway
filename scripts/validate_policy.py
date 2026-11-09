@@ -1,5 +1,5 @@
 """
-Validation step for a candidate policy file, before it is deployed (Phase 3,
+Validation step for a candidate policy file, before it is deployed (implementation,
 Policy-as-Code). Supports both the existing JSON format and the new YAML
 one (core/policy.py::_parse_policy_file dispatches on extension).
 

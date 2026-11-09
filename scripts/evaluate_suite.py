@@ -1,35 +1,8 @@
-"""
-Evaluates the risk detector over the multi-source evaluation suite, sliced by
-attack class, language and source, with bootstrap confidence intervals on
-every headline number.
+"""Evaluate a supplied suite without live judge arbitration.
 
-This is the script that produces the results chapter. It answers the questions a
-single pooled accuracy figure cannot:
-
-  - Which attack class is the detector actually good at?
-  - How much of the error is the English-only encoder?
-  - Does performance hold across sources, or is it fitted to one distribution?
-
-Two scoring modes, both judge-excluded (the judge is non-deterministic,
-expensive, and not reproducible):
-
-  deterministic (default) — anchors + meta-intent + symbolic veto only. This
-      is the fast-path floor the thresholds in core/config.py are calibrated
-      against. Cheap: one embedding per row.
-
-  --fusion — the full core.fusion.fused_threat_score() ensemble as deployed
-      (the richest reachable upgrade tier), falling back to the deterministic
-      score only on rows where fusion reports itself unavailable. This is the
-      accuracy of the system people actually run, minus the judge. Expensive:
-      ~0.5 s per row for the 8-detector ensemble, so use --jobs and/or
-      --limit. Writes to its own signals cache and report file; never
-      touches the deterministic artifacts.
-
-Usage:
-    python -m scripts.evaluate_suite
-    python -m scripts.evaluate_suite --limit 500 --bootstrap 500
-    python -m scripts.evaluate_suite --fusion --jobs 3
-"""
+Default scoring uses deterministic signals; --fusion selects the available
+fusion tier. Record detector availability, dataset/splits and source identity
+separately from strict canonical replay."""
 import argparse
 import json
 import os

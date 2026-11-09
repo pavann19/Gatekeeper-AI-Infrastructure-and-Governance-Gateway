@@ -71,14 +71,13 @@ def test_redis_token_quota_failover_to_local_on_error(fake_redis, caplog):
     tracker._record_script.side_effect = ConnectionError("lost")
 
     with caplog.at_level("ERROR"):
-        # Record into local fallback
-        tracker.record("acme", 50)
-        assert tracker.would_exceed("acme", 100) is False
-        tracker.record("acme", 60)
+        with pytest.raises(ConnectionError):
+            tracker.record("acme", 50)
         assert tracker.would_exceed("acme", 100) is True
-        assert tracker.usage_today("acme") == 110
+        with pytest.raises(ConnectionError):
+            tracker.usage_today("acme")
+        assert tracker._local_fallback.usage_today("acme") == 0
 
-    assert "falling back to local tracker" in caplog.text
 
 
 def test_redis_token_quota_reset(fake_redis):
@@ -114,5 +113,4 @@ def test_build_token_quota_tracker_unreachable_redis(monkeypatch, caplog):
         with caplog.at_level("ERROR"):
             tracker = tq.build_token_quota_tracker()
 
-    assert isinstance(tracker, tq.LocalTokenQuotaTracker)
-    assert "falling back to local in-memory token quota tracker" in caplog.text
+    assert isinstance(tracker, tq.RedisTokenQuotaTracker)

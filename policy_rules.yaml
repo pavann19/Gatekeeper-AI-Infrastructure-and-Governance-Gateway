@@ -1,4 +1,4 @@
-# Gatekeeper policy, YAML format (Phase 3, Policy-as-Code).
+# Gatekeeper action policy in YAML; equivalent schema to policy_rules.json.
 #
 # Equivalent to policy_rules.json — same schema, loaded by the same
 # core/policy.py::PolicyStore (core/policy.py::_parse_policy_file dispatches

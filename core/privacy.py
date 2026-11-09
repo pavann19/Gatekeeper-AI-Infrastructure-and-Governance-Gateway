@@ -1,5 +1,6 @@
 import re
 import spacy
+from spacy.language import Language
 
 from core.config import SPACY_MODEL
 from core.logger import get_logger
@@ -8,6 +9,7 @@ logger = get_logger(__name__)
 
 # --- CONFIGURATION ---
 # Load spaCy small model for efficiency (Research Grade: Lightweight)
+NLP_MODEL: Language | None
 try:
     NLP_MODEL = spacy.load(SPACY_MODEL)
     # Disable heavy pipeline components we don't need (parser, lemmatizer)
@@ -30,10 +32,14 @@ REGEX_PATTERNS = {
 # Only redact high-confidence entities relevant to safety
 NER_LABELS = {"PERSON", "ORG", "GPE"} 
 
+class PrivacyAssessmentUnavailable(RuntimeError):
+    """Configured contextual PII detection cannot be completed."""
+
+
 def redact_pii(text: str, tenant_config=None) -> tuple:
     """
     Hybrid PII Detection Pipeline with optional per-tenant overrides.
-    Strategy: Fail-Fast. 
+    Strategy: Fail-Fast.
     1. Run Regex (skipping any patterns disabled for this tenant).
     2. If clean, run NER for configured labels (default: PERSON, ORG, GPE).
     """
@@ -49,6 +55,9 @@ def redact_pii(text: str, tenant_config=None) -> tuple:
         if getattr(tenant_config, "privacy_ner_labels", None) is not None:
             ner_labels = set(tenant_config.privacy_ner_labels)
 
+    if ner_labels and NLP_MODEL is None:
+        raise PrivacyAssessmentUnavailable("Configured privacy NER is unavailable")
+
     # --- STAGE 1: SYMBOLIC (Regex) ---
     regex_hit = False
     for label, pattern in REGEX_PATTERNS.items():
@@ -61,7 +70,7 @@ def redact_pii(text: str, tenant_config=None) -> tuple:
             for match in matches:
                 mask = f"[REDACTED:{label}]"
                 clean_text = clean_text.replace(match, mask)
-                detected_items.append(f"{label}:{match}")
+                detected_items.append(label)
 
     # --- STAGE 2: NEURAL (spaCy NER) ---
     # Always run, even after a regex hit: a prompt can carry both a
@@ -81,7 +90,7 @@ def redact_pii(text: str, tenant_config=None) -> tuple:
 
                 # Replace string slice safely
                 clean_text = clean_text[:ent.start_char] + mask + clean_text[ent.end_char:]
-                detected_items.append(f"{ent.label_}:{ent.text}")
+                detected_items.append(ent.label_)
 
         if ner_hit or regex_hit:
             return clean_text, {"pii_found": True, "source": detection_source, "items": detected_items}

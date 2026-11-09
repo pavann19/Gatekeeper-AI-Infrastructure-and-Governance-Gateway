@@ -31,52 +31,42 @@ client = TestClient(app)
 # ---------------------------------------------------------------------------
 # 1. Redis unreachable -> rate limiter + token quota fall back to local
 # ---------------------------------------------------------------------------
-def test_redis_unreachable_falls_back_to_local_and_assesses_safely():
-    """Safety Property: When Redis is unreachable or raises connection errors,
-    rate limiter and token quota trackers must fall back to local in-memory
-    tracking so requests are still assessed without crashing or failing open.
-    """
+def test_redis_unreachable_denies_without_local_authority():
+    """A configured shared-state failure must not mint independent budgets."""
     fake_redis = mock.MagicMock()
-    mock_script = mock.MagicMock()
-    mock_script.side_effect = ConnectionError("Redis unreachable")
-    fake_redis.register_script.return_value = mock_script
+    script = mock.MagicMock(side_effect=ConnectionError("Redis unreachable"))
+    fake_redis.register_script.return_value = script
     fake_redis.get.side_effect = ConnectionError("Redis unreachable")
-
-    # Instantiate Redis rate limiter and quota tracker with failing Redis
     limiter = rl.RedisRateLimiter(fake_redis, name="assess_test")
     tracker = tq.RedisTokenQuotaTracker(fake_redis)
-
-    # 1. Rate limiter degrades gracefully to local in-memory bucket
-    allowed, retry_after = limiter.check("test-tenant", capacity=5.0, refill_per_second=1.0)
-    assert allowed is True
-    assert retry_after == 0.0
-
-    # 2. Token quota tracker degrades gracefully to local in-memory store
-    assert tracker.would_exceed("test-tenant", 100) is False
-    tracker.record("test-tenant", 50)
-    assert tracker.usage_today("test-tenant") == 50
-
-    # 3. Assess endpoint call with failing Redis completes and returns 200 (not crashing)
+    allowed, retry = limiter.check("test-tenant", 5, 1)
+    assert allowed is False and retry > 0
+    assert tracker.would_exceed("test-tenant", 100) is True
+    with pytest.raises(ConnectionError):
+        tracker.record("test-tenant", 50)
+    with pytest.raises(ConnectionError):
+        tracker.usage_today("test-tenant")
+    assert tracker._local_fallback.usage_today("test-tenant") == 0
     with mock.patch("api.main.assess_rate_limiter", limiter), \
-         mock.patch("api.main.gateway_token_quota", tracker), \
-         mock.patch("api.main.assess_risk", return_value=("LOW", {"semantic_score": 0.0, "source": "clean_pass"})):
+         mock.patch("api.main.assess_risk") as assessment:
         response = client.post("/api/v1/assess", json={"prompt": "Hello world safe query"})
-        assert response.status_code == 200
-        data = response.json()
-        assert data["decision"] in ("ALLOW", "RESTRICT", "REVIEW", "BLOCK")
+        assert response.status_code == 429
+        assessment.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
 # 2. Judge backend unreachable -> fallback to toxic_bert, fail-closed if disabled
 # ---------------------------------------------------------------------------
 def test_judge_unreachable_fallback_and_fail_closed(monkeypatch):
-    pytest.importorskip("transformers")  # Case A exercises the real toxic_bert fallback
     """Safety Property: When the primary judge backend is unreachable, the system
     must fall back to the local toxic_bert inverter. If the fallback is also
     disabled or unavailable, governance decisions must fail CLOSED (BLOCK/REVIEW / HIGH),
     never fail open (ALLOW / SAFE).
     """
     ollama_judge_breaker.reset()
+    detector = mock.Mock()
+    detector.score_batch.return_value = [0.99]
+    monkeypatch.setattr("core.detectors.get_detector", lambda name: detector)
     try:
         # Mock requests.post to simulate primary Ollama judge failure
         monkeypatch.setattr(
@@ -118,6 +108,9 @@ def test_fusion_detector_failure_degrades_gracefully_never_false_allow(monkeypat
     and fall back to deterministic safety signals rather than emitting a false ALLOW.
     """
     fusion_mod._load_policy()
+    # This test injects detector scores; warming real models defeats isolation
+    # and can download weights before the injected scorer is reached.
+    monkeypatch.setattr(fusion_mod, "_warm_detectors", lambda names: None)
 
     # Case A: An upgrade-tier detector fails (e.g. multilingual_head)
     def fake_score_detector(name, prompt):
@@ -224,11 +217,8 @@ def test_audit_log_unwritable_fails_closed_503(_mock_assess, monkeypatch):
 
 
 @mock.patch("api.main.assess_risk", return_value=("LOW", {"semantic_score": 0.1, "source": "mock"}))
-def test_audit_log_unwritable_opt_out_serves_with_loud_log(_mock_assess, monkeypatch, caplog):
-    """An operator that has explicitly accepted un-audited traffic
-    (AUDIT_WRITE_FAILS_CLOSED=false) still gets served, but the failure is
-    logged at CRITICAL — it is never silent.
-    """
+def test_audit_log_unwritable_legacy_flag_still_fails_closed(_mock_assess, monkeypatch, caplog):
+    """The legacy flag cannot authorize decisions without authoritative audit."""
     import logging
     monkeypatch.setattr(settings, "AUDIT_WRITE_FAILS_CLOSED", False)
     monkeypatch.setattr("api.main.log_event", _raise_audit_error)
@@ -236,5 +226,5 @@ def test_audit_log_unwritable_opt_out_serves_with_loud_log(_mock_assess, monkeyp
     with caplog.at_level(logging.CRITICAL):
         response = client.post("/api/v1/assess", json={"prompt": "Hello safe query"})
 
-    assert response.status_code == 200
-    assert any("audit write failed" in r.message.lower() for r in caplog.records)
+    assert response.status_code == 503
+    assert any("audit persistence failed" in r.message.lower() for r in caplog.records)

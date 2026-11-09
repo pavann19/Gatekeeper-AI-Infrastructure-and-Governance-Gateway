@@ -42,21 +42,18 @@ def test_safe_source_known_value_passes_through_unchanged():
 
 
 def test_safe_source_unknown_value_collapses_to_other_and_counts_it():
-    before = _counter_value(metrics.unknown_source_total, source="totally_new_source")
+    before = _counter_value(metrics.unknown_source_total, source="unknown")
     result = metrics.safe_source("totally_new_source")
-    after = _counter_value(metrics.unknown_source_total, source="totally_new_source")
+    after = _counter_value(metrics.unknown_source_total, source="unknown")
     assert result == "other"
     assert after == before + 1
 
 
-def test_safe_source_truncates_long_unknown_values_to_40_chars():
+def test_safe_source_uses_a_fixed_label_for_long_unknown_values():
     long_value = "x" * 100
     metrics.safe_source(long_value)
-    truncated_label = long_value[:40]
-    # The counter must have been recorded under the truncated label, not the
-    # full 100-char value -- an untruncated label is exactly the unbounded-
-    # cardinality bug this function exists to prevent.
-    value = _counter_value(metrics.unknown_source_total, source=truncated_label)
+    # Truncation bounds label length, but still permits unbounded cardinality.
+    value = _counter_value(metrics.unknown_source_total, source="unknown")
     assert value >= 1
 
 

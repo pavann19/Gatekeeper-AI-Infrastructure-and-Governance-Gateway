@@ -295,9 +295,8 @@ def test_reload_with_force_picks_up_out_of_band_file_changes(tmp_path):
     q2.enqueue(reason="r", capability="GENERAL", risk="LOW",
               tenant="default", prompt_hash="h2", request_id="req-2")
 
-    # q1 has already loaded once; without force it must not silently pick
-    # up q2's write on a plain call (load() is a no-op once _loaded=True).
-    assert len(q1.list_pending()) == 1
+    # Every transactional read observes the latest committed state.
+    assert len(q1.list_pending()) == 2
 
     # With force=True it must re-read from disk and see both records.
     q1.load(force=True)

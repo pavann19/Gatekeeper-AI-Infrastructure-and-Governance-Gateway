@@ -57,14 +57,6 @@ def test_judge_unavailable_when_model_absent():
     assert "not present" in detail
 
 def test_semantic_judge_substring_vulnerability():
-    # We will test various adversarial and garbage outputs from the LLM.
-    # Pinned to a non-Llama-Guard model: semantic_judge() branches on
-    # uses_llama_guard_protocol(OLLAMA_MODEL) and takes a completely
-    # different parsing path (_judge_via_llama_guard, its own native
-    # safe/unsafe format) for Llama Guard models -- this test targets the
-    # GENERIC parsing path specifically, so it must not depend on whichever
-    # model happens to be the ambient default (see
-    # docs/ENGINEERING_ASSESSMENT.md's OLLAMA_MODEL default fix, 2026-08-16).
 
     test_cases = [
         # LLM response (simulated JSON payload from Ollama), Expected result from semantic_judge
@@ -97,7 +89,7 @@ if __name__ == "__main__":
     test_semantic_judge_substring_vulnerability()
 
 
-# --- Phase 8 hardening: prompt-injection isolation on the generic (non- ------
+# --- prompt-injection isolation on the generic (non- ------
 # --- Llama Guard) fallback path. _judge_via_llama_guard sends the prompt
 # --- cleanly via the chat API's "user" role (see its own tests below) and
 # --- is unaffected -- this only covers the f-string-concatenation path used
@@ -264,7 +256,7 @@ def test_guard_path_exception_is_judge_offline_not_a_crash():
 
 # ---------------------------------------------------------------------------
 # output_judge: the SAME protocol bug semantic_judge already had, found
-# during Phase 2 (Output Security) after OLLAMA_MODEL's default changed to
+# during (Output Security) after OLLAMA_MODEL's default changed to
 # a Llama Guard variant. output_judge never got the equivalent fix, so it
 # always sent the generic instructable-chat prompt regardless of model —
 # under a Llama Guard default that means json.loads() on "safe"/"unsafe"

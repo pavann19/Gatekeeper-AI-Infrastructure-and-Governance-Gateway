@@ -1,10 +1,13 @@
 import requests
 import json
+from typing import Union
 from core.config import OLLAMA_API_URL, OLLAMA_MODEL, settings
 from core.circuit_breaker import ollama_judge_breaker
 from core.logger import get_logger
 
 logger = get_logger(__name__)
+
+JSONValue = Union[None, bool, int, float, str, list["JSONValue"], dict[str, "JSONValue"]]
 
 
 def _fallback_output_judge(response_text: str) -> str:
@@ -24,8 +27,8 @@ def _fallback_output_judge(response_text: str) -> str:
 
     Returns "SAFE" or "DANGEROUS" on success. Returns "JUDGE_OFFLINE" only
     if the fallback model itself is unavailable (e.g. never downloaded, or
-    disabled via OUTPUT_JUDGE_FALLBACK_ENABLED=False) -- true fail-open is
-    now reached only when BOTH the primary and the fallback are down.
+    disabled via OUTPUT_JUDGE_FALLBACK_ENABLED=False). The output guardrail
+    blocks this unavailable result; only explicit SAFE can permit release.
     """
     if not settings.OUTPUT_JUDGE_FALLBACK_ENABLED:
         return "JUDGE_OFFLINE"
@@ -46,17 +49,7 @@ def _fallback_output_judge(response_text: str) -> str:
 
 
 def judge_available() -> tuple:
-    """
-    Probes the local judge backend for reachability.
-
-    Evaluation harnesses MUST call this before measuring classifier quality.
-    `judge_arbitration` fails closed to HIGH when the judge is unreachable,
-    so benchmarking against an offline judge silently measures sidecar
-    availability rather than detection accuracy — which is exactly how the
-    pre-fix benchmark produced an uninterpretable 98% false-positive rate.
-
-    Returns (available: bool, detail: str).
-    """
+    """Probes the local judge backend for reachability."""
     try:
         # OLLAMA_API_URL ends in ".../api/generate"; the model list lives at
         # ".../api/tags". Drop only the final segment ("generate") so the "api"
@@ -121,7 +114,7 @@ def _judge_via_llama_guard(prompt: str) -> str:
     # OLLAMA_API_URL ends in ".../api/generate"; the chat endpoint is
     # ".../api/chat". Same derivation the availability probe uses.
     base_url = "/".join(OLLAMA_API_URL.split("/")[:-1])
-    payload = {
+    payload: dict[str, JSONValue] = {
         "model": OLLAMA_MODEL,
         "messages": [{"role": "user", "content": prompt}],
         "stream": False,
@@ -181,7 +174,7 @@ def semantic_judge(prompt: str) -> str:
             ollama_judge_breaker.record_failure()
             return "JUDGE_OFFLINE"
 
-    # Phase 8 hardening: the text between the <user_prompt> tags is
+    # the text between the <user_prompt> tags is
     # untrusted and reaches this f-string via plain concatenation, with
     # no protocol-level separation from the instruction above it (unlike
     # _judge_via_llama_guard's proper user/assistant role split, which
@@ -206,7 +199,7 @@ def semantic_judge(prompt: str) -> str:
     )
 
     try:
-        payload = {
+        payload: dict[str, JSONValue] = {
             "model": OLLAMA_MODEL,
             "prompt": f"{system_instruction}\n\n<user_prompt>\n{prompt}\n</user_prompt>",
             "stream": False
@@ -248,21 +241,10 @@ def semantic_judge(prompt: str) -> str:
         return "JUDGE_OFFLINE"
 
 def output_judge(response_text: str) -> str:
-    """
-    Asks a local LLM to classify an LLM-generated response for toxicity,
-    harmful content, or hallucinated dangerous instructions.
+    """Judge generated output for toxicity and harmful instructions.
 
-    BUG FIX (Phase 2, Output Security): this previously always sent the
-    generic instructable-chat prompt below, regardless of OLLAMA_MODEL. Once
-    OLLAMA_MODEL's default became a Llama Guard variant (see core/config.py's
-    OLLAMA_MODEL fix), every call here hit exactly the failure
-    `_judge_via_llama_guard`'s own docstring already documents for the input
-    path: Llama Guard ignores output-format instructions and always replies
-    `safe`/`unsafe`, so `json.loads()` on its raw text raises and this
-    function failed closed to DANGEROUS on every single response — a judge
-    that blocks everything is not a working judge. Same dispatch as
-    `semantic_judge` fixes it the same way.
-    """
+    Uses the configured safety judge and optional local fallback. Callers must
+    require explicit SAFE acceptance; missing/invalid results are not permission."""
     if uses_llama_guard_protocol(OLLAMA_MODEL):
         try:
             return _judge_via_llama_guard(response_text)
@@ -291,7 +273,7 @@ def output_judge(response_text: str) -> str:
     )
 
     try:
-        payload = {
+        payload: dict[str, JSONValue] = {
             "model": OLLAMA_MODEL,
             "prompt": f"{system_instruction}\n\n<generated_response>\n{response_text}\n</generated_response>",
             "stream": False
@@ -314,4 +296,4 @@ def output_judge(response_text: str) -> str:
         return "DANGEROUS"
 
     except Exception:
-        return _fallback_output_judge(response_text)
+        return _fallback_output_judge(response_text)

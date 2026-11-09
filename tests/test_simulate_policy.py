@@ -1,5 +1,5 @@
 """
-Tests for scripts/simulate_policy.py's core logic (Phase 3, Policy-as-Code:
+Tests for scripts/simulate_policy.py's core logic (implementation
 "Simulation"). Following this codebase's existing convention of not
 building CLI-argument-parsing tests for scripts/ tools (none of the
 existing ones have them) — these test the pure functions a CLI wraps.

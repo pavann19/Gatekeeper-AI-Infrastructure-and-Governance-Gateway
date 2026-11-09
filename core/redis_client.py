@@ -20,15 +20,32 @@ from __future__ import annotations
 
 import os
 import threading
-from typing import Optional
+from typing import Optional, Protocol
 
 from core.logger import get_logger
 
 logger = get_logger(__name__)
 
+
+class RequiredRedisClient:
+    """Reconnect configured distributed state without creating local authority."""
+    def __getattr__(self, name):
+        client = get_redis_client()
+        if client is None:
+            raise ConnectionError('Required distributed state unavailable')
+        return getattr(client, name)
+
+class DisconnectablePool(Protocol):
+    def disconnect(self) -> None: ...
+
+
+class RedisConnection(Protocol):
+    def ping(self) -> object: ...
+
+
 _lock = threading.Lock()
-_cached_client: Optional[object] = None
-_cached_pool: Optional[object] = None
+_cached_client: Optional[RedisConnection] = None
+_cached_pool: Optional[DisconnectablePool] = None
 _last_url: Optional[str] = None
 
 
@@ -39,7 +56,7 @@ def sanitize_redis_url(url: str) -> str:
     return url
 
 
-def get_redis_client(redis_url: Optional[str] = None) -> Optional[object]:
+def get_redis_client(redis_url: Optional[str] = None) -> Optional[RedisConnection]:
     """
     Returns a shared, thread-safe `redis.Redis` client backed by a common ConnectionPool.
     If `redis_url` is omitted, reads `REDIS_URL` from the environment.

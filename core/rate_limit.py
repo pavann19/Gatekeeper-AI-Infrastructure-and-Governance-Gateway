@@ -1,55 +1,8 @@
-"""
-Per-caller request rate limiting for the expensive assessment and gateway endpoints.
+"""Local and Redis-backed token-bucket admission.
 
-WHY THIS EXISTS
----------------
-Every `/api/v1/assess` call runs three transformer detectors and, in the
-ambiguous zone, an LLM judge. Measured cold-path p95 is multiple seconds
-(docs/ENGINEERING_ASSESSMENT.md §1p). With no limit, a single caller — or a
-single broken retry loop — can saturate the bounded worker pool indefinitely
-and deny service to every other tenant. This is the cheapest control that
-turns "shared gateway" from an aspiration into a property.
-
-WHY TOKEN BUCKET
-----------------
-A sliding-window log is more accurate but costs O(requests) memory per
-caller, which is itself the DoS vector we are trying to close. A token bucket
-is two floats per caller and permits a bounded burst — the right shape for an
-API, where clients legitimately arrive in bursts and the thing worth
-constraining is the SUSTAINED rate.
-
-WHOSE BUCKET: THE PART THAT IS ACTUALLY A SECURITY DECISION
------------------------------------------------------------
-Authenticated callers are bucketed by `key_id`, which is resolved server-side
-from a verified credential (core/auth.py) and therefore cannot be forged.
-
-Anonymous callers have no such identity, and the two obvious options are both
-wrong in different ways. One shared anonymous bucket is a self-inflicted
-denial of service: a single abuser locks out every anonymous caller. Bucketing
-by a client-supplied header is worse — anyone can mint unlimited identities by
-rotating it.
-
-So anonymous traffic is bucketed by the transport-level peer address, which
-the caller cannot choose. Behind a reverse proxy every request appears to come
-from the proxy, so `RATE_LIMIT_TRUST_FORWARDED_FOR` exists — but it is OFF by
-default, because trusting `X-Forwarded-For` on a directly-exposed service
-hands every caller an unlimited-identity bypass. When it is enabled, the
-RIGHTMOST entry is used, not the leftmost: with one trusted proxy in front,
-the rightmost value is the address that proxy actually observed, whereas the
-leftmost is whatever the client put there. This assumes exactly one trusted
-hop; deployments with a deeper chain must adjust it deliberately.
-
-DISTRIBUTED VS LOCAL BACKENDS
------------------------------
-1. Redis-backed (`RedisRateLimiter`): Shared state across all Gatekeeper replicas.
-   Executes an atomic Lua script for token-bucket refill and spend. Uses Redis
-   server time (`redis.call('TIME')`) so small host clock differences between
-   replicas never cause inconsistent refills. Expired keys are automatically
-   evicted by Redis TTL, avoiding memory leaks.
-2. Local fallback (`LocalRateLimiter` / `RateLimiter`): Process-local in-memory
-   token bucket with LRU cap (`RATE_LIMIT_MAX_TRACKED`). Used when REDIS_URL
-   is unset or when Redis experiences runtime connection failures.
-"""
+Redis is selected when configured and shared failures deny requests. Local
+budgets are process-local and bounded by an LRU identity registry. MCP uses
+a separate namespace from assessment admission."""
 from __future__ import annotations
 
 import os
@@ -243,8 +196,7 @@ class RedisRateLimiter(RateLimiterBackend):
     """
     Shared distributed token-bucket limiter backed by Redis.
     Uses an atomic Lua script to synchronize tokens and timestamps across
-    all Gatekeeper replicas. Falls back cleanly to an internal LocalRateLimiter
-    if Redis operations encounter runtime errors.
+    all Gatekeeper replicas. Runtime Redis failures deny admission.
     """
 
     KEY_PREFIX = "gatekeeper:ratelimit:"
@@ -291,9 +243,9 @@ class RedisRateLimiter(RateLimiterBackend):
         except Exception as e:
             logger.error(
                 f"Redis rate limiter check failed ({type(e).__name__}: {e}); "
-                f"falling back to local in-memory limiter for identity {identity!r}."
+                f"denying admission for identity {identity!r}."
             )
-            return self._local_fallback.check(identity, capacity, refill_per_second, now=now)
+            return False, 5.0
 
     def reset(self) -> None:
         """Deletes all keys belonging to this rate limiter instance in Redis and resets local fallback."""
@@ -322,7 +274,7 @@ def build_rate_limiter(name: str = "assess", client=None, max_tracked: int = 10_
     """
     Selects Redis if `client` is provided or if `REDIS_URL` is set AND reachable,
     using the shared ConnectionPool in `core.redis_client`.
-    Falls back gracefully to the local in-memory limiter.
+    Configured Redis failure denies admission; local mode requires REDIS_URL unset.
     """
     if client is not None:
         return RedisRateLimiter(client, name=name, max_tracked=max_tracked)
@@ -335,14 +287,8 @@ def build_rate_limiter(name: str = "assess", client=None, max_tracked: int = 10_
         return RedisRateLimiter(redis_client, name=name, max_tracked=max_tracked)
 
     if os.environ.get("REDIS_URL"):
-        logger.error(
-            f"REDIS_URL is set but Redis is unreachable; falling back to local "
-            f"in-memory rate limiter for '{name}'. Rate limits will NOT be shared "
-            f"across gateway instances until this is fixed."
-        )
-    else:
-        logger.info(f"REDIS_URL not set; using local in-memory rate limiter for '{name}' (single-node only).")
-
+        from core.redis_client import RequiredRedisClient
+        return RedisRateLimiter(RequiredRedisClient(), name=name, max_tracked=max_tracked)
     return LocalRateLimiter(name=name, max_tracked=max_tracked)
 
 

@@ -118,9 +118,7 @@ def test_available_when_artifact_and_encoder_load_cleanly(tmp_path, monkeypatch)
 
 
 def test_trained_on_is_always_empty():
-    """See EmbeddingHeadDetector's docstring: `trained_on` doesn't apply
-    the normal way here (the artifact is refit on 100% of the suite), so
-    it must always be the empty tuple, never a partial exclusion list."""
+    """Tests for embedding head detector."""
     d = EmbeddingHeadDetector(name="multilingual_head", artifact_path="irrelevant",
                               targets=("prompt_injection",))
     assert d.trained_on == ()

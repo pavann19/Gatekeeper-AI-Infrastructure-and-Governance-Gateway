@@ -237,5 +237,5 @@ def test_mirror_failure_is_request_fatal_when_sqlite_is_read_authority(
         raise sqlite3.OperationalError("disk I/O error")
 
     monkeypatch.setattr(audit_store, "write", boom)
-    with pytest.raises(sqlite3.OperationalError):
+    with pytest.raises(lg.AuditPersistenceError):
         lg.log_event("cap", "hello", "LOW", "ALLOW", {"request_id": "rid-x"})

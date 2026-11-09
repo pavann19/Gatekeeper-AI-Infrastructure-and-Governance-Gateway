@@ -84,7 +84,7 @@ def test_redis_get_deserialises_json(fake_redis):
     entry = backend.get("hash1")
 
     assert entry == {"risk": "HIGH", "score": 0.9}
-    fake_redis.get.assert_called_once_with("gatekeeper:cache:hash1")
+    fake_redis.get.assert_called_once_with("gatekeeper:cache:v3:hash1")
 
 
 def test_redis_get_miss_returns_none(fake_redis):
@@ -97,22 +97,23 @@ def test_redis_get_corrupt_value_is_a_miss_not_a_crash(fake_redis):
     assert cb.RedisExactCache(fake_redis).get("hash1") is None
 
 
-def test_redis_set_uses_setex_with_ttl(fake_redis):
+def test_redis_set_uses_atomic_monotonic_script_with_ttl(fake_redis):
+    entry = {"risk": "HIGH", "score": 0.9}
+    fake_redis.eval.return_value = json.dumps(entry)
     backend = cb.RedisExactCache(fake_redis)
-    backend.set("hash1", {"risk": "HIGH", "score": 0.9}, ttl_seconds=3600)
-
-    fake_redis.setex.assert_called_once()
-    args, _ = fake_redis.setex.call_args
-    assert args[0] == "gatekeeper:cache:hash1"
-    assert args[1] == 3600
-    assert json.loads(args[2]) == {"risk": "HIGH", "score": 0.9}
+    assert backend.set("hash1", entry, ttl_seconds=3600) == entry
+    script, count, key, payload, ttl = fake_redis.eval.call_args.args
+    assert "value.risk == 'HIGH'" in script
+    assert "redis.call('SET'" in script
+    assert (count, key, json.loads(payload), ttl) == (1, "gatekeeper:cache:v3:hash1", entry, 3600)
+    fake_redis.setex.assert_not_called()
 
 
 def test_redis_flush_only_touches_this_apps_keys(fake_redis):
-    fake_redis.scan_iter.return_value = ["gatekeeper:cache:a", "gatekeeper:cache:b"]
+    fake_redis.scan_iter.return_value = ["gatekeeper:cache:v3:a", "gatekeeper:cache:v3:b"]
     cb.RedisExactCache(fake_redis).flush()
 
-    fake_redis.scan_iter.assert_called_once_with("gatekeeper:cache:*")
+    fake_redis.scan_iter.assert_called_once_with("gatekeeper:cache:v3:*")
     assert fake_redis.delete.call_count == 2
     # Never a blanket FLUSHDB.
     assert not hasattr(fake_redis, "flushdb") or not fake_redis.flushdb.called
@@ -145,7 +146,7 @@ def test_redis_url_set_but_unreachable_falls_back_to_local(monkeypatch):
     with mock.patch("redis.from_url", side_effect=ConnectionError("refused")):
         backend = cb.build_exact_cache_backend()
 
-    assert isinstance(backend, cb.LocalExactCache)
+    assert isinstance(backend, cb.RedisExactCache)
 
 
 def test_redis_ping_failure_falls_back_to_local(monkeypatch):
@@ -156,4 +157,4 @@ def test_redis_ping_failure_falls_back_to_local(monkeypatch):
     with mock.patch("redis.from_url", return_value=fake_client):
         backend = cb.build_exact_cache_backend()
 
-    assert isinstance(backend, cb.LocalExactCache)
+    assert isinstance(backend, cb.RedisExactCache)

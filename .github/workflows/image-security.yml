@@ -1,13 +1,6 @@
+# Build the API image, gate fixable high/critical findings and produce an SPDX SBOM.
 name: Container Image Security (build, Trivy, SBOM)
 
-# G3: builds the actual deployed artifact (Dockerfile.api) and scans it --
-# the existing "Dependency Vulnerability Audit" workflow (dependency-audit.yml)
-# checks the Python requirement files, which is a different surface: a
-# vulnerable OS package or an unpatched base image layer shows up here and
-# nowhere else. That workflow is unchanged and still runs.
-#
-# Runs entirely on GitHub's runners -- deliberately not something to build
-# and scan locally on a RAM-constrained dev machine (see docs/MAINTENANCE.md).
 
 on:
   push:
@@ -15,44 +8,37 @@ on:
   pull_request:
     branches: [ main ]
 
+permissions:
+  contents: read
+
 jobs:
   build-scan-sbom:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@a37ce9120846195fa4ece8f58b268e6043cb2f26 # v3
 
     - name: Build the deployed image
       run: docker build -f Dockerfile.api -t gatekeeper-api:ci .
 
     - name: Scan the image with Trivy
-      uses: aquasecurity/trivy-action@v0.36.0
+      uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
       with:
         image-ref: gatekeeper-api:ci
         format: table
-        # Fails the job on HIGH/CRITICAL, matching the intent of the
-        # existing pip-audit gate -- a security scan that only ever
-        # produces a report nobody has to act on is not a gate.
         severity: CRITICAL,HIGH
         exit-code: '1'
-        # First real run found CVEs in util-linux/perl/ncurses with no
-        # "Fixed Version" yet (Debian trixie hasn't shipped a patch) --
-        # without this, the gate would fail permanently on issues nobody
-        # can act on, which is exactly the kind of gate that gets ignored
-        # or disabled. ignore-unfixed keeps it failing on anything we can
-        # actually do something about (like the two Python CVEs this same
-        # run found, fixed in the same commit as this line).
         ignore-unfixed: true
 
     - name: Generate SBOM with syft
-      uses: anchore/sbom-action@v0
+      uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
       with:
         image: gatekeeper-api:ci
         format: spdx-json
         output-file: gatekeeper-api-sbom.spdx.json
 
     - name: Upload SBOM artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: gatekeeper-api-sbom
         path: gatekeeper-api-sbom.spdx.json
