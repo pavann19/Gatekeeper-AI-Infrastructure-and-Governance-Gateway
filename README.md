@@ -80,14 +80,16 @@ python -m mypy core/ api/ --ignore-missing-imports --explicit-package-bases
 python -m pytest tests/ --cov=core --cov=api --cov-fail-under=65
 ```
 
-The default selection excludes slow replay. Full selection and strict replay require the separate pinned runtime and matching assets in [evaluation](docs/EVALUATION.md). Missing required assets fail the gate. CI also audits dependencies, builds/scans the image, produces an SBOM and tests real Redis backend contracts.
+The default selection excludes slow replay and model/service integration tests. Full selection and strict replay require the separate pinned runtime and matching assets in [evaluation](docs/EVALUATION.md). Missing required assets fail the gate. CI also audits dependencies, builds/scans the image, produces an SBOM and tests real Redis backend contracts.
 
 ## Evaluation and limitations
 
 No current accuracy, throughput or latency headline is published. Frozen offline replay checks agreement with a decision oracle; it is not an accuracy estimate. Detector-only, cached, live-judge, synthetic and deployment profiles must be reported separately.
 
+Llama Guard 3 1B was previously exercised locally as a live harmful-content judge and ambiguous-zone arbiter. That local result does not establish live accuracy gains or production latency. Historical CPU timings describe a different configuration. The 8B judge remains outside the verified live detector set and is not fully hash-pinned under the current single-file manifest schema.
+
 Strict replay uses the public hash-pinned frozen corpus and requires separately provisioned pinned model assets and runtime. The historical training suite and synthetic load workload remain local with expected hashes; their reconstruction is not established by the public source. Deployment dependency ranges differ from the canonical runtime. Full application replica acceptance and production operation are unverified.
 
-Request budgets do not bound all synchronous or nested work. Policy reload is per process. Review storage requires a local filesystem with advisory locks. Tool approvals support one-use continuation; prompt/provider review records do not provide an execution continuation endpoint. Gateway system prompts bypass the user-prompt privacy/assessment path and must be trusted application configuration. These are deployment limitations, not a production-readiness claim.
+Request budgets do not bound all synchronous or nested work. Policy reload is per process. Local review storage requires a filesystem with advisory locks; production settings require the transactional PostgreSQL backend and a restricted runtime role. Tool approvals support one-use continuation; prompt/provider review records do not provide an execution continuation endpoint. Gateway system prompts bypass the user-prompt privacy/assessment path and must be trusted application configuration. These are deployment limitations, not a production-readiness claim.
 
 [Architecture](docs/ARCHITECTURE.md) Â· [Security](docs/SECURITY.md) Â· [Threat model](docs/THREAT_MODEL.md) Â· [Evaluation](docs/EVALUATION.md) Â· [Deployment](docs/DEPLOYMENT_RUNBOOK.md) Â· [Integration](docs/INTEGRATION_GUIDE.md)
