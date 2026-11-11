@@ -36,10 +36,6 @@ logging/
 # Local debug output
 debug-*.log
 
-# Local benchmark and evaluation evidence. Public repository keeps curated
-# summaries under docs/; raw logs, CSVs, JSONL, flamegraphs, and generated
-# benchmark JSON stay local unless explicitly approved for a private evidence
-# handoff.
 _evidence/
 evidence/
 benchmark_rows.csv
@@ -77,7 +73,6 @@ api_keys.json
 tenants.json
 
 # Local editor configuration and runtime state
-.claude/
 review_queue.json
 .bench_api_key
 *.json.lock
@@ -99,11 +94,6 @@ policy_versions/
 /docs/benchmarks/
 /docs/observability/
 
-# Local development plans and research corpus
-/docs/archive/
-/docs/research/
-/docs/MAINTENANCE.md
-/docs/ROADMAP_V3.md
 /scripts/git-hooks/
 _bench_local/
 

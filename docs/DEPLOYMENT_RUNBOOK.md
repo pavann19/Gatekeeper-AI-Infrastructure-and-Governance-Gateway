@@ -56,7 +56,7 @@ Container health checks `/live`; traffic ingress must check `/ready` separately.
 The hardened pilot candidate uses `STATE_BACKEND=postgres` for shared audit and
 review state. Schema installation is explicit and checksum-sealed; runtime
 credentials are restricted and must use verified TLS. PostgreSQL outages never
-fall back to local files. See [the migration/role preflight](ai-continuation/PILOT_PREFLIGHT.md).
+fall back to local files. See [the migration/role preflight](PILOT_PREFLIGHT.md).
 The table below describes the original local Compose lab topology.
 
 | State | Compose storage | Boundary |
@@ -74,7 +74,7 @@ The table below describes the original local Compose lab topology.
 
 Local rate/quota budgets are per process. Redis shares those controls, exact-cache state and configured circuit breakers, but does not coordinate active policy, review stores or fuzzy indexes. Run one worker for local state mode. Full application replica acceptance is not established by Redis backend concurrency tests. The supplied Compose API host port also does not define a scalable replica routing setup.
 
-`deploy/compose.pilot.yml` is a separate hardened configuration candidate with no published host ports, required authentication, PostgreSQL state, offline models, resource limits and explicit external resource names. It was configuration-validated without starting the pilot services. See [pilot preflight](ai-continuation/PILOT_PREFLIGHT.md). TLS ingress, immutable model/runtime artifacts and production operational acceptance remain prerequisites. Production mode disables live HTTP policy deploy/rollback pending a signed reviewed-release workflow.
+`deploy/compose.pilot.yml` is a separate hardened configuration candidate with no published host ports, required authentication, PostgreSQL state, offline models, resource limits and explicit external resource names. It was configuration-validated without starting the pilot services. See [pilot preflight](PILOT_PREFLIGHT.md). TLS ingress, immutable model/runtime artifacts and production operational acceptance remain prerequisites. Production mode disables live HTTP policy deploy/rollback pending a signed reviewed-release workflow.
 
 ## Operator tools and recovery
 
