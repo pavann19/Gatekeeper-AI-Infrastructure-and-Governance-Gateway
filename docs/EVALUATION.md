@@ -15,6 +15,8 @@ No current accuracy, throughput or latency headline is published. Each result mu
 
 Do not combine these profiles into one metric. A fail-closed decision caused by unavailable judging measures that configuration's behavior, not detector recall. Topicality is separate from maliciousness. Hand-written test prompts are regression examples, not an independent accuracy dataset.
 
+Historical throughput receipts are retained in [docs/evidence/perf-2026-09-17/](evidence/perf-2026-09-17/).
+
 ## Canonical offline replay
 
 `config/canonical_replay.json` declares `frozen-replay-nine-feature-v1`: detector revisions/weight hashes, encoder, runtime, settings, artifact hashes, seed and thread count. `tests/fixtures/decision_replay_corpus.jsonl` holds 300 frozen oracle cases from the declared source revision. This count describes a fixture, not a published pass rate.

@@ -1,0 +1,67 @@
+{
+  "benchmark": "assess_bench",
+  "timestamp_utc": "2026-09-16T18:52:36Z",
+  "workload_file": "benchmarks\\load\\workload_v1.jsonl",
+  "workload_sha256": "55e725aefc954fe9b936c1e8d4b9aec7c71e5d7e24e76c5fa6da6a219c9be98a",
+  "judge_label": "disabled_unreachable",
+  "judge_backend_reachable_at_start": false,
+  "environment": {
+    "git_sha": "e55452550ae2b16a2ab8dde1425f97a6a2699c1d",
+    "git_dirty": true,
+    "hardware": {
+      "platform": "Windows-11-10.0.26200-SP0",
+      "processor": "AMD64 Family 25 Model 80 Stepping 0, AuthenticAMD",
+      "cpu_count": 12,
+      "python_version": "3.13.3"
+    },
+    "concurrency_config": {
+      "ASSESS_MAX_CONCURRENCY": 4,
+      "ASSESS_TIMEOUT_SECONDS": 30.0
+    },
+    "torch_threads": {
+      "intra_op": 6,
+      "inter_op": 6,
+      "OMP_NUM_THREADS_env": null,
+      "note": "no explicit torch.set_num_threads() call exists in this codebase as of this run -- these are torch's own defaults, not a deliberate setting. See docs/perf/01-baseline-analysis.md."
+    },
+    "model_revisions": {
+      "protectai_injection": "90c9989b1a342275dd0d1a95aad283c04e075671",
+      "deepset_injection": "80dda00d0b0d9a03917a7685e2ddbcd28e04dbb1",
+      "jailbreak_classifier": "771aa6f1391933e7cba0b21f0f17750c7a74a901",
+      "madhurjindal_jailbreak": "93883e180f4d6585a0afae703095ba4a9ebce888",
+      "toxic_bert": "4d6c22e74ba2fdd26bc4f7238f50766b045a0d94",
+      "german_toxicity_eistakovskii": "1bcb7d11ffc9267111c7be1dad0d7ca2fbf73928",
+      "german_toxicity_ankekat": "1756ff144620cd0c06425c0ed49387fb23bf8153",
+      "multilingual_head": "e8f8c211226b894fcb81acc59f3b34ba3efd5f42",
+      "nemoguard_jailbreak": "92d97331f1f4b6a366c1f161354b9f3390cc219f",
+      "llama_guard_3_1b": "acf7aafa60f0410f8f42b1fa35e077d705892029",
+      "llama_guard_3_8b": "7327bd9f6efbbe6101dc6cc4736302b3cbb6e425",
+      "prompt_guard_2": "a8ded8e697ce7c355e395a0df51f94adb4a2fd27",
+      "prompt_guard_1": "1209add6ca7d9c1d815171b8e5571587fe3e7b03"
+    }
+  },
+  "result": {
+    "concurrency": 16,
+    "warmup_seconds": 5.0,
+    "duration_seconds": 30.0,
+    "requests": {
+      "warmup_discarded": 7,
+      "measured_total": 367,
+      "measured_2xx": 367
+    },
+    "throughput_rps": 12.233,
+    "error_rate": 0.0,
+    "status_counts": {
+      "200": 367
+    },
+    "latency_ms": {
+      "p50": 1185.72,
+      "p95": 4235.93,
+      "p99": 8465.49,
+      "min": 683.03,
+      "max": 10033.69
+    },
+    "assessments_in_flight_peak": 16.0,
+    "judge_invocations_during_measured_window_approx": 2.0
+  }
+}
