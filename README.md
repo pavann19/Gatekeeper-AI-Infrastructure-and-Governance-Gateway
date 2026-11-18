@@ -92,4 +92,4 @@ Strict replay uses the public hash-pinned frozen corpus and requires separately 
 
 Request budgets do not bound all synchronous or nested work. Policy reload is per process. Local review storage requires a filesystem with advisory locks; production settings require the transactional PostgreSQL backend and a restricted runtime role. Tool approvals support one-use continuation; prompt/provider review records do not provide an execution continuation endpoint. Gateway system prompts bypass the user-prompt privacy/assessment path and must be trusted application configuration. These are deployment limitations, not a production-readiness claim.
 
-[Architecture](docs/ARCHITECTURE.md) Ã‚Â· [Security](docs/SECURITY.md) Ã‚Â· [Threat model](docs/THREAT_MODEL.md) Ã‚Â· [Evaluation](docs/EVALUATION.md) Ã‚Â· [Deployment](docs/DEPLOYMENT_RUNBOOK.md) Ã‚Â· [Integration](docs/INTEGRATION_GUIDE.md)
+[Architecture](docs/ARCHITECTURE.md) · [Security](docs/SECURITY.md) · [Threat model](docs/THREAT_MODEL.md) · [Evaluation](docs/EVALUATION.md) · [Deployment](docs/DEPLOYMENT_RUNBOOK.md) · [Integration](docs/INTEGRATION_GUIDE.md)
