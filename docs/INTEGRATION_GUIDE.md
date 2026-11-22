@@ -48,6 +48,26 @@ curl -sS http://localhost:8000/api/v1/gateway/chat \
 
 Configure provider endpoints, credentials and models on the server. Input BLOCK/RESTRICT/REVIEW stops forwarding; output must pass before content is released. Provider usage supports token accounting, subject to provider reporting and concurrent quota limitations. Errors are not successful model responses. Gateway system prompts bypass the user-prompt screening path: source them from trusted application configuration rather than untrusted user input.
 
+Completed provider usage is recorded before output checking and subsequent
+audit writes, including when those later stages fail. Ollama prompt/output
+counts are retained when reported. Unknown or malformed usage is not a billing
+estimate; token accounting still does not reserve future concurrent usage.
+
+Transport failures, provider server errors, malformed successful responses and
+worker timeouts report an unknown execution outcome and suppress automatic
+fallback. The provider may have executed or incurred cost. Reconcile using the
+request ID before retrying; this response intentionally has no `Retry-After`.
+HTTP 408/409 responses are also treated as unknown outcomes.
+If the audit acknowledgement is also unavailable, the response says so. Safe
+local configuration failures can still use the configured fallback chain.
+
+Invalid explicit tenant budgets deny that tenant rather than inheriting a
+potentially more permissive default. Quotas accept non-negative integers or
+ASCII decimal integer strings; only an explicit zero means unlimited. Rate
+limits and timeout/burst settings must be finite and positive. A reduced burst
+capacity clamps retained tokens on the next check, including at the same clock
+tick in local and Redis backends.
+
 ## Tools and review
 
 Operators register tools with capability, risk, schema and a trusted handler. Demo/real tools are opt-in. Inspect `/api/v1/tools` and the generated schema for the current catalogue. An enabled demo example is:

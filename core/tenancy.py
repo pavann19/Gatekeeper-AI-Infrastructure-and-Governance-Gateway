@@ -7,6 +7,7 @@ privacy overrides."""
 from __future__ import annotations
 
 import json
+import math
 import os
 import threading
 from dataclasses import dataclass
@@ -151,27 +152,38 @@ class TenantStore:
             rpm = grant.get("rate_limit_rpm")
             if rpm is not None:
                 try:
-                    rpm = float(rpm)
-                    if rpm <= 0:
+                    if isinstance(rpm, bool):
                         raise ValueError
-                except (TypeError, ValueError):
+                    rpm = float(rpm)
+                    if not math.isfinite(rpm) or rpm <= 0:
+                        raise ValueError
+                except (TypeError, ValueError, OverflowError):
                     logger.error(
                         f"Ignoring rate_limit_rpm for tenant {tenant_id!r}: "
                         f"{grant.get('rate_limit_rpm')!r} is not a positive number."
                     )
                     rpm = None
+                    status = "unavailable"
             quota = grant.get("token_quota_daily")
             if quota is not None:
                 try:
+                    # int(0.5) and int(False) silently produce the explicit
+                    # unlimited sentinel. Only integers and decimal integer
+                    # strings may express an operator's quota intent.
+                    if type(quota) is not int and not (
+                        isinstance(quota, str) and quota.isascii() and quota.isdecimal()
+                    ):
+                        raise ValueError
                     quota = int(quota)
                     if quota < 0:
                         raise ValueError
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, OverflowError):
                     logger.error(
                         f"Ignoring token_quota_daily for tenant {tenant_id!r}: "
                         f"{grant.get('token_quota_daily')!r} is not a non-negative integer."
                     )
                     quota = None
+                    status = "unavailable"
 
             priv_disabled = grant.get("privacy_disabled_patterns")
             if priv_disabled is not None:

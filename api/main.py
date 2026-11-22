@@ -47,7 +47,7 @@ from core.review_queue import (
     ReviewCapacityError, ReviewStoreUnavailable,
 )
 from core.tools import execute_tool, get_tool_registry
-from core.llm_providers import get_provider, list_provider_names, LLMProviderError
+from core.llm_providers import get_provider, list_provider_names, LLMProviderError, LLMProviderOutcomeUnknown
 from core.token_quota import gateway_token_quota, extract_total_tokens, seconds_until_utc_midnight
 from core.config import settings, CAPABILITY_INTERNAL
 from core.postgres_state import PostgresStateUnavailable
@@ -201,6 +201,31 @@ async def _run_io_bounded(func):
 
 async def _approval_context_async(*args):
     return await _run_io_bounded(partial(approval_context, *args))
+
+
+async def _reject_unknown_provider_outcome(principal, provider_name, model, latency_ms, request_id):
+    """Preserve uncertainty even if the audit deadline/store also fails.
+
+    No extra deadline, unbounded task, fallback or successful decision is
+    created. Without this boundary an expired audit budget replaces the
+    uncertainty response with a generic Retry-After, inviting duplicate work.
+    """
+    audit_failed = False
+    try:
+        await _run_io_bounded(partial(
+            _write_audit_or_fail, log_gateway_event,
+            principal.capability, provider_name, model,
+            success=False, latency_ms=latency_ms, decision="BLOCK", error="provider_outcome_unknown",
+            tenant=principal.tenant, request_id=request_id))
+    except Exception:
+        audit_failed = True
+        logger.critical("Provider outcome and audit acknowledgement unavailable. request_id=%s", request_id)
+    if settings.METRICS_ENABLED:
+        metrics.gateway_call_total.labels(provider=provider_name, outcome="unknown").inc()
+    detail = "Provider outcome is unknown; automatic fallback suppressed. Reconcile execution before retrying."
+    if audit_failed:
+        detail += " Audit acknowledgement unavailable."
+    raise HTTPException(503, detail)
 
 
 async def _submit_bounded(pool, slots, func, args, limit):
@@ -1049,26 +1074,16 @@ async def gateway_chat(req: GatewayChatRequest, request: Request, background_tas
             break
         except asyncio.TimeoutError:
             latency_ms = round((time.perf_counter() - call_start) * 1000, 2)
-            await _run_io_bounded(
-                partial(
-                    _write_audit_or_fail,
-                    log_gateway_event,
-                    principal.capability,
-                    attempt_name,
-                    attempt_model,
-                    success=False,
-                    latency_ms=latency_ms,
-                    decision="BLOCK",
-                    error="timeout",
-                    tenant=principal.tenant,
-                    request_id=request.state.request_id,
-                )
-            )
             if settings.METRICS_ENABLED:
                 metrics.gateway_call_total.labels(provider=attempt_name, outcome="timeout").inc()
-            last_error_status = 503
-            last_error_detail = (f"The LLM provider did not respond within "
-                                 f"{settings.GATEWAY_TIMEOUT_SECONDS:g}s.")
+            # A running thread cannot be cancelled by wait_for. Dispatching a
+            # fallback could execute/bill a second completion for this request.
+            await _reject_unknown_provider_outcome(principal, attempt_name, attempt_model, latency_ms,
+                                                  request.state.request_id)
+        except LLMProviderOutcomeUnknown:
+            latency_ms = round((time.perf_counter() - call_start) * 1000, 2)
+            await _reject_unknown_provider_outcome(principal, attempt_name, attempt_model, latency_ms,
+                                                  request.state.request_id)
         except LLMProviderError as e:
             latency_ms = round((time.perf_counter() - call_start) * 1000, 2)
             await _run_io_bounded(
@@ -1105,6 +1120,23 @@ async def gateway_chat(req: GatewayChatRequest, request: Request, background_tas
     if provider_name != (req.provider or settings.LLM_GATEWAY_DEFAULT_PROVIDER):
         details["gateway_fallback_used"] = True
         details["gateway_fallback_from"] = req.provider or settings.LLM_GATEWAY_DEFAULT_PROVIDER
+
+    # Account immediately after provider completion, before fallible output
+    # checks and audit writes. Usage is consumed even when output is denied.
+    # This gates subsequent calls; it is not a distributed reservation.
+    tokens_used = extract_total_tokens(llm_response.usage)
+    if tokens_used > 0:
+        try:
+            await _run_io_bounded(partial(gateway_token_quota.record, principal.tenant, tokens_used))
+        except Exception:
+            # The external call already completed. A bookkeeping outage must
+            # not turn it into a retryable failure and duplicate provider costs.
+            details["token_accounting_degraded"] = True
+            logger.error("Token accounting unavailable after completed provider call. request_id=%s",
+                         request.state.request_id)
+            metrics.gateway_accounting_failures_total.inc()
+        if settings.METRICS_ENABLED:
+            metrics.gateway_tokens_total.labels(tenant=principal.tenant).inc(tokens_used)
 
     # 3. OUTPUT GUARDRAILS — same machinery as /api/v1/assess's combined path.
     from core.output_guardrails import assess_output
@@ -1157,23 +1189,6 @@ async def gateway_chat(req: GatewayChatRequest, request: Request, background_tas
     )
     if settings.METRICS_ENABLED:
         metrics.gateway_call_total.labels(provider=provider_name, outcome="success").inc()
-
-    # Token accounting () — recorded AFTER the call, since usage is
-    # only known once the provider has answered. See core/token_quota.py's
-    # module docstring for why this can only ever gate the NEXT call.
-    tokens_used = extract_total_tokens(llm_response.usage)
-    if tokens_used > 0:
-        try:
-            await _run_io_bounded(partial(gateway_token_quota.record, principal.tenant, tokens_used))
-        except Exception:
-            # The external call already completed. A bookkeeping outage must
-            # not turn it into a retryable failure and duplicate provider costs.
-            details["token_accounting_degraded"] = True
-            logger.error("Token accounting unavailable after completed provider call. request_id=%s",
-                         request.state.request_id)
-            metrics.gateway_accounting_failures_total.inc()
-        if settings.METRICS_ENABLED:
-            metrics.gateway_tokens_total.labels(tenant=principal.tenant).inc(tokens_used)
 
     process_time_ms = round((time.perf_counter() - request.state.start_time) * 1000, 2)
     return GatewayChatResponse(

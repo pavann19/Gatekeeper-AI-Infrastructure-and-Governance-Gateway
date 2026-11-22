@@ -19,11 +19,18 @@ DEFAULT_TIMEOUT_SECONDS = 30
 
 
 class LLMProviderError(Exception):
-    """Raised for any provider failure: network error, timeout, non-2xx
-    response, or a response body that doesn't match what the provider is
-    documented to return. Callers should treat this as "the call did not
-    happen", the same fail-closed posture core/semantic_judge.py already
-    applies to judge calls — never fabricate a completion on failure."""
+    """Provider failure; no completion may be released on this path.
+
+    Local preflight rejection or explicit client rejection can permit fallback.
+    Transport errors, server errors and malformed successful responses do not
+    prove execution was absent; those use LLMProviderOutcomeUnknown instead.
+    """
+    outcome_unknown = False
+
+
+class LLMProviderOutcomeUnknown(LLMProviderError):
+    """The provider may have executed/billed; do not automatically redispatch."""
+    outcome_unknown = True
 
 
 @dataclass
@@ -70,20 +77,30 @@ class OllamaProvider(LLMProvider):
         try:
             response = requests.post(self.base_url, json=payload, timeout=timeout)
         except requests.RequestException as e:
-            raise LLMProviderError(f"Ollama request failed: {type(e).__name__}") from e
+            raise LLMProviderOutcomeUnknown(f"Ollama request failed: {type(e).__name__}") from e
 
         if response.status_code != 200:
-            raise LLMProviderError(f"Ollama returned HTTP {response.status_code}")
+            error = LLMProviderOutcomeUnknown if response.status_code >= 500 or response.status_code in (408, 409) else LLMProviderError
+            raise error(f"Ollama returned HTTP {response.status_code}")
 
         try:
             data = response.json()
             content = data["message"]["content"]
-        except (ValueError, KeyError) as e:
-            raise LLMProviderError(f"Unrecognised Ollama response shape: {type(e).__name__}") from e
+            if not isinstance(content, str):
+                raise ValueError("Completion content must be a string")
+        except (ValueError, KeyError, TypeError) as e:
+            raise LLMProviderOutcomeUnknown(f"Unrecognised Ollama response shape: {type(e).__name__}") from e
 
+        # /api/chat reports prompt/output counts on its final response.
+        # Preserve only validated counts; absent counters remain unknown.
+        # https://docs.ollama.com/api/chat
+        counts = {target: data.get(source) for source, target in (
+            ("prompt_eval_count", "input_tokens"), ("eval_count", "output_tokens"))
+            if type(data.get(source)) is int and data[source] >= 0}
+        usage = {**counts, "total_tokens": sum(counts.values())} if counts else None
         return LLMResponse(
             content=content, model=model, provider=self.name,
-            usage=None,  # Ollama's /api/chat does not report token usage.
+            usage=usage,
             raw=data,
         )
 
@@ -117,17 +134,19 @@ class OpenAICompatibleProvider(LLMProvider):
             response = requests.post(f"{self.base_url}/chat/completions",
                                      json=payload, headers=headers, timeout=timeout)
         except requests.RequestException as e:
-            raise LLMProviderError(f"OpenAI-compatible request failed: {type(e).__name__}") from e
+            raise LLMProviderOutcomeUnknown(f"OpenAI-compatible request failed: {type(e).__name__}") from e
 
         if response.status_code != 200:
-            raise LLMProviderError(f"OpenAI-compatible endpoint returned HTTP "
-                                   f"{response.status_code}")
+            error = LLMProviderOutcomeUnknown if response.status_code >= 500 or response.status_code in (408, 409) else LLMProviderError
+            raise error(f"OpenAI-compatible endpoint returned HTTP {response.status_code}")
 
         try:
             data = response.json()
             content = data["choices"][0]["message"]["content"]
-        except (ValueError, KeyError, IndexError) as e:
-            raise LLMProviderError(f"Unrecognised OpenAI-compatible response shape: {type(e).__name__}") from e
+            if not isinstance(content, str):
+                raise ValueError("Completion content must be a string")
+        except (ValueError, KeyError, IndexError, TypeError) as e:
+            raise LLMProviderOutcomeUnknown(f"Unrecognised OpenAI-compatible response shape: {type(e).__name__}") from e
 
         return LLMResponse(
             content=content, model=data.get("model", model), provider=self.name,
@@ -177,17 +196,19 @@ class AnthropicCompatibleProvider(LLMProvider):
             response = requests.post(f"{self.base_url}/messages",
                                      json=payload, headers=headers, timeout=timeout)
         except requests.RequestException as e:
-            raise LLMProviderError(f"Anthropic-compatible request failed: {type(e).__name__}") from e
+            raise LLMProviderOutcomeUnknown(f"Anthropic-compatible request failed: {type(e).__name__}") from e
 
         if response.status_code != 200:
-            raise LLMProviderError(f"Anthropic-compatible endpoint returned HTTP "
-                                   f"{response.status_code}")
+            error = LLMProviderOutcomeUnknown if response.status_code >= 500 or response.status_code in (408, 409) else LLMProviderError
+            raise error(f"Anthropic-compatible endpoint returned HTTP {response.status_code}")
 
         try:
             data = response.json()
             content = data["content"][0]["text"]
-        except (ValueError, KeyError, IndexError) as e:
-            raise LLMProviderError(f"Unrecognised Anthropic-compatible response shape: {type(e).__name__}") from e
+            if not isinstance(content, str):
+                raise ValueError("Completion content must be a string")
+        except (ValueError, KeyError, IndexError, TypeError) as e:
+            raise LLMProviderOutcomeUnknown(f"Unrecognised Anthropic-compatible response shape: {type(e).__name__}") from e
 
         return LLMResponse(
             content=content, model=data.get("model", model), provider=self.name,

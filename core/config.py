@@ -1,6 +1,7 @@
 # core/config.py
 from pydantic import Field, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings
+import math
 from urllib.parse import urlsplit, parse_qs
 
 class Settings(BaseSettings):
@@ -309,7 +310,7 @@ class Settings(BaseSettings):
     @field_validator("RATE_LIMIT_AUTHENTICATED_RPM", "RATE_LIMIT_ANONYMOUS_RPM")
     @classmethod
     def _validate_rpm(cls, v: float) -> float:
-        if v <= 0:
+        if not math.isfinite(v) or v <= 0:
             raise ValueError(
                 "Rate limits must be positive. To disable limiting, set "
                 "RATE_LIMIT_ENABLED=false rather than using a zero rate — an "
@@ -324,11 +325,11 @@ class Settings(BaseSettings):
             raise ValueError(f"{info.field_name} must be at least 1.")
         return v
 
-    @field_validator("ASSESS_TIMEOUT_SECONDS", "STARTUP_WARMUP_TIMEOUT_SECONDS")
+    @field_validator("ASSESS_TIMEOUT_SECONDS", "STARTUP_WARMUP_TIMEOUT_SECONDS", "RATE_LIMIT_BURST_SECONDS")
     @classmethod
     def _validate_timeout(cls, v: float) -> float:
-        if v <= 0:
-            raise ValueError("ASSESS_TIMEOUT_SECONDS must be positive.")
+        if not math.isfinite(v) or v <= 0:
+            raise ValueError("Timeouts and burst windows must be finite and positive.")
         return v
 
     @field_validator("GATEWAY_MAX_CONCURRENCY")
@@ -341,7 +342,7 @@ class Settings(BaseSettings):
     @field_validator("GATEWAY_TIMEOUT_SECONDS")
     @classmethod
     def _validate_gateway_timeout(cls, v: float) -> float:
-        if v <= 0:
+        if not math.isfinite(v) or v <= 0:
             raise ValueError("GATEWAY_TIMEOUT_SECONDS must be positive.")
         return v
 

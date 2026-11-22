@@ -6,6 +6,7 @@ a separate namespace from assessment admission."""
 from __future__ import annotations
 
 import os
+import math
 import threading
 import time
 from collections import OrderedDict
@@ -85,6 +86,10 @@ class LocalRateLimiter(RateLimiterBackend):
         loudly at config-validation time rather than silently to "total
         outage" at request time.
         """
+        if not all(math.isfinite(value) for value in (capacity, refill_per_second)) or (
+            now is not None and not math.isfinite(now)
+        ):
+            return False, 5.0
         if refill_per_second <= 0 or capacity <= 0:
             return True, 0.0
 
@@ -101,6 +106,9 @@ class LocalRateLimiter(RateLimiterBackend):
                 self._evict_if_needed()
             else:
                 self._buckets.move_to_end(identity)
+                # A policy reduction applies immediately, including two
+                # requests observed at the same clock tick.
+                bucket.tokens = min(capacity, bucket.tokens)
                 elapsed = now - bucket.last_refill
                 if elapsed > 0:
                     bucket.tokens = min(capacity, bucket.tokens + elapsed * refill_per_second)
@@ -161,6 +169,7 @@ if not tokens or not last_refill then
     tokens = capacity
     last_refill = now
 else
+    tokens = math.min(capacity, tokens)
     local elapsed = now - last_refill
     if elapsed > 0 then
         tokens = math.min(capacity, tokens + (elapsed * refill_per_second))
@@ -221,6 +230,10 @@ class RedisRateLimiter(RateLimiterBackend):
         refill_per_second: float,
         now: float | None = None,
     ) -> tuple[bool, float]:
+        if not all(math.isfinite(value) for value in (capacity, refill_per_second)) or (
+            now is not None and not math.isfinite(now)
+        ):
+            return False, 5.0
         if refill_per_second <= 0 or capacity <= 0:
             return True, 0.0
 
