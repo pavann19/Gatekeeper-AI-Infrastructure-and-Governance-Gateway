@@ -135,7 +135,7 @@ return current
 class RedisTokenQuotaTracker(TokenQuotaBackend):
     """
     Distributed daily token quota tracker backed by Redis.
-    Falls back gracefully to an internal LocalTokenQuotaTracker on Redis errors.
+    Configured Redis failures deny operations; no local authority is substituted.
     """
 
     KEY_PREFIX = "gatekeeper:quota:"
@@ -240,22 +240,23 @@ def extract_total_tokens(usage) -> int:
     actually return into one integer, so the tracker never needs to know
     which provider produced a given LLMResponse.
 
-    OpenAI-compatible: {"total_tokens": N, ...}. Anthropic-compatible:
-    {"input_tokens": N, "output_tokens": M} with no combined field. Ollama:
-    None (not reported at all). Anything else unrecognised counts as 0
+    OpenAI-compatible: {"total_tokens": N, ...}. Anthropic/Ollama-compatible:
+    {"input_tokens": N, "output_tokens": M}. Anything unrecognised counts as 0
     rather than raising — a malformed or future usage shape must degrade
     accounting, never a request in flight, matching this project's metrics
     tolerance convention (core/metrics.py's record_assessment docstring).
     """
     if not isinstance(usage, dict):
         return 0
-    if isinstance(usage.get("total_tokens"), int):
-        return usage["total_tokens"]
-    input_tokens = usage.get("input_tokens")
-    output_tokens = usage.get("output_tokens")
-    if isinstance(input_tokens, int) or isinstance(output_tokens, int):
-        return (input_tokens or 0) + (output_tokens or 0)
-    return 0
+    def count(value):
+        # bool is an int subclass; negative, fractional and malformed values
+        # are not evidence of consumed tokens. Keep valid components even if
+        # the other component is malformed, without coercing provider data.
+        return value if type(value) is int and value >= 0 else 0
+
+    components = max(count(usage.get("input_tokens")), count(usage.get("prompt_tokens"))) + max(
+        count(usage.get("output_tokens")), count(usage.get("completion_tokens")))
+    return max(count(usage.get("total_tokens")), components)
 
 
 # Module-level singleton, shared across all requests in this process — which

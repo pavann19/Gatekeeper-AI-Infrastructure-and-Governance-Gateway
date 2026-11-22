@@ -16,6 +16,8 @@ from core.auth import KeyStore, generate_key, hash_key
 from core.llm_providers import LLMProviderError, LLMResponse
 from core.policy import PolicyStore
 
+pytestmark = pytest.mark.usefixtures("provisioned_tenants")
+
 client = TestClient(app)
 
 LOW_RISK = ("LOW", {"semantic_score": 0.1, "source": "mock"})

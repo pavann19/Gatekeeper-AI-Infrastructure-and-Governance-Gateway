@@ -54,6 +54,17 @@ def test_real_rate_limit_is_one_shared_budget(replicas):
     assert sum(allowed for allowed, _ in results) == 5
 
 
+def test_real_rate_limit_reduction_clamps_previous_burst(replicas):
+    clients, prefix = replicas
+    limiters = [RedisRateLimiter(client, name='downgrade') for client in clients]
+    for limiter in limiters:
+        limiter.KEY_PREFIX = prefix
+    assert limiters[0].check('owner', 100, 1, now=100)[0]
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(lambda i: limiters[i % 2].check('owner', 5, 1, now=100), range(100)))
+    assert sum(allowed for allowed, _ in results) == 5
+
+
 def test_real_quota_records_have_no_lost_updates(replicas):
     clients, prefix = replicas
     trackers = [RedisTokenQuotaTracker(client) for client in clients]
