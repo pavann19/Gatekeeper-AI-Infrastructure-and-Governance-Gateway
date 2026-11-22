@@ -25,9 +25,9 @@ def provider_for(name):
 
 @pytest.mark.parametrize("provider_name", ["ollama", "openai", "anthropic"])
 @pytest.mark.parametrize("failure", ["timeout", "connection", "server_error", "malformed_json",
-                                     "null_body", "null_content", "missing_content"])
+                                     "null_body", "null_content", "missing_content", "http_timeout", "http_conflict"])
 def test_uncertain_adapter_failure_is_distinguished_from_safe_preflight_failure(provider_name, failure):
-    response = Mock(status_code=500 if failure == "server_error" else 200)
+    response = Mock(status_code={"server_error": 500, "http_timeout": 408, "http_conflict": 409}.get(failure, 200))
     body = {"message": {"content": None}, "choices": [{"message": {"content": None}}], "content": [{"text": None}]}
     response.json.return_value = None if failure == "null_body" else {} if failure == "missing_content" else body
     if failure == "malformed_json":

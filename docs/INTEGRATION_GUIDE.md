@@ -57,6 +57,7 @@ Transport failures, provider server errors, malformed successful responses and
 worker timeouts report an unknown execution outcome and suppress automatic
 fallback. The provider may have executed or incurred cost. Reconcile using the
 request ID before retrying; this response intentionally has no `Retry-After`.
+HTTP 408/409 responses are also treated as unknown outcomes.
 If the audit acknowledgement is also unavailable, the response says so. Safe
 local configuration failures can still use the configured fallback chain.
 

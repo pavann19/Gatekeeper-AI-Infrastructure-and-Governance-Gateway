@@ -70,6 +70,10 @@ the deliberately empty source-test cache. Both verifier regressions passed in
 a new isolated run; the original covered run predates this script-only change.
 The source-test selection still excludes integration/slow tests, and the
 separate canonical stage retains its original frozen acceptance assertions.
+The same publication review conservatively classified HTTP 408/409 as unknown
+provider outcomes in all three adapters, adding six failure contracts. Those
+responses cannot prove that a completion was absent and must not trigger an
+automatic fallback. The PR's final hosted checks cover these publication changes.
 
 Token accounting remains post-completion usage gating, without distributed
 reserve/settle, billing reconciliation or crash-safe exactly-once provider

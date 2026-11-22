@@ -80,7 +80,7 @@ class OllamaProvider(LLMProvider):
             raise LLMProviderOutcomeUnknown(f"Ollama request failed: {type(e).__name__}") from e
 
         if response.status_code != 200:
-            error = LLMProviderOutcomeUnknown if response.status_code >= 500 else LLMProviderError
+            error = LLMProviderOutcomeUnknown if response.status_code >= 500 or response.status_code in (408, 409) else LLMProviderError
             raise error(f"Ollama returned HTTP {response.status_code}")
 
         try:
@@ -137,7 +137,7 @@ class OpenAICompatibleProvider(LLMProvider):
             raise LLMProviderOutcomeUnknown(f"OpenAI-compatible request failed: {type(e).__name__}") from e
 
         if response.status_code != 200:
-            error = LLMProviderOutcomeUnknown if response.status_code >= 500 else LLMProviderError
+            error = LLMProviderOutcomeUnknown if response.status_code >= 500 or response.status_code in (408, 409) else LLMProviderError
             raise error(f"OpenAI-compatible endpoint returned HTTP {response.status_code}")
 
         try:
@@ -199,7 +199,7 @@ class AnthropicCompatibleProvider(LLMProvider):
             raise LLMProviderOutcomeUnknown(f"Anthropic-compatible request failed: {type(e).__name__}") from e
 
         if response.status_code != 200:
-            error = LLMProviderOutcomeUnknown if response.status_code >= 500 else LLMProviderError
+            error = LLMProviderOutcomeUnknown if response.status_code >= 500 or response.status_code in (408, 409) else LLMProviderError
             raise error(f"Anthropic-compatible endpoint returned HTTP {response.status_code}")
 
         try:
